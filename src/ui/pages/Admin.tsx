@@ -4,7 +4,7 @@
 
 import { useState } from 'react'
 import { useStore } from '../../sync/store'
-import { banner, CopyButton, Empty, IssueBanner, Modal, TokenReveal } from '../components'
+import { banner, CopyButton, Empty, IssueBanner, Modal, TokenReveal, useDebouncedCommit } from '../components'
 import { canAdmin } from '../../auth/session'
 import {
   createAppUser,
@@ -17,6 +17,8 @@ import {
 } from '../../state/actions'
 import { BUCKETS, ROLES, type Bucket, type NexusDoc, type Role } from '../../types/schema'
 import { runHealthChecks, type HealthIssue } from '../../diagnostics/health'
+import { writerId } from '../../sync/writer'
+import { hlcNow } from '../../util/hlc'
 
 type Tab = 'users' | 'viewers' | 'settings' | 'maintenance'
 
@@ -491,6 +493,7 @@ function SettingsTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
   const [labelDraft, setLabelDraft] = useState('')
   const [keyDraft, setKeyDraft] = useState(doc.settings.api.keyOverride ?? '')
   const [keySaved, setKeySaved] = useState(false)
+  const commitLabel = useDebouncedCommit(800)
 
   const addLabel = () => {
     const v = labelDraft.trim()
@@ -534,12 +537,16 @@ function SettingsTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
                 className="input"
                 style={{ maxWidth: 220 }}
                 value={stage.label}
-                onChange={(e) =>
-                  updateSettings((s) => {
-                    const entry = s.pipeline[i]
-                    if (entry) entry.label = e.target.value
+                onChange={(e) => {
+                  const value = e.target.value
+                  commitLabel((d) => {
+                    const entry = d.settings.pipeline[i]
+                    if (!entry) return
+                    entry.label = value
+                    entry.updatedAt = hlcNow()
+                    entry.writerId = writerId()
                   })
-                }
+                }}
               />
               <select
                 className="input"

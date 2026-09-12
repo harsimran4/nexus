@@ -155,7 +155,10 @@ export function updateItem(itemId: string, fields: Partial<Pick<Item, 'title' | 
     if (!item) return
     Object.assign(item, fields)
     touch('items', item)
-    appendActivity(doc, 'item.update', itemId, { fields: Object.keys(fields) })
+    // Notes are content, not workflow events — don't log them (typing used to
+    // flood the feed with one entry per keystroke).
+    const meaningful = Object.keys(fields).filter((k) => k !== 'notes')
+    if (meaningful.length > 0) appendActivity(doc, 'item.update', itemId, { fields: meaningful })
   })
 }
 

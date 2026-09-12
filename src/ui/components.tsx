@@ -1,9 +1,35 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { statusBucket, statusLabel, type NexusDoc } from '../types/schema'
 import { useStore } from '../sync/store'
 import { statusToIssue, type HealthIssue } from '../diagnostics/health'
-import { flush } from '../sync/writer'
+import { commit, flush } from '../sync/writer'
 import { clearToken, requestToken } from '../auth/tokenClient'
+
+/**
+ * Merge rapid mutations (typing in an input) into ONE commit after the user
+ * pauses. Every keystroke calling commit() directly floods the activity log
+ * and churns Drive revisions.
+ */
+export function useDebouncedCommit(delay = 800): (fn: (doc: NexusDoc) => void) => void {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const pending = useRef<((doc: NexusDoc) => void) | null>(null)
+  useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current)
+    },
+    [],
+  )
+  return (fn) => {
+    pending.current = fn
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = setTimeout(() => {
+      const p = pending.current
+      pending.current = null
+      timer.current = null
+      if (p) commit(p)
+    }, delay)
+  }
+}
 
 // ---- modal ----------------------------------------------------------------
 

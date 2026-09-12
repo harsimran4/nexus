@@ -1,11 +1,12 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../../sync/store'
-import { Modal, KindBadge, CopyButton, banner } from '../components'
+import { Modal, KindBadge, CopyButton, banner, useDebouncedCommit } from '../components'
 import { canWrite } from '../../auth/session'
 import { deleteItem, setItemStatus, updateItem, uploadToItem } from '../../state/actions'
 import { isSignedIn } from '../../auth/tokenClient'
 import { describeError, downloadToBrowser } from '../../drive/preview'
 import { thumbnailUrl, webViewLink } from '../../drive/client'
+import { touch } from '../../sync/writer'
 
 export function ItemDialog({ itemId, onClose }: { itemId: string; onClose: () => void }): React.JSX.Element | null {
   const doc = useStore((s) => s.doc)
@@ -14,6 +15,26 @@ export function ItemDialog({ itemId, onClose }: { itemId: string; onClose: () =>
   const [uploadPct, setUploadPct] = useState<number | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
+  const commitDebounced = useDebouncedCommit(800)
+
+  // Notes draft: local while typing, committed once after the user pauses —
+  // never one commit (and one activity entry) per keystroke.
+  const item0 = doc?.items[itemId]
+  const [notesDraft, setNotesDraft] = useState(item0?.notes ?? '')
+  const notesDirty = useRef(false)
+  useEffect(() => {
+    // Adopt remote notes only while the user isn't mid-edit.
+    if (!notesDirty.current && item0 && item0.notes !== notesDraft) setNotesDraft(item0.notes)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item0?.notes])
+  const commitNotes = (value: string) => {
+    commitDebounced((d) => {
+      const it = d.items[itemId]
+      if (!it) return
+      it.notes = value
+      touch('items', it)
+    })
+  }
 
   const item = doc?.items[itemId]
   if (!doc || !item) return null
@@ -177,9 +198,16 @@ export function ItemDialog({ itemId, onClose }: { itemId: string; onClose: () =>
         <label>Notes</label>
         <textarea
           className="input"
-          value={item.notes}
+          value={notesDraft}
           disabled={!writable}
-          onChange={(e) => updateItem(itemId, { notes: e.target.value })}
+          onChange={(e) => {
+            setNotesDraft(e.target.value)
+            notesDirty.current = true
+            commitNotes(e.target.value)
+          }}
+          onBlur={() => {
+            notesDirty.current = false
+          }}
           placeholder="Context, links, feedback…"
         />
       </div>
