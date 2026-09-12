@@ -51,25 +51,24 @@ export async function createProject(name: string, labels: string[] = [], descrip
   return id
 }
 
-async function ensureProjectFolder(projectId: string): Promise<void> {
+/** Create the project's Drive folder if missing. Returns its id, or null when
+ *  it can't be created right now (caller decides whether that's fatal). */
+export async function ensureProjectFolder(projectId: string): Promise<string | null> {
   const { storeGet } = await import('../sync/store')
   const doc = storeGet().doc
   const project = doc?.projects[projectId]
   const rootId = doc?.ids.rootFolderId
-  if (!project || !rootId || project.folderId) return
-  try {
-    const folder = await createFolder(project.name, rootId, { mode: 'bearer' })
-    commit((d) => {
-      const p = d.projects[projectId]
-      if (p && !p.folderId) {
-        p.folderId = folder.id
-        touch('projects', p)
-      }
-    })
-  } catch (e) {
-    if (e instanceof DriveError && e.kind === 'auth') return // Reconnect chip handles it; retried on next rename/edit
-    return
-  }
+  if (!project || !rootId) return null
+  if (project.folderId) return project.folderId
+  const folder = await createFolder(project.name, rootId, { mode: 'bearer' })
+  commit((d) => {
+    const p = d.projects[projectId]
+    if (p && !p.folderId) {
+      p.folderId = folder.id
+      touch('projects', p)
+    }
+  })
+  return folder.id
 }
 
 export function renameProject(projectId: string, name: string): void {
@@ -185,7 +184,7 @@ export function deleteItem(itemId: string): void {
   })
 }
 
-/** Upload a file into the item's project folder, then link it. */
+/** Upload a file into the item's project folder (creating it if missing), then link it. */
 export async function uploadToItem(
   itemId: string,
   file: File,
@@ -195,15 +194,21 @@ export async function uploadToItem(
   const doc = storeGet().doc
   const item = doc?.items[itemId]
   if (!doc || !item) return { ok: false, error: 'Item not found' }
-  const folderId =
-    item.projectId != null ? doc.projects[item.projectId]?.folderId ?? null : doc.ids.rootFolderId
-  if (!folderId) return { ok: false, error: 'Project folder not ready yet — try again in a few seconds' }
   try {
+    let folderId: string | null
+    if (item.projectId != null) {
+      // Never upload flat: make sure the project's Drive folder exists first.
+      folderId = await ensureProjectFolder(item.projectId)
+      if (!folderId) return { ok: false, error: 'Project not found — re-open this item and try again' }
+    } else {
+      folderId = doc.ids.rootFolderId
+    }
+    if (!folderId) return { ok: false, error: 'Workspace folder not set — finish setup first' }
     const meta = await uploadFile(folderId, file, { mode: 'bearer' }, onProgress)
     attachFiles(itemId, [meta.id])
     return { ok: true, fileId: meta.id }
   } catch (e) {
-    if (e instanceof DriveError && e.kind === 'auth') return { ok: false, error: 'Sign in with Google to upload' }
+    if (e instanceof DriveError && e.kind === 'auth') return { ok: false, error: 'Sign in with Google to upload (top bar → Connect Google)' }
     if (e instanceof DriveError) return { ok: false, error: `${e.message} — ${e.kind}` }
     return { ok: false, error: e instanceof Error ? e.message : 'Upload failed' }
   }
