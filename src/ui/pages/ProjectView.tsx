@@ -4,8 +4,8 @@ import { ITEM_KINDS, type ItemKind, type Project } from '../../types/schema'
 import { compareHlc, decodeHlc } from '../../util/hlc'
 import { Empty, KindBadge, Modal, StatusBadge, banner } from '../components'
 import { ItemDialog } from './ItemDialog'
-import { canAdmin, canWrite } from '../../auth/session'
-import { createItem, deleteProject, renameProject, uploadToItem } from '../../state/actions'
+import { canWrite } from '../../auth/session'
+import { createItem, deleteProjectCascade, renameProject, uploadToItem } from '../../state/actions'
 import { isSignedIn } from '../../auth/tokenClient'
 
 export function ProjectView({ projectId }: { projectId: string }): React.JSX.Element {
@@ -13,6 +13,7 @@ export function ProjectView({ projectId }: { projectId: string }): React.JSX.Ele
   const [openItem, setOpenItem] = useState<string | null>(null)
   const [newOpen, setNewOpen] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
+  const [deleteList, setDeleteList] = useState(false)
 
   const items = useMemo(() => {
     if (!doc) return []
@@ -33,15 +34,6 @@ export function ProjectView({ projectId }: { projectId: string }): React.JSX.Ele
   }
 
   const writable = canWrite()
-  const admin = canAdmin()
-
-  const onDelete = () => {
-    if (!admin) return
-    if (confirm(`Delete project "${project.name}"? Its items stay in the Archive.`)) {
-      deleteProject(projectId)
-      location.hash = '#/dash'
-    }
-  }
 
   return (
     <div>
@@ -84,27 +76,26 @@ export function ProjectView({ projectId }: { projectId: string }): React.JSX.Ele
           </button>
           <button
             className="btn"
-            disabled={!admin}
-            title={admin ? undefined : 'Admin login required'}
+            disabled={!writable}
+            title={writable ? undefined : 'Editor or admin login required'}
             onClick={() => setRenameOpen(true)}
           >
             Rename
           </button>
           <button
             className="btn danger"
-            disabled={!admin}
-            title={admin ? undefined : 'Admin login required'}
-            onClick={onDelete}
+            disabled={!writable}
+            title={writable ? undefined : 'Editor or admin login required'}
+            onClick={() => setDeleteList(true)}
           >
             Delete
           </button>
         </div>
       </div>
 
-      {!admin && (
+      {!writable && (
         <div className="muted small mb8">
-          {!writable && 'Read-only view — sign in as an editor or admin to add or edit items. '}
-          Rename and Delete are admin-only.
+          Read-only view — sign in as an editor or admin to add, edit or delete.
         </div>
       )}
 
@@ -166,6 +157,17 @@ export function ProjectView({ projectId }: { projectId: string }): React.JSX.Ele
       {openItem && <ItemDialog itemId={openItem} onClose={() => setOpenItem(null)} />}
       {newOpen && <NewItemModal projectId={projectId} onClose={() => setNewOpen(false)} />}
       {renameOpen && <RenameModal project={project} onClose={() => setRenameOpen(false)} />}
+      {deleteList && (
+        <DeleteListModal
+          project={project}
+          itemCount={items.length}
+          onDone={() => {
+            setDeleteList(false)
+            location.hash = '#/dash'
+          }}
+          onClose={() => setDeleteList(false)}
+        />
+      )}
     </div>
   )
 }
@@ -359,6 +361,78 @@ function RenameModal({ project, onClose }: { project: Project; onClose: () => vo
         <button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn primary" disabled={!name.trim() || name.trim() === project.name} onClick={save}>
           Save
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+/**
+ * Deletion with full disclosure: lists the Drive folder, every file and every
+ * item, then moves them all to Drive trash (30-day recovery) on confirm.
+ */
+function DeleteListModal({
+  project,
+  itemCount,
+  onDone,
+  onClose,
+}: {
+  project: Project
+  itemCount: number
+  onDone: () => void
+  onClose: () => void
+}): React.JSX.Element {
+  const doc = useStore((s) => s.doc)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const items = Object.values(doc?.items ?? {})
+    .filter((i) => i.projectId === project.id && i.deleted === null)
+    .sort((a, b) => a.title.localeCompare(b.title))
+  const fileCount = new Set(items.flatMap((i) => i.fileIds)).size
+
+  const doDelete = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await deleteProjectCascade(project.id)
+      onDone()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Delete failed')
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Modal title={`Delete "${project.name}"?`} onClose={onClose} wide>
+      {banner('warn', 'This moves everything to Drive trash', 'Trash is recoverable for 30 days in Google Drive. Nothing is permanently deleted today.')}
+      <div className="field">
+        <label>What will be moved to trash:</label>
+        <div style={{ maxHeight: 260, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
+          <div className="row spread" style={{ padding: '7px 10px', borderBottom: '1px solid var(--border)', background: 'var(--bg-raised)' }}>
+            <span style={{ fontWeight: 600 }}>📁 {project.name}/</span>
+            <span className="faint small">project folder</span>
+          </div>
+          {items.map((i) => (
+            <div key={i.id} style={{ padding: '6px 10px 6px 26px', borderBottom: '1px solid var(--border)' }}>
+              {i.fileIds.length > 0 ? '📄' : '▫'} {i.title}
+              {i.fileIds.length > 0 && <span className="faint small"> · {i.fileIds.length} file{i.fileIds.length === 1 ? '' : 's'}</span>}
+            </div>
+          ))}
+          {items.length === 0 && (
+            <div style={{ padding: '8px 10px' }} className="faint small">No items in this project.</div>
+          )}
+        </div>
+        <div className="muted small mt8">
+          {items.length} item{items.length === 1 ? '' : 's'} · {fileCount} file{fileCount === 1 ? '' : 's'}
+          {itemCount !== items.length && ' · archived items are kept'}
+        </div>
+      </div>
+      {error && banner('error', 'Delete failed', error)}
+      <div className="row mt16" style={{ justifyContent: 'flex-end' }}>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn danger" disabled={busy} onClick={() => void doDelete()}>
+          {busy ? 'Deleting…' : `Move to trash`}
         </button>
       </div>
     </Modal>

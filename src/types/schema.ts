@@ -98,6 +98,9 @@ export type Item = z.infer<typeof itemSchema>
 
 export const scriptStorageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('inline'), body: z.string().default('') }),
+  // Nexus-managed markdown file in the workspace's scripts/ folder.
+  z.object({ type: z.literal('md'), fileId: z.string() }),
+  // A Google Docs file the user linked (not editable in-app; export only).
   z.object({ type: z.literal('drive-doc'), fileId: z.string() }),
 ])
 
@@ -186,7 +189,21 @@ export const nexusDocSchema = z.object({
   writerId: z.string().default('bootstrap'),
   updatedAt: z.string().default(''),
   ids: z
-    .object({ rootFolderId: z.string().default(''), nexusFileId: z.string().default('') })
+    .object({
+      rootFolderId: z.string().default(''),
+      nexusFileId: z.string().default(''),
+      // Fixed Drive folders created inside the workspace root. Optional for
+      // backward compatibility with workspaces made before the layout existed.
+      systemFolders: z
+        .object({
+          master: z.string().optional(),
+          snapshots: z.string().optional(),
+          projects: z.string().optional(),
+          scripts: z.string().optional(),
+          unsorted: z.string().optional(),
+        })
+        .optional(),
+    })
     .default({ rootFolderId: '', nexusFileId: '' }),
   users: usersSchema,
   settings: settingsSchema,

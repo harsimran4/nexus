@@ -3,7 +3,7 @@ import { useStore } from '../../sync/store'
 import { SCRIPT_STATUSES, type Script, type ScriptStatus } from '../../types/schema'
 import { compareHlc, decodeHlc } from '../../util/hlc'
 import { canWrite } from '../../auth/session'
-import { createScript, deleteScript, setScriptBody, setScriptStatus, updateScript } from '../../state/actions'
+import { createScript, deleteScript, readScriptBody, saveScriptBody, setScriptStatus, updateScript } from '../../state/actions'
 import { webViewLink } from '../../drive/client'
 import { Empty, Modal, banner } from '../components'
 
@@ -168,11 +168,35 @@ function ScriptRow({
 
 function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => void }): React.JSX.Element {
   const doc = useStore((s) => s.doc)
-  const [body, setBody] = useState(() => (script.storage.type === 'inline' ? script.storage.body : ''))
+  const [body, setBody] = useState('')
+  const [loaded, setLoaded] = useState(false)
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [statusBusy, setStatusBusy] = useState(false)
   const saveTimer = useRef<number | null>(null)
   const pendingBody = useRef<string | null>(null)
   const id = script.id
+
+  // Body loads from its Drive file (or the inline legacy body).
+  useEffect(() => {
+    let alive = true
+    void readScriptBody(id).then((text) => {
+      if (alive) {
+        setBody(text ?? '')
+        setLoaded(true)
+      }
+    })
+    return () => {
+      alive = false
+    }
+  }, [id])
+
+  const saveBody = (queued: string) => {
+    if (!canWrite()) return
+    setSaveState('saving')
+    void saveScriptBody(id, queued).then((r) => {
+      setSaveState(r.ok ? 'saved' : 'error')
+    })
+  }
 
   const flushBody = () => {
     if (saveTimer.current !== null) {
@@ -181,7 +205,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
     }
     const queued = pendingBody.current
     pendingBody.current = null
-    if (queued !== null && canWrite()) setScriptBody(id, queued)
+    if (queued !== null && canWrite()) saveBody(queued)
   }
 
   const discardBody = () => {
@@ -221,7 +245,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
       saveTimer.current = null
       const queued = pendingBody.current
       pendingBody.current = null
-      if (queued !== null && canWrite()) setScriptBody(id, queued)
+      if (queued !== null && canWrite()) saveBody(queued)
     }, 600)
   }
 
@@ -306,20 +330,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
         </select>
       </div>
 
-      {script.storage.type === 'inline' ? (
-        <div className="field">
-          <label>Body</label>
-          <textarea
-            className="input"
-            rows={14}
-            value={body}
-            disabled={!writable}
-            onChange={(e) => onBodyChange(e.target.value)}
-            placeholder="Write the script…"
-          />
-          <span className="faint small">Autosaves about half a second after you stop typing.</span>
-        </div>
-      ) : (
+      {script.storage.type === 'drive-doc' ? (
         <div className="field">
           <label>Body — stored as a Drive doc</label>
           <div className="row wrap">
@@ -331,6 +342,24 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
             </span>
           </div>
           <span className="faint small">Edit the text in Drive; Nexus keeps the link.</span>
+        </div>
+      ) : (
+        <div className="field">
+          <label>
+            Body{' '}
+            {saveState === 'saving' ? '· saving…' : saveState === 'saved' ? '· saved ✓' : saveState === 'error' ? '· save failed — retry by editing again' : ''}
+          </label>
+          <textarea
+            className="input"
+            rows={14}
+            value={loaded ? body : 'Loading…'}
+            disabled={!writable || !loaded}
+            onChange={(e) => onBodyChange(e.target.value)}
+            placeholder="Write the script…"
+          />
+          <span className="faint small">
+            Saved as its own markdown file in Drive (scripts/) about half a second after you stop typing — with its own version history.
+          </span>
         </div>
       )}
 
@@ -408,7 +437,9 @@ function NewScriptModal({
           onKeyDown={(e) => e.key === 'Enter' && create()}
         />
       </div>
-      <p className="muted small">Starts as an inline draft; snapshot copies are captured at review and final.</p>
+      <p className="muted small">
+        Saved as its own markdown file in the scripts/ folder on Drive — snapshot copies are captured at review and final.
+      </p>
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <button className="btn" onClick={onClose}>
           Cancel

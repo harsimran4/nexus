@@ -17,6 +17,7 @@ import {
 } from '../../state/actions'
 import { BUCKETS, ROLES, type Bucket, type NexusDoc, type Role } from '../../types/schema'
 import { runHealthChecks, type HealthIssue } from '../../diagnostics/health'
+import { workspaceUsesSystemFolders } from '../../drive/bootstrap'
 import { writerId } from '../../sync/writer'
 import { hlcNow } from '../../util/hlc'
 
@@ -732,11 +733,32 @@ function SettingsTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
 function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
   const [issues, setIssues] = useState<HealthIssue[] | null>(null)
   const [running, setRunning] = useState(false)
+  const [reorgState, setReorgState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
+  const [reorgMsg, setReorgMsg] = useState<string | null>(null)
+  const reorganized = workspaceUsesSystemFolders(doc)
+
+  const reorganize = async () => {
+    if (!confirm(
+      'Reorganize the Drive workspace into system folders?\n\n' +
+      'Creates master/, projects/, scripts/ and Unsorted/ inside the workspace folder and moves nexus.json into master/.\n\n' +
+      'File IDs never change — the app, links and .env keep working. No content is deleted.',
+    )) return
+    setReorgState('busy')
+    try {
+      const { migrateWorkspaceFolders } = await import('../../drive/bootstrap')
+      const r = await migrateWorkspaceFolders({ mode: 'bearer' })
+      setReorgMsg(`Done — folders created: ${r.created.length ? r.created.join(', ') : 'none (already existed)'}; nexus.json ${r.movedNexus ? 'moved into master/' : 'was already in place'}.`)
+      setReorgState('done')
+    } catch (e) {
+      setReorgMsg(errText(e))
+      setReorgState('error')
+    }
+  }
 
   const run = async () => {
     setRunning(true)
     try {
-      setIssues(await runHealthChecks())
+      setIssues(await runHealthChecks({ deep: true }))
     } catch (e) {
       setIssues([
         { level: 'error', code: 'checkFailed', message: 'Health check crashed', fix: errText(e) },
@@ -753,6 +775,25 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
 
   return (
     <div>
+      <div className="card">
+        <div className="spread mb8">
+          <h2>Drive layout</h2>
+          {reorganized ? (
+            <span className="badge done">organized</span>
+          ) : (
+            <button className="btn primary" disabled={reorgState === 'busy'} onClick={() => void reorganize()}>
+              {reorgState === 'busy' ? 'Reorganizing…' : 'Reorganize into system folders'}
+            </button>
+          )}
+        </div>
+        <p className="muted small" style={{ marginTop: 0 }}>
+          Creates <code>master/</code> (nexus.json), <code>projects/</code>, <code>scripts/</code> and{' '}
+          <code>Unsorted/</code> inside the workspace folder. File IDs never change — the app, links and
+          .env keep working; nothing is deleted.
+        </p>
+        {reorgMsg && banner(reorgState === 'error' ? 'error' : 'info', reorgMsg)}
+      </div>
+
       <div className="card">
         <div className="spread mb8">
           <h2>Health checks</h2>

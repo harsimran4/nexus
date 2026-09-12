@@ -172,11 +172,22 @@ export async function writeFileJson(
   cred: Credential,
   opts: { keepalive?: boolean } = {},
 ): Promise<FileMeta> {
+  return writeFileText(fileId, content, cred, 'application/json', opts)
+}
+
+/** Whole-file media write (uploadType=media). */
+export async function writeFileText(
+  fileId: string,
+  content: string,
+  cred: Credential,
+  mimeType = 'text/markdown',
+  opts: { keepalive?: boolean } = {},
+): Promise<FileMeta> {
   const bearer = cred.bearer ?? getGlobalBearer()
   if (!bearer) throw new DriveError('auth', 'Sign in with Google to write')
   const res = await fetch(`${UPLOAD_API}/files/${fileId}?uploadType=media&fields=${META_FIELDS}`, {
     method: 'PATCH',
-    headers: { Authorization: `Bearer ${bearer}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${bearer}`, 'Content-Type': mimeType },
     body: content,
     keepalive: opts.keepalive,
   }).catch((e: unknown) => {
@@ -261,6 +272,41 @@ export async function trashFile(fileId: string, cred: Credential): Promise<void>
     { method: 'PATCH', headers: { Authorization: `Bearer ${bearer}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) },
     cred,
   )
+}
+
+/** Move a file/folder between parents (used by the workspace reorganization). */
+export async function moveFile(
+  fileId: string,
+  addParent: string,
+  removeParent: string | null,
+  cred: Credential,
+): Promise<FileMeta> {
+  const bearer = cred.bearer ?? getGlobalBearer()
+  if (!bearer) throw new DriveError('auth', 'Sign in with Google to write')
+  const params = new URLSearchParams({ addParents: addParent, fields: META_FIELDS })
+  if (removeParent) params.set('removeParents', removeParent)
+  const res = await driveFetch(
+    `${API}/files/${fileId}?${params.toString()}`,
+    { method: 'PATCH', headers: { Authorization: `Bearer ${bearer}` } },
+    cred,
+  )
+  return res.json()
+}
+
+/** Rename a Drive file or folder (project rename syncs its folder name). */
+export async function renameFile(fileId: string, name: string, cred: Credential): Promise<FileMeta> {
+  const bearer = cred.bearer ?? getGlobalBearer()
+  if (!bearer) throw new DriveError('auth', 'Sign in with Google to write')
+  const res = await driveFetch(
+    `${API}/files/${fileId}?fields=${META_FIELDS}`,
+    {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${bearer}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    },
+    cred,
+  )
+  return res.json()
 }
 
 export interface ListResult {

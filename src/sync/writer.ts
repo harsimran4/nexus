@@ -243,7 +243,7 @@ async function snapshotHook(nexusId: string, cred: { mode: 'bearer' }): Promise<
   if (doc.snapshots.some((s) => s.note.startsWith(today))) return
   snapshotMemo.add(nexusId)
   try {
-    const snapshotsFolderId = await ensureSnapshotsFolder(doc.ids.rootFolderId, cred)
+    const snapshotsFolderId = await ensureSnapshotsFolder(doc, cred)
     const copy = await copyFile(nexusId, `nexus-${today}.json`, snapshotsFolderId, cred)
     commitQuiet((d) => {
       d.snapshots = [
@@ -330,7 +330,8 @@ async function quarantine(nexusId: string, raw: string, cred: { mode: 'bearer' }
     const doc = storeGet().doc
     const rootId = doc?.ids.rootFolderId ?? ''
     if (!rootId) return
-    const snapshotsFolderId = await ensureSnapshotsFolder(rootId, cred)
+    const snapshotsFolderId = doc ? await ensureSnapshotsFolder(doc, cred) : null
+    if (!snapshotsFolderId) return
     await createCorruptCopy(snapshotsFolderId, raw, cred)
   } catch {
     void nexusId // quarantine is best-effort; the raw bytes are also mirrored to IndexedDB

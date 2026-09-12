@@ -14,8 +14,8 @@ import { defaultStatus, type Item, type ItemKind, type NexusDoc, type Project, t
 import { canWrite, canAdmin } from '../auth/session'
 import { commit, touch, recordTombstone, appendActivity, flush, writerId } from '../sync/writer'
 import { hashPassword, mintToken, passwordPolicyError } from '../auth/hashing'
-import { DriveError, createFolder, uploadFile } from '../drive/client'
-import { ensureSnapshotsFolder } from '../drive/bootstrap'
+import { DriveError, createFolder, uploadFile, renameFile } from '../drive/client'
+import { ensureProjectsFolder, ensureScriptsFolder, ensureUnsortedFolder } from '../drive/bootstrap'
 import { sessionRef } from '../sync/identity'
 
 function assertWrite(): void {
@@ -26,16 +26,17 @@ function assertWrite(): void {
 // Projects
 // ---------------------------------------------------------------------------
 
-export async function createProject(name: string, labels: string[] = [], description = ''): Promise<string> {
+export async function createProject(name: string, where?: { projectsParentId?: string }): Promise<string> {
+  void where
   assertWrite()
   const id = newProjectId()
   commit((doc) => {
     const project: Project = {
       id,
       name,
-      description,
+      description: '',
       folderId: null,
-      labels,
+      labels: [],
       createdAt: hlcNow(),
       updatedAt: hlcNow(),
       writerId: 'pending',
@@ -51,16 +52,17 @@ export async function createProject(name: string, labels: string[] = [], descrip
   return id
 }
 
-/** Create the project's Drive folder if missing. Returns its id, or null when
- *  it can't be created right now (caller decides whether that's fatal). */
+/** Create the project's Drive folder if missing — inside the workspace's
+ *  projects/ system folder. Returns its id, or null when it can't be created
+ *  right now (caller decides whether that's fatal). */
 export async function ensureProjectFolder(projectId: string): Promise<string | null> {
   const { storeGet } = await import('../sync/store')
   const doc = storeGet().doc
   const project = doc?.projects[projectId]
-  const rootId = doc?.ids.rootFolderId
-  if (!project || !rootId) return null
+  if (!doc || !project) return null
   if (project.folderId) return project.folderId
-  const folder = await createFolder(project.name, rootId, { mode: 'bearer' })
+  const projectsParentId = await ensureProjectsFolder(doc, { mode: 'bearer' })
+  const folder = await createFolder(project.name, projectsParentId, { mode: 'bearer' })
   commit((d) => {
     const p = d.projects[projectId]
     if (p && !p.folderId) {
@@ -80,6 +82,14 @@ export function renameProject(projectId: string, name: string): void {
     touch('projects', p)
     appendActivity(doc, 'project.rename', projectId, { name })
   })
+  // Keep the Drive folder name in sync (best-effort; metadata already renamed).
+  void (async () => {
+    const { storeGet } = await import('../sync/store')
+    const folderId = storeGet().doc?.projects[projectId]?.folderId
+    if (folderId) {
+      await renameFile(folderId, name, { mode: 'bearer' }).catch(() => {})
+    }
+  })()
 }
 
 export function deleteProject(projectId: string): void {
@@ -149,9 +159,13 @@ export function setItemStatus(itemId: string, status: string): void {
 
 export function updateItem(itemId: string, fields: Partial<Pick<Item, 'title' | 'projectId' | 'kind' | 'labels' | 'assigneeAppId' | 'dueAt' | 'notes'>>): void {
   assertWrite()
+  let movedToProject: string | null = null
   commit((doc) => {
     const item = doc.items[itemId]
     if (!item) return
+    if (fields.projectId !== undefined && fields.projectId !== item.projectId && item.fileIds.length > 0) {
+      movedToProject = fields.projectId // files slide into the project folder
+    }
     Object.assign(item, fields)
     touch('items', item)
     // Notes are content, not workflow events — don't log them (typing used to
@@ -159,6 +173,67 @@ export function updateItem(itemId: string, fields: Partial<Pick<Item, 'title' | 
     const meaningful = Object.keys(fields).filter((k) => k !== 'notes')
     if (meaningful.length > 0) appendActivity(doc, 'item.update', itemId, { fields: meaningful })
   })
+  if (movedToProject) void moveItemFilesToProject(itemId, movedToProject)
+}
+
+/** Best-effort: move an item's Drive files into its project folder. */
+async function moveItemFilesToProject(itemId: string, projectId: string): Promise<void> {
+  const { storeGet } = await import('../sync/store')
+  const doc = storeGet().doc
+  const item = doc?.items[itemId]
+  if (!doc || !item || item.fileIds.length === 0) return
+  const target = await ensureProjectFolder(projectId)
+  if (!target) return
+  const { moveFile } = await import('../drive/client')
+  for (const fileId of item.fileIds) {
+    await moveFile(fileId, target, null, { mode: 'bearer' }).catch(() => {})
+  }
+}
+
+/**
+ * Delete a project AND its Drive content. Destructive-but-recoverable:
+ * the folder and every file move to Drive trash (30-day recovery), and the
+ * metadata is tombstoned. The UI must show the caller the list first.
+ */
+export async function deleteProjectCascade(
+  projectId: string,
+): Promise<{ files: number; folder: string | null }> {
+  assertWrite()
+  const { storeGet } = await import('../sync/store')
+  const doc = storeGet().doc
+  const project = doc?.projects[projectId]
+  if (!doc || !project) throw new Error('Project not found')
+  const items = Object.values(doc.items).filter(
+    (i) => i.projectId === projectId && i.deleted === null,
+  )
+  const fileIds = [...new Set(items.flatMap((i) => i.fileIds))]
+
+  // Drive-side first (each best-effort; a missed file stays findable via sweep).
+  const { trashFile } = await import('../drive/client')
+  for (const f of fileIds) await trashFile(f, { mode: 'bearer' }).catch(() => {})
+  if (project.folderId) await trashFile(project.folderId, { mode: 'bearer' }).catch(() => {})
+
+  commit((d) => {
+    const p = d.projects[projectId]
+    if (p) {
+      p.deleted = { at: hlcNow(), by: writerId() }
+      touch('projects', p)
+      recordTombstone(d, 'project', projectId, writerId())
+    }
+    for (const item of items) {
+      const live = d.items[item.id]
+      if (!live || live.deleted) continue
+      live.deleted = { at: hlcNow(), by: writerId() }
+      touch('items', live)
+      recordTombstone(d, 'item', item.id, writerId())
+    }
+    appendActivity(d, 'project.delete', projectId, {
+      name: project.name,
+      filesTrashed: fileIds.length,
+      itemsTrashed: items.length,
+    })
+  })
+  return { files: fileIds.length, folder: project.folderId }
 }
 
 export function attachFiles(itemId: string, fileIds: string[]): void {
@@ -184,7 +259,8 @@ export function deleteItem(itemId: string): void {
   })
 }
 
-/** Upload a file into the item's project folder (creating it if missing), then link it. */
+/** Upload a file into the item's project folder (creating it if missing);
+ *  project-less items go to Unsorted/. Then link it. */
 export async function uploadToItem(
   itemId: string,
   file: File,
@@ -201,7 +277,7 @@ export async function uploadToItem(
       folderId = await ensureProjectFolder(item.projectId)
       if (!folderId) return { ok: false, error: 'Project not found — re-open this item and try again' }
     } else {
-      folderId = doc.ids.rootFolderId
+      folderId = await ensureUnsortedFolder(doc, { mode: 'bearer' })
     }
     if (!folderId) return { ok: false, error: 'Workspace folder not set — finish setup first' }
     const meta = await uploadFile(folderId, file, { mode: 'bearer' }, onProgress)
@@ -230,7 +306,7 @@ export function createScript(fields: {
     const script: Script = {
       id,
       title: fields.title,
-      storage: { type: 'inline', body: fields.body ?? '' },
+      storage: { type: 'md', fileId: '' }, // .md file created lazily on first edit
       projectId: fields.projectId ?? null,
       itemId: fields.itemId ?? null,
       status: 'draft',
@@ -258,14 +334,54 @@ export function updateScript(id: string, fields: Partial<Pick<Script, 'title' | 
   })
 }
 
-export function setScriptBody(id: string, body: string): void {
+/**
+ * Save a script's body to its markdown file in scripts/ (creating the file on
+ * first edit). Metadata stays in nexus.json; the text lives on Drive where it
+ * gets its own revision history and never bloats the master file.
+ */
+export async function saveScriptBody(id: string, body: string): Promise<{ ok: true } | { ok: false; error: string }> {
   assertWrite()
-  commit((doc) => {
-    const s = doc.scripts[id]
-    if (!s) return
-    s.storage = { type: 'inline', body }
-    touch('scripts', s)
-  })
+  const { storeGet } = await import('../sync/store')
+  const doc = storeGet().doc
+  const script = doc?.scripts[id]
+  if (!doc || !script) return { ok: false, error: 'Script not found' }
+  try {
+    const scriptsFolderId = await ensureScriptsFolder(doc, { mode: 'bearer' })
+    const { createTextFile, writeFileText } = await import('../drive/client')
+    if (script.storage.type === 'md' && script.storage.fileId) {
+      await writeFileText(script.storage.fileId, body, { mode: 'bearer' })
+    } else {
+      const created = await createTextFile(`${id}.md`, scriptsFolderId, body, 'text/markdown', { mode: 'bearer' })
+      commit((d) => {
+        const s = d.scripts[id]
+        if (!s) return
+        s.storage = { type: 'md', fileId: created.id }
+        touch('scripts', s)
+      })
+    }
+    return { ok: true }
+  } catch (e) {
+    if (e instanceof DriveError && e.kind === 'auth')
+      return { ok: false, error: 'Sign in with Google to save scripts (top bar → Connect Google)' }
+    if (e instanceof DriveError) return { ok: false, error: `${e.message} — ${e.kind}` }
+    return { ok: false, error: e instanceof Error ? e.message : 'Save failed' }
+  }
+}
+
+/** Read a script's body from its markdown file (null when not yet on file). */
+export async function readScriptBody(id: string): Promise<string | null> {
+  const { storeGet } = await import('../sync/store')
+  const doc = storeGet().doc
+  const script = doc?.scripts[id]
+  if (!doc || !script) return null
+  if (script.storage.type === 'inline') return script.storage.body
+  if (script.storage.type !== 'md' || !script.storage.fileId) return ''
+  const { readFile } = await import('../drive/client')
+  try {
+    return await readFile(script.storage.fileId, { mode: 'auto' })
+  } catch {
+    return null
+  }
 }
 
 export async function setScriptStatus(id: string, status: ScriptStatus): Promise<void> {
@@ -284,17 +400,15 @@ export async function setScriptStatus(id: string, status: ScriptStatus): Promise
     const doc = storeGet().doc
     const script = doc?.scripts[id]
     if (!doc || !script) return
-    if (script.storage.type !== 'inline') return
+    if (script.storage.type !== 'md') return
     try {
-      const snapshotsFolderId = await ensureSnapshotsFolder(doc.ids.rootFolderId, { mode: 'bearer' })
+      const scriptsFolderId = await ensureScriptsFolder(doc, { mode: 'bearer' })
       const { createTextFile } = await import('../drive/client')
-      const copy = await createTextFile(
-        `${id}-${status}.md`,
-        snapshotsFolderId,
-        script.storage.body,
-        'text/markdown',
-        { mode: 'bearer' },
-      )
+      const body = await readScriptBody(id)
+      if (body === null) return
+      const copy = await createTextFile(`${id}-${status}.md`, scriptsFolderId, body, 'text/markdown', {
+        mode: 'bearer',
+      })
       commit((d) => {
         const s = d.scripts[id]
         if (!s) return
