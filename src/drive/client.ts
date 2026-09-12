@@ -95,10 +95,18 @@ export function hasBearer(): boolean {
   return globalBearer !== null
 }
 
-async function driveFetch(url: string, init: RequestInit, _cred: Credential): Promise<Response> {
+async function driveFetch(url: string, init: RequestInit, cred: Credential): Promise<Response> {
+  // Attach the bearer to EVERY call that may use one — GET reads included.
+  // (A missing Authorization header here turns signed-in reads into anonymous
+  // calls, which Drive rejects as "unregistered callers".)
+  const headers = new Headers(init.headers)
+  if (cred.mode !== 'key') {
+    const bearer = cred.bearer ?? getGlobalBearer()
+    if (bearer) headers.set('Authorization', 'Bearer ' + bearer)
+  }
   let res: Response
   try {
-    res = await fetch(url, init)
+    res = await fetch(url, { ...init, headers })
   } catch (e) {
     throw new DriveError('network', e instanceof Error ? e.message : 'network error')
   }
