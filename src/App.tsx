@@ -54,6 +54,7 @@ export function App(): ReactNode {
   const [signedInGoogle, setSignedInGoogle] = useState(isSignedIn())
   const [health, setHealth] = useState<HealthIssue[]>([])
   const [draftRecovery, setDraftRecovery] = useState<string | null>(null)
+  const [staleBuild, setStaleBuild] = useState(false)
 
   useEffect(() => {
     void boot().then(() => {
@@ -69,6 +70,24 @@ export function App(): ReactNode {
   useEffect(() => {
     const t = setInterval(() => setSignedInGoogle(isSignedIn()), 60_000)
     return () => clearInterval(t)
+  }, [])
+
+  // Stale-build detection: Pages pins the old HTML for up to 10 minutes —
+  // announce instead of silently running old code.
+  useEffect(() => {
+    let stopped = false
+    const check = async () => {
+      const { checkForUpdate } = await import('./diagnostics/update')
+      const stale = await checkForUpdate()
+      if (!stopped && stale) setStaleBuild(true)
+    }
+    const t = setInterval(() => void check(), 5 * 60_000)
+    window.addEventListener('focus', () => void check())
+    void check()
+    return () => {
+      stopped = true
+      clearInterval(t)
+    }
   }, [])
 
   useEffect(() => {
@@ -109,6 +128,15 @@ export function App(): ReactNode {
   const page = renderPage(route, doc !== null)
   return (
     <Shell signedInGoogle={signedInGoogle}>
+      {staleBuild && (
+        <div className="banner info">
+          <div className="body">
+            <b>A new version of Nexus is available</b>
+            <div className="fix">Reload to switch to it — your queued changes are kept.</div>
+          </div>
+          <button className="btn primary small" onClick={() => location.reload()}>Refresh now</button>
+        </div>
+      )}
       {health.map((h, i) => (
         <IssueBanner key={h.code + String(i)} issue={h} />
       ))}
