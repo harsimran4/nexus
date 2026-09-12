@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
+      "Bash(python scripts/parse_review.py)",
+      "Bash(python -c ' *)",
+      "Bash(npx tsc *)",
+      "Bash(echo \"EXIT:$?\")"
+    ]
+  }
+}
