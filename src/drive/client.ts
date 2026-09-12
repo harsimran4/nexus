@@ -63,6 +63,12 @@ async function parseError(res: Response): Promise<DriveError> {
 function withKey(url: string, cred: Credential): string {
   const bearer = cred.mode === 'key' ? null : cred.bearer ?? getGlobalBearer()
   if (bearer) return url
+  if (cred.mode === 'bearer') {
+    // The caller explicitly wanted an authenticated user call (any write, or a
+    // user-scoped read like listing Drive root). Falling back to the anonymous
+    // API key here produces cryptic "unregistered callers" errors — fail loudly.
+    throw new DriveError('auth', 'Sign in with Google first — this call needs your Google identity')
+  }
   const key = cred.apiKey ?? getGlobalApiKey()
   if (!key) throw new DriveError('auth', 'No API key configured and not signed in')
   return url + (url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(key)

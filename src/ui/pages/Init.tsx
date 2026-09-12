@@ -55,6 +55,17 @@ export function Init(): React.JSX.Element {
     }
     setBusy(true)
     try {
+      // The token is memory-only and dies on reload — this click is a user
+      // gesture, so silently re-mint it (or pop consent) before any Drive call.
+      if (!isSignedIn()) {
+        try {
+          await requestToken({ silentFirst: true })
+        } catch {
+          setError('Your Google session ended — click "Sign in with Google" again, then retry')
+          setBusy(false)
+          return
+        }
+      }
       // Refuse to create a second workspace from this Google account.
       const { findWorkspace } = await import('../../drive/bootstrap')
       const existing = await findWorkspace('', { mode: 'bearer' })
