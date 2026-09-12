@@ -543,8 +543,8 @@ function SettingsTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
                     const entry = d.settings.pipeline[i]
                     if (!entry) return
                     entry.label = value
-                    entry.updatedAt = hlcNow()
-                    entry.writerId = writerId()
+                    d.settings.updatedAt = hlcNow()
+                    d.settings.writerId = writerId()
                   })
                 }}
               />
