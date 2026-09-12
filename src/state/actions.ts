@@ -48,7 +48,8 @@ export async function createProject(name: string, where?: { projectsParentId?: s
     appendActivity(doc, 'project.create', id, { name })
   })
   // Drive folder creation is async + metadata lands on the next save.
-  void ensureProjectFolder(id)
+  // (Silently swallowed here — the App-level retry re-runs it on Google connect.)
+  void ensureProjectFolder(id).catch(() => {})
   return id
 }
 
@@ -245,6 +246,38 @@ export function attachFiles(itemId: string, fileIds: string[]): void {
     touch('items', item)
     appendActivity(doc, 'item.attach', itemId, { fileIds })
   })
+}
+
+/** Remove a file from an item — optionally trashing it on Drive (30-day
+ *  recovery). Unlinking alone leaves the file where it is on Drive. */
+export async function removeItemFile(
+  itemId: string,
+  fileId: string,
+  opts: { trashInDrive?: boolean } = {},
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  assertWrite()
+  if (opts.trashInDrive) {
+    const { trashFile } = await import('../drive/client')
+    try {
+      await trashFile(fileId, { mode: 'bearer' })
+    } catch (e) {
+      if (e instanceof DriveError && e.kind === 'notFound') {
+        // Already gone from Drive — still unlink it below.
+      } else if (e instanceof DriveError) {
+        return { ok: false, error: `${e.message} — ${e.kind}` }
+      } else {
+        return { ok: false, error: e instanceof Error ? e.message : 'Drive delete failed' }
+      }
+    }
+  }
+  commit((doc) => {
+    const it = doc.items[itemId]
+    if (!it) return
+    it.fileIds = it.fileIds.filter((f) => f !== fileId)
+    touch('items', it)
+    appendActivity(doc, opts.trashInDrive ? 'item.file.delete' : 'item.detach', itemId, { fileId })
+  })
+  return { ok: true }
 }
 
 export function deleteItem(itemId: string): void {

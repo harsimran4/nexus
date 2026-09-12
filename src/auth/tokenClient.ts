@@ -98,6 +98,19 @@ declare global {
   }
 }
 
+/**
+ * Pre-load the GIS script and create the token client at app boot, so a later
+ * sign-in click runs requestAccessToken while the browser still counts it as
+ * a user gesture. (Loading the script inside the click handler takes long
+ * enough for the browser to block the popup.)
+ */
+export function warmupAuth(): Promise<void> {
+  return ensureClient().then(
+    () => undefined,
+    () => undefined,
+  )
+}
+
 async function ensureClient(): Promise<TokenClient> {
   if (tokenClient) return tokenClient
   await loadGis()

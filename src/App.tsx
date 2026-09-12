@@ -72,6 +72,23 @@ export function App(): ReactNode {
     return () => clearInterval(t)
   }, [])
 
+  // The moment Google connects, retry any project folders that failed to
+  // create earlier (e.g. the project was made before signing in).
+  useEffect(() => {
+    if (!signedInGoogle) return
+    void (async () => {
+      const { storeGet } = await import('./sync/store')
+      const doc = storeGet().doc
+      if (!doc) return
+      const { ensureProjectFolder } = await import('./state/actions')
+      for (const p of Object.values(doc.projects)) {
+        if (p.deleted === null && !p.folderId) {
+          await ensureProjectFolder(p.id).catch(() => {})
+        }
+      }
+    })()
+  }, [signedInGoogle])
+
   // Stale-build detection: Pages pins the old HTML for up to 10 minutes —
   // announce instead of silently running old code.
   useEffect(() => {

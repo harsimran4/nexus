@@ -50,6 +50,9 @@ export async function boot(): Promise<void> {
     return
   }
   setGlobalApiKey(config.apiKey)
+  // Pre-load Google Identity Services so the first sign-in click opens its
+  // popup while the browser still honors the user gesture.
+  void import('./auth/tokenClient').then((t) => t.warmupAuth())
 
   const params = parseBootParams()
   if (params.rootIdParam) rememberIds({ rootFolderId: params.rootIdParam, nexusFileId: recallIds()?.nexusFileId ?? '' })

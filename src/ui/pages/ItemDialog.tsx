@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../../sync/store'
 import { Modal, KindBadge, CopyButton, banner, useDebouncedCommit } from '../components'
 import { canWrite } from '../../auth/session'
-import { deleteItem, setItemStatus, updateItem, uploadToItem } from '../../state/actions'
+import { deleteItem, removeItemFile, setItemStatus, updateItem, uploadToItem } from '../../state/actions'
 import { isSignedIn } from '../../auth/tokenClient'
 import { describeError, downloadToBrowser } from '../../drive/preview'
 import { thumbnailUrl, webViewLink } from '../../drive/client'
@@ -158,6 +158,20 @@ export function ItemDialog({ itemId, onClose }: { itemId: string; onClose: () =>
               >
                 Download
               </button>
+              {writable && (
+                <button
+                  className="btn small danger"
+                  title="Moves the file to Drive trash (recoverable for 30 days) and unlinks it from this item"
+                  onClick={async () => {
+                    if (!confirm('Delete this file? It moves to Drive trash (recoverable for 30 days) and is removed from this item.')) return
+                    setUploadError(null)
+                    const r = await removeItemFile(itemId, f, { trashInDrive: true })
+                    if (!r.ok) setUploadError(r.error)
+                  }}
+                >
+                  Delete
+                </button>
+              )}
             </span>
           </div>
         ))}

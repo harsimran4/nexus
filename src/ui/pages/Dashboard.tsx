@@ -109,6 +109,7 @@ export function Dashboard(): React.JSX.Element {
               ))}
             </select>
             <button className="btn primary" onClick={quickAdd} disabled={!quickTitle.trim()}>Add</button>
+            <span className="faint small">Tip: pick a project so its uploads land in the project's Drive folder (no-project items go to Unsorted/).</span>
           </div>
         </div>
       )}
