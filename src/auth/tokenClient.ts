@@ -151,6 +151,11 @@ export async function requestToken(opts: { silentFirst?: boolean; silentOnly?: b
     const got = await silentAttempt(opts.silentOnly ? 8_000 : 15_000)
     if (got) return
     if (opts.silentOnly) throw new Error('No live Google session — sign in manually')
+    // No popup fallback here: by now the original user gesture is long gone
+    // and the browser blocks the window (GSI_LOGGER "Maybe blocked by the
+    // browser?"). Surface a clear message instead — the next direct click
+    // opens the popup fine.
+    throw new Error('Google session ended — click "Connect Google (studio account)" to sign in again')
   }
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Sign-in timed out')), 120_000)

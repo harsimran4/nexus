@@ -79,9 +79,10 @@ export function SyncPill(): ReactNode {
   const onClick = () => {
     if (status === 'queued') void flush()
     if (status === 'reconnect') {
-      // Click is a user gesture: drop the dead token and mint a fresh one.
+      // Click is a user gesture: drop the dead token and mint a fresh one
+      // (direct popup — no silent attempt to lose the gesture context).
       clearToken()
-      void requestToken({ silentFirst: true }).catch(() => void requestToken())
+      void requestToken()
     }
   }
   return (

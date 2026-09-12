@@ -283,7 +283,7 @@ function Shell({ children, bare, signedInGoogle }: { children: ReactNode; bare?:
             {signedInGoogle === false && (session?.role === 'admin' || session?.role === 'editor') && (
               <button
                 className="btn primary"
-                onClick={() => void requestToken({ silentFirst: true }).catch(() => void requestToken())}
+                onClick={() => void requestToken()}
               >
                 Connect Google (studio account)
               </button>
