@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { requestToken, isSignedIn, onTokenChange } from '../../auth/tokenClient'
 import { hashPassword, mintToken, passwordPolicyError } from '../../auth/hashing'
 import { createWorkspace, initialDoc } from '../../drive/bootstrap'
-import { emptyDoc, type NexusDoc } from '../../types/schema'
+import { type NexusDoc } from '../../types/schema'
 import { hlcNow } from '../../util/hlc'
 import { newUserId, newDeviceId } from '../../util/id'
 import { useStore } from '../../sync/store'
@@ -16,7 +16,6 @@ type Step = 0 | 1 | 2
 
 export function Init(): React.JSX.Element {
   const [step, setStep] = useState<Step>(isSignedIn() ? 1 : 0)
-  const [signedIn, setSignedIn] = useState(isSignedIn())
   const [rootName, setRootName] = useState('Nexus Root')
   const [adminName, setAdminName] = useState('')
   const [secretMode, setSecretMode] = useState<'token' | 'password'>('password')
@@ -26,7 +25,6 @@ export function Init(): React.JSX.Element {
   const [created, setCreated] = useState<{ rootFolderId: string; nexusFileId: string; needsManualShare: boolean } | null>(null)
 
   useEffect(() => onTokenChange((si) => {
-    setSignedIn(si)
     if (si && step === 0) setStep(1)
   }), [step])
 
@@ -57,6 +55,17 @@ export function Init(): React.JSX.Element {
     }
     setBusy(true)
     try {
+      // Refuse to create a second workspace from this Google account.
+      const { findWorkspace } = await import('../../drive/bootstrap')
+      const existing = await findWorkspace('', { mode: 'bearer' })
+      if (existing?.nexusFileId) {
+        setError(
+          `A workspace already exists on this account (root ${existing.rootFolderId.slice(0, 12)}…). ` +
+            'Open it from the app URL, or use that account\'s Admin → Maintenance to delete it first.',
+        )
+        setBusy(false)
+        return
+      }
       const doc = initialDoc()
       doc.settings.rootFolderName = rootName.trim() || 'Nexus Root'
       doc.users.app = [
@@ -73,7 +82,6 @@ export function Init(): React.JSX.Element {
       doc.writerId = `bootstrap|${newDeviceId()}|init`
       doc.updatedAt = hlcNow()
       const ws = await createWorkspace(doc, { mode: 'bearer' })
-      const finalDoc = emptyDoc()
       // Re-parse the fully-formed doc (with ids) so the app boots on it directly.
       const { parseDoc } = await import('../../types/schema')
       const done = { ...doc, ids: { rootFolderId: ws.rootFolderId, nexusFileId: ws.nexusFileId ?? '' } }

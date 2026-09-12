@@ -3,10 +3,10 @@
 // The poller never writes — it reconciles read state only (the writer
 // reconciles its own conflicts during commit).
 
-import { getMeta, hasBearer } from '../drive/client'
-import { storeGet, useStore } from './store'
+import { hasBearer } from '../drive/client'
+import { storeGet } from './store'
 import { applyRemoteIfChanged } from './writer'
-import { reverifyViewerSession } from '../auth/session'
+import { reverifySessions } from '../auth/session'
 
 let timer: ReturnType<typeof setInterval> | null = null
 
@@ -29,12 +29,7 @@ async function pollOnce(nexusId: string): Promise<void> {
   const store = storeGet()
   if (!store.doc || store.status === 'booting' || store.status === 'needsInit' || store.status === 'corrupt') return
   const cred = { mode: hasBearer() ? ('auto' as const) : ('key' as const) }
-  try {
-    await getMeta(nexusId, cred) // cheap liveness probe (5 quota units)
-  } catch {
-    return // poller stays quiet — health.ts surfaces persistent failures
-  }
+  // applyRemoteIfChanged does the single cheap files.get per tick itself.
   await applyRemoteIfChanged(nexusId, cred)
-  reverifyViewerSession()
-  void useStore // keep import graph explicit
+  await reverifySessions()
 }

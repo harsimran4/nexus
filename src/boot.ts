@@ -3,14 +3,14 @@
 // already signed in) → session restore → poller → draft-recovery check.
 
 import { config } from './config'
-import { getMeta, readFile, setGlobalApiKey, DriveError } from './drive/client'
+import { readFile, setGlobalApiKey, DriveError } from './drive/client'
 import { findWorkspace } from './drive/bootstrap'
 import { parseDoc } from './types/schema'
-import { storeGet, useStore } from './sync/store'
+import { storeGet } from './sync/store'
 import { rememberIds, recallIds, loadDraft } from './sync/drafts'
 import { restoreSession } from './auth/session'
 import { startPolling } from './sync/poller'
-import { installPagehideFlush, applyRemoteIfChanged } from './sync/writer'
+import { isSignedIn, requestToken } from './auth/tokenClient'
 import { originCheck } from './diagnostics/health'
 
 export interface BootParams {
@@ -59,6 +59,12 @@ export async function boot(): Promise<void> {
   let nexusId = recallIds()?.nexusFileId || config.nexusFileId
 
   try {
+    // Quietly try to reuse a live Google session so returning editors read via
+    // bearer immediately (never pops up — 8s cap so boot never hangs).
+    if (!isSignedIn()) {
+      await requestToken({ silentOnly: true }).catch(() => {})
+    }
+
     if (!nexusId && rootId) {
       const ws = await findWorkspace(rootId, { mode: 'key', apiKey: effectiveKey() })
       if (ws?.nexusFileId) nexusId = ws.nexusFileId
@@ -69,19 +75,7 @@ export async function boot(): Promise<void> {
       return
     }
 
-    const cred = { mode: 'key' as const, apiKey: effectiveKey() }
-    try {
-      await getMeta(nexusId, cred)
-    } catch (e) {
-      if (e instanceof DriveError && (e.kind === 'notFound' || e.kind === 'permission') && rootId === '') {
-        store.setStatus('needsInit')
-        return
-      }
-      // fall through — applyRemoteIfChanged will classify (corrupt/blocked/etc.)
-    }
-
-    // Prime the doc from the key path (or bearer when present — tokenClient
-    // sets it after sign-in, which on a reload means we read via bearer here).
+    // Prime the doc: bearer when we have one (editors), else the API key.
     const result = await initialRead(nexusId)
     if (result === 'corrupt') return
     if (result === 'none') {
@@ -95,10 +89,7 @@ export async function boot(): Promise<void> {
       rememberIds({ rootFolderId: rootId, nexusFileId: nexusId })
       startPolling(nexusId)
     }
-    installPagehideFlush()
-    restoreSession()
-    const draft = await checkBootDraft()
-    if (draft) useStore.setState({ bootError: `__draft_recovery__${draft.savedAt}` })
+    await restoreSession()
     if (storeGet().status === 'booting') storeGet().setStatus('ok')
   } catch (e) {
     store.setStatus('blocked', e instanceof Error ? e.message : 'Boot failed')
@@ -112,7 +103,9 @@ function effectiveKey(): string {
 
 async function initialRead(nexusId: string): Promise<'ok' | 'corrupt' | 'none'> {
   const store = storeGet()
-  const cred = { mode: 'key' as const, apiKey: effectiveKey() }
+  const cred: Parameters<typeof readFile>[1] = isSignedIn()
+    ? { mode: 'auto' }
+    : { mode: 'key', apiKey: effectiveKey() }
   try {
     const raw = await readFile(nexusId, cred)
     const parsed = parseDoc(raw)
@@ -149,14 +142,9 @@ async function initialRead(nexusId: string): Promise<'ok' | 'corrupt' | 'none'> 
   }
 }
 
-async function checkBootDraft(): Promise<{ savedAt: string } | null> {
-  const { checkDraftRecovery } = await import('./sync/writer')
+/** Re-check for an unconfirmed draft at boot time (App shows the recovery modal). */
+export async function checkBootDraft(): Promise<{ savedAt: string } | null> {
   const draft = await loadDraft()
   if (!draft) return null
-  return checkDraftRecovery()
-}
-
-/** Used by the poller/applyRemote path once signed in (bearer reads for editors). */
-export async function refreshViaBearer(nexusId: string): Promise<void> {
-  await applyRemoteIfChanged(nexusId, { mode: 'auto' })
+  return { savedAt: draft.savedAt }
 }

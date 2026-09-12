@@ -14,8 +14,9 @@ import { defaultStatus, type Item, type ItemKind, type NexusDoc, type Project, t
 import { canWrite, canAdmin } from '../auth/session'
 import { commit, touch, recordTombstone, appendActivity, flush, writerId } from '../sync/writer'
 import { hashPassword, mintToken, passwordPolicyError } from '../auth/hashing'
-import { DriveError, createFolder, uploadFile, copyFile } from '../drive/client'
+import { DriveError, createFolder, uploadFile } from '../drive/client'
 import { ensureSnapshotsFolder } from '../drive/bootstrap'
+import { sessionRef } from '../sync/identity'
 
 function assertWrite(): void {
   if (!canWrite()) throw new Error('Your login cannot modify content — sign in as an editor or admin')
@@ -352,6 +353,8 @@ export async function createAppUser(
         auth,
         createdAt: hlcNow(),
         createdBy: 'pending',
+        updatedAt: hlcNow(),
+        writerId: writerId(),
       },
     ]
     appendActivity(doc, 'user.create', id, { name, role })
@@ -361,12 +364,30 @@ export async function createAppUser(
 
 export function setUserDisabled(userId: string, disabled: boolean): void {
   assertAdmin()
+  const { getSession } = sessionModule()
+  const me = getSession()
+  if (disabled && me?.appUserId === userId) {
+    throw new Error('You cannot disable your own account — ask another admin')
+  }
   commit((doc) => {
     const user = doc.users.app.find((u) => u.id === userId)
     if (!user) return
+    if (disabled && user.role === 'admin') {
+      const activeAdmins = doc.users.app.filter((u) => u.role === 'admin' && !u.disabled && u.id !== userId)
+      if (activeAdmins.length === 0) {
+        throw new Error('Cannot disable the last active admin')
+      }
+    }
     user.disabled = disabled
+    user.updatedAt = hlcNow()
+    user.writerId = writerId()
     appendActivity(doc, disabled ? 'user.disable' : 'user.enable', userId, { name: user.name })
   })
+}
+
+// Late-bound to avoid a circular import at module init.
+function sessionModule(): { getSession: () => { appUserId: string } | null } {
+  return { getSession: () => sessionRef.getSession?.() ?? null }
 }
 
 export async function resetUserPassword(userId: string, secret: string | undefined): Promise<{ raw: string }> {
@@ -391,6 +412,10 @@ export async function resetUserPassword(userId: string, secret: string | undefin
     const user = doc.users.app.find((u) => u.id === userId)
     if (!user) return
     user.auth = auth
+    // Kick every active session for this user — they re-sign-in with the new secret.
+    user.sessionEpoch = (user.sessionEpoch ?? 0) + 1
+    user.updatedAt = hlcNow()
+    user.writerId = writerId()
     appendActivity(doc, 'user.reset', userId, { name: user.name })
   })
   return { raw }
@@ -403,7 +428,10 @@ export async function mintViewerToken(name: string, note = ''): Promise<{ raw: s
   commit((doc) => {
     doc.users.viewers = [
       ...doc.users.viewers,
-      { id, name, tokenHash: hash, createdAt: hlcNow(), createdBy: 'pending', revokedAt: null, note },
+      {
+        id, name, tokenHash: hash, createdAt: hlcNow(), createdBy: 'pending',
+        revokedAt: null, note, updatedAt: hlcNow(), writerId: writerId(),
+      },
     ]
     appendActivity(doc, 'viewer.create', id, { name })
   })
@@ -416,6 +444,8 @@ export function revokeViewer(viewerId: string): void {
     const v = doc.users.viewers.find((x) => x.id === viewerId)
     if (!v || v.revokedAt) return
     v.revokedAt = hlcNow()
+    v.updatedAt = hlcNow()
+    v.writerId = writerId()
     appendActivity(doc, 'viewer.revoke', viewerId, { name: v.name })
   })
 }
@@ -424,6 +454,8 @@ export function updateSettings(mut: (s: NexusDoc['settings']) => void): void {
   assertAdmin()
   commit((doc) => {
     mut(doc.settings)
+    doc.settings.updatedAt = hlcNow()
+    doc.settings.writerId = writerId()
     appendActivity(doc, 'settings.update', 'settings', {})
   })
 }
@@ -432,6 +464,8 @@ export function setApiKeyOverride(key: string | null): void {
   assertAdmin()
   commit((doc) => {
     doc.settings.api.keyOverride = key
+    doc.settings.updatedAt = hlcNow()
+    doc.settings.writerId = writerId()
     appendActivity(doc, 'settings.apiKey', 'settings', { set: key !== null })
   })
 }

@@ -1,36 +1,8 @@
 // Content preview/download helpers. Key-first (works for viewers and doubles
 // as a continuous key-path probe), bearer fallback (editors keep working when
-// the key is broken). Google-Docs mimetypes need files.export, not alt=media.
+// the key is broken).
 
-import { downloadFile, readFile, DriveError, hasBearer, type Credential } from './client'
-
-const DOCS_MIME = /^application\/vnd\.google-apps\./
-
-export function isGoogleDocsMime(mimeType: string | undefined): boolean {
-  return DOCS_MIME.test(mimeType ?? '')
-}
-
-export function exportUrl(fileId: string, mimeType = 'application/pdf', apiKey: string | null): string {
-  let url = `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}/export?mimeType=${encodeURIComponent(mimeType)}`
-  if (apiKey) url += `&key=${encodeURIComponent(apiKey)}`
-  return url
-}
-
-export function apiKey(): string | null {
-  return currentApiKey()
-}
-
-// set from boot (keyOverride-aware); avoids importing the store here
-let currentApiKey: () => string | null = () => null
-export function registerApiKeyProvider(fn: () => string | null): void {
-  currentApiKey = fn
-}
-
-/** Read small text content (scripts stored as Drive docs, etc.). */
-export async function readText(fileId: string, cred?: Credential): Promise<string> {
-  const effective: Credential = cred ?? { mode: hasBearer() ? 'auto' : 'key' }
-  return readFile(fileId, effective)
-}
+import { downloadFile, DriveError, hasBearer, type Credential } from './client'
 
 /** Trigger a browser download of a Drive file (respects key/bearer path). */
 export async function downloadToBrowser(fileId: string, filename: string, cred?: Credential): Promise<void> {

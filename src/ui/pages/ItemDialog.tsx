@@ -3,8 +3,9 @@ import { useStore } from '../../sync/store'
 import { Modal, KindBadge, CopyButton, banner } from '../components'
 import { canWrite } from '../../auth/session'
 import { deleteItem, setItemStatus, updateItem, uploadToItem } from '../../state/actions'
-import { isSignedIn, requestToken } from '../../auth/tokenClient'
-import { describeError, downloadToBrowser, thumbnailUrl, webViewLink } from '../../drive/preview'
+import { isSignedIn } from '../../auth/tokenClient'
+import { describeError, downloadToBrowser } from '../../drive/preview'
+import { thumbnailUrl, webViewLink } from '../../drive/client'
 
 export function ItemDialog({ itemId, onClose }: { itemId: string; onClose: () => void }): React.JSX.Element | null {
   const doc = useStore((s) => s.doc)
@@ -188,7 +189,7 @@ export function ItemDialog({ itemId, onClose }: { itemId: string; onClose: () =>
         {activity.length === 0 && <span className="faint small">No history yet.</span>}
         {activity.map((a, i) => (
           <div key={i} className="small muted">
-            {new Date(a.at.split('.')[0]).toLocaleString()} · {a.verb}
+            {new Date(Number(a.at.split('.')[0])).toLocaleString()} · {a.verb}
             {typeof a.meta.to === 'string' ? ` → ${a.meta.to}` : ''}
           </div>
         ))}

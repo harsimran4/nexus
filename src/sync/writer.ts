@@ -14,11 +14,11 @@ import { mergeRemote, gcTombstones } from './merge'
 import { loadDraft, clearDraft, saveDraft } from './drafts'
 import { storeGet, useStore } from './store'
 import { ensureSnapshotsFolder } from '../drive/bootstrap'
-import { getBearerToken } from '../auth/tokenClient'
-import { writerId, sessionActor, sessionRef } from './identity'
+import { getBearerToken, clearToken } from '../auth/tokenClient'
+import { canWrite } from '../auth/session'
+import { writerId, sessionActor } from './identity'
 
 const MAX_ATTEMPTS = 5
-const KEEPALIVE_MAX_BYTES = 60_000 // verified fetch keepalive cap: 64KiB body
 
 type EntityMapName = 'projects' | 'items' | 'scripts'
 export { writerId }
@@ -63,7 +63,8 @@ function reassertPending(doc: NexusDoc): void {
   for (const { map, entity } of scratch.values()) {
     const fresh = { ...entity, updatedAt: hlcNow(), writerId: writerId() } as Record<string, unknown>
     if (fresh.deleted) fresh.deleted = { at: fresh.updatedAt as string, by: fresh.writerId as string }
-    doc[map] = { ...doc[map], [String(fresh.id)]: fresh as never }
+    const target = doc[map] as Record<string, unknown>
+    target[String(fresh.id)] = fresh
   }
 }
 
@@ -131,23 +132,26 @@ async function performSave(trigger: string): Promise<boolean> {
 }
 
 async function saveLoop(): Promise<boolean> {
-  const store = storeGet()
-  const nexusId = store.doc?.ids.nexusFileId ?? ''
+  const nexusId = storeGet().doc?.ids.nexusFileId ?? ''
   if (!nexusId) return false
   const cred = { mode: 'bearer' as const }
 
   if (tokenUnavailable()) {
-    store.setStatus('reconnect', 'Sign in with Google to continue writing')
+    storeGet().setStatus('reconnect', 'Sign in with Google to continue writing')
     return false
   }
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
+      // Fresh state EVERY iteration: after a rebase the doc/base have changed
+      // and a stale snapshot would re-merge forever or write pre-merge state.
+      const store = storeGet()
+      const base = store.base
       const meta = await backoffRetry(() => getMeta(nexusId, cred), { retries: 2 })
 
       const unchanged =
-        (store.base.headRevisionId !== undefined && meta.headRevisionId === store.base.headRevisionId) ||
-        (store.base.version !== undefined && meta.version === store.base.version)
+        (base.headRevisionId !== undefined && meta.headRevisionId === base.headRevisionId) ||
+        (base.version !== undefined && meta.version === base.version)
 
       // Ambiguous tokens (all undefined) = treat as changed — never write blind.
       const tokensKnown = meta.headRevisionId !== undefined || meta.version !== undefined
@@ -177,22 +181,23 @@ async function saveLoop(): Promise<boolean> {
     } catch (err) {
       if (err instanceof DriveError) {
         if (err.kind === 'auth') {
-          store.setStatus('reconnect', 'Google session expired — click Reconnect to continue')
+          clearToken() // drop the dead token — un-hides "Connect Google" immediately
+          storeGet().setStatus('reconnect', 'Google session expired — click Reconnect to continue')
           return false
         }
         if (err.kind === 'notFound') {
-          store.setStatus('blocked', 'Workspace file not found with your Google account — re-run setup or check sign-in')
+          storeGet().setStatus('blocked', 'Workspace file not found with your Google account — re-run setup or check sign-in')
           return false
         }
         // rateLimit/network already retried by backoffRetry; give up for now — edits stay queued
-        store.setStatus('queued', 'Drive is busy or offline — changes are saved locally and will retry')
+        storeGet().setStatus('queued', 'Drive is busy or offline — changes are saved locally and will retry')
         return false
       }
       throw err
     }
   }
 
-  store.setStatus(
+  storeGet().setStatus(
     'queued',
     `Could not sync after ${MAX_ATTEMPTS} attempts — your changes are kept. [Retry] or export a backup from the banner.`,
   )
@@ -309,7 +314,14 @@ export async function applyRemoteIfChanged(
   applyMerged(merged)
   store.setBase({ headRevisionId: meta.headRevisionId, md5Checksum: meta.md5Checksum, version: meta.version })
   store.markSynced()
-  if (storeGet().status !== 'ok' && storeGet().status !== 'saving') store.setStatus('ok', null)
+  // Only show "Synced" when nothing is actually pending — a successful read
+  // must never mask unsynced local edits (they'd look lost until the next
+  // failed write).
+  if (scratch.size === 0) {
+    if (storeGet().status !== 'ok' && storeGet().status !== 'saving') storeGet().setStatus('ok', null)
+  } else if (storeGet().status === 'queued' || storeGet().status === 'reconnect') {
+    if (getBearerToken() !== null) void flush() // reads work again — retry the pending writes now
+  }
   return 'applied'
 }
 
@@ -346,43 +358,50 @@ export async function checkDraftRecovery(): Promise<{ savedAt: string } | null> 
 export async function recommitDraft(draftDoc: NexusDoc): Promise<void> {
   const store = storeGet()
   if (!store.doc) return
+  if (!canWrite()) throw new Error('Sign in with your Nexus login to re-commit changes')
+  if (store.status === 'readOnly' || store.status === 'corrupt' || store.status === 'blocked') {
+    throw new Error(`Workspace is ${store.status} — writes are disabled`)
+  }
+  // NO blanket re-assertion: the draft's entities carry their true edit-time
+  // stamps, so the LWW merge keeps genuine lost edits AND lets concurrent
+  // remote edits (newer stamps) win. Re-stamping everything would clobber peers.
   const { merged } = mergeRemote({ local: draftDoc, remote: store.doc })
   merged.writerId = writerId()
   merged.updatedAt = hlcNow()
-  // Everything in the draft counts as pending — the user explicitly re-asserted it.
-  for (const map of ['projects', 'items', 'scripts'] as const) {
-    for (const [id, entity] of Object.entries(draftDoc[map])) {
-      if (!entity.deleted) scratch.set(id, { map, entity: structuredClone(entity) })
-    }
-  }
-  applyMerged(merged)
-  store.setPending(scratch.size)
-  await clearDraft()
-  await flush()
+  useStore.getState().setDoc(merged)
+  store.setPending(0)
+  const ok = await flush()
+  if (ok) await clearDraft() // a failed flush keeps the draft for another try
 }
 
 export async function discardDraft(): Promise<void> {
   await clearDraft()
 }
 
+/** Signing out: drop this session's unsynced edits so they can't be written
+ *  under the next login. The IndexedDB draft still has them for recovery. */
+export function discardPendingForLogout(): void {
+  if (saveTimer) {
+    clearTimeout(saveTimer)
+    saveTimer = null
+  }
+  scratch.clear()
+  storeGet().setPending(0)
+}
+
 let pagehideInstalled = false
+/**
+ * REMOVED by review: the keepalive PATCH was a blind whole-file write — a tab
+ * closing while a peer committed would silently roll that peer's write back
+ * (Drive v3 never rejects a PATCH). The IndexedDB draft covers tab-close
+ * recovery safely: nothing writes blind to the shared file.
+ */
 export function installPagehideFlush(): void {
   if (pagehideInstalled) return
   pagehideInstalled = true
   window.addEventListener('pagehide', () => {
     if (scratch.size === 0) return
     const doc = storeGet().doc
-    if (!doc) return
-    const nexusId = doc.ids.nexusFileId
-    if (getBearerToken() === null || !nexusId) return
-    const bodyDoc: NexusDoc = { ...doc, rev: doc.rev + 1, writerId: writerId(), updatedAt: hlcNow() }
-    const body = serialize(bodyDoc)
-    if (body.length <= KEEPALIVE_MAX_BYTES) {
-      try {
-        void writeFileJson(nexusId, body, { mode: 'bearer' }, { keepalive: true })
-      } catch {
-        /* keepalive can still fail under connection pressure — IndexedDB has the draft */
-      }
-    }
+    if (doc) void saveDraft(doc) // best-effort: the draft is the recovery path now
   })
 }

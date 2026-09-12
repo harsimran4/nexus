@@ -111,7 +111,7 @@ export function docSizeIssue(): HealthIssue | null {
   return null
 }
 
-export async function runHealthChecks(): Promise<HealthIssue[]> {
+export async function runHealthChecks(opts: { deep?: boolean } = {}): Promise<HealthIssue[]> {
   const issues: HealthIssue[] = []
   const origin = originCheck()
   if (origin) return [origin]
@@ -123,7 +123,9 @@ export async function runHealthChecks(): Promise<HealthIssue[]> {
     const key = doc.settings.api.keyOverride ?? config.apiKey
     const keyIssue = await probeKeyPath(doc.ids.nexusFileId, key)
     if (keyIssue) issues.push(keyIssue)
-    else {
+    else if (opts.deep) {
+      // Deep probe transfers the file body (detects the "Viewers can't
+      // download" toggle) — boot + the Admin button only, never the 30s loop.
       const dl = await probeDownloadRestriction(doc.ids.nexusFileId, key)
       if (dl) issues.push(dl)
     }

@@ -64,10 +64,19 @@ export function App(): ReactNode {
     return onTokenChange(setSignedInGoogle)
   }, [])
 
+  // GIS tokens expire ~1h with no library-side callback — re-check so the
+  // Connect button re-appears when the token goes stale.
+  useEffect(() => {
+    const t = setInterval(() => setSignedInGoogle(isSignedIn()), 60_000)
+    return () => clearInterval(t)
+  }, [])
+
   useEffect(() => {
     if (status === 'ok' || status === 'queued' || status === 'reconnect') {
-      const t = setInterval(() => void runHealthChecks().then(setHealth), 30_000)
-      void runHealthChecks().then(setHealth)
+      // Shallow checks in the interval — the deep download-restriction probe
+      // transfers bytes and belongs to boot + the Admin health-check button.
+      const t = setInterval(() => void runHealthChecks({ deep: false }).then(setHealth), 30_000)
+      void runHealthChecks({ deep: true }).then(setHealth)
       return () => clearInterval(t)
     }
   }, [status])
@@ -172,7 +181,8 @@ function renderPage(route: { page: string; arg: string }, hasDoc: boolean): Reac
     case 'security':
       return <Security />
     case 'login':
-      return <Dashboard />
+      // Reachable even when requireViewerLogin is false (sidebar "sign in").
+      return <Login viewerTokenFromLink={extractVw()} />
     default:
       return <Dashboard />
   }

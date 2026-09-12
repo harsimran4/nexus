@@ -34,6 +34,9 @@ export const syncSettingsSchema = z.object({
 
 export const settingsSchema = z
   .object({
+    // LWW stamps — settings merge as one value keyed by these.
+    updatedAt: z.string().optional(),
+    writerId: z.string().optional(),
     rootFolderName: z.string().min(1).default('Nexus Root'),
     api: z.object({ keyOverride: z.string().nullable().default(null) }).default({ keyOverride: null }),
     privacy: z
@@ -52,9 +55,9 @@ export const settingsSchema = z
     ]),
     labels: z.array(z.string()).default(['finished', 'client-approved', 'needs-review']),
     workflow: z.object({ archiveDoneAfterDays: z.number().int().min(0).default(30) }).default({ archiveDoneAfterDays: 30 }),
-    sync: syncSettingsSchema.default({}),
+    sync: syncSettingsSchema.prefault({}),
   })
-  .default({})
+  .prefault({})
 
 export const deletedSchema = z
   .object({ at: z.string(), by: z.string() })
@@ -121,6 +124,12 @@ export const appUserSchema = z.object({
   ]),
   createdAt: z.string(),
   createdBy: z.string().default('bootstrap'),
+  // Bumped when the credential is reset — active sessions with an older epoch
+  // are signed out on their next poll.
+  sessionEpoch: z.number().int().min(0).optional(),
+  // LWW stamps (merge.ts treats users per-entry like entities).
+  updatedAt: z.string().optional(),
+  writerId: z.string().optional(),
 })
 export type AppUser = z.infer<typeof appUserSchema>
 
@@ -158,6 +167,8 @@ export const viewerSchema = z.object({
   createdBy: z.string().default('bootstrap'),
   revokedAt: z.string().nullable().default(null),
   note: z.string().default(''),
+  updatedAt: z.string().optional(), // LWW stamps (merge.ts)
+  writerId: z.string().optional(),
 })
 export type Viewer = z.infer<typeof viewerSchema>
 
@@ -167,7 +178,7 @@ export const usersSchema = z
     studioSub: z.string().nullable().default(null),
     viewers: z.array(viewerSchema).default([]),
   })
-  .default({})
+  .prefault({})
 
 export const nexusDocSchema = z.object({
   schema: z.number().int().min(1),

@@ -37,8 +37,18 @@ export function isSignedIn(): boolean {
   return accessToken !== null
 }
 
+/** True only while the token exists AND has >30s of life left. */
+export function isTokenValid(): boolean {
+  return accessToken !== null && Date.now() < expiresAt - 30_000
+}
+
 export function getBearerToken(): string | null {
-  return accessToken
+  return isTokenValid() ? accessToken : null
+}
+
+/** Drop a dead/stale token without revoking it at Google (it's already useless). */
+export function clearToken(): void {
+  setToken(null, 0)
 }
 
 export function tokenTimeLeftMs(): number {
@@ -110,14 +120,15 @@ async function ensureClient(): Promise<TokenClient> {
 
 /**
  * Request a token. MUST be called from a user gesture (click/keydown) for the
- * consent popup to be allowed. triesSilentFirst: prompt:'' reuses the live
- * Google session without a popup when possible.
+ * consent popup to be allowed. silentFirst: prompt:'' reuses the live Google
+ * session without a popup when possible. silentOnly: never pop up — used at
+ * boot to quietly re-acquire a token when the Google session still lives.
  */
-export async function requestToken(opts: { silentFirst?: boolean } = {}): Promise<void> {
+export async function requestToken(opts: { silentFirst?: boolean; silentOnly?: boolean } = {}): Promise<void> {
   await ensureClient()
-  if (opts.silentFirst) {
-    const got = await new Promise<boolean>((resolve) => {
-      const timeout = setTimeout(() => resolve(false), 15_000)
+  const silentAttempt = (timeoutMs: number): Promise<boolean> =>
+    new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(() => resolve(false), timeoutMs)
       const oneShot = google.accounts.oauth2.initTokenClient({
         client_id: config.clientId,
         scope: config.scopes.join(' '),
@@ -135,7 +146,11 @@ export async function requestToken(opts: { silentFirst?: boolean } = {}): Promis
       })
       oneShot.requestAccessToken({ prompt: '' })
     })
+
+  if (opts.silentFirst || opts.silentOnly) {
+    const got = await silentAttempt(opts.silentOnly ? 8_000 : 15_000)
     if (got) return
+    if (opts.silentOnly) throw new Error('No live Google session — sign in manually')
   }
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('Sign-in timed out')), 120_000)

@@ -2,6 +2,7 @@
 // the shared HTML file. Each credential must be restricted in Google Cloud
 // Console (see .env.example). The ONLY place these exist.
 
+
 export const config = {
   clientId: import.meta.env.VITE_NEXUS_CLIENT_ID ?? '',
   apiKey: import.meta.env.VITE_NEXUS_API_KEY ?? '',

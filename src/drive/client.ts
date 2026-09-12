@@ -60,12 +60,6 @@ async function parseError(res: Response): Promise<DriveError> {
   return new DriveError(mapStatus(res.status, reason), message, res.status, reason)
 }
 
-function authHeaders(cred: Credential): Record<string, string> {
-  const bearer = cred.mode === 'key' ? null : cred.bearer ?? getGlobalBearer()
-  if (bearer) return { Authorization: `Bearer ${bearer}` }
-  return {}
-}
-
 function withKey(url: string, cred: Credential): string {
   const bearer = cred.mode === 'key' ? null : cred.bearer ?? getGlobalBearer()
   if (bearer) return url
@@ -95,7 +89,7 @@ export function hasBearer(): boolean {
   return globalBearer !== null
 }
 
-async function driveFetch(url: string, init: RequestInit, cred: Credential): Promise<Response> {
+async function driveFetch(url: string, init: RequestInit, _cred: Credential): Promise<Response> {
   let res: Response
   try {
     res = await fetch(url, init)

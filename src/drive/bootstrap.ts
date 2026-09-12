@@ -36,7 +36,9 @@ function oldestByCreated(files: { id: string; createdTime?: string }[]): { id: s
   return [...files].sort((a, b) => (a.createdTime ?? '').localeCompare(b.createdTime ?? ''))[0]
 }
 
-/** Create the full workspace: root folder, link-share, nexus.json, snapshots folder. */
+/** Create the full workspace: root folder, link-share, nexus.json, snapshots folder.
+ *  Enforces the bootstrap-race rule: after creating, list-by-name and adopt the
+ *  OLDEST nexus.json, trashing any racing duplicates (possibly our own). */
 export async function createWorkspace(doc: NexusDoc, cred: { mode: 'bearer' }): Promise<Workspace> {
   const root = await createFolder(doc.settings.rootFolderName, null, cred)
   let shared = true
@@ -48,10 +50,33 @@ export async function createWorkspace(doc: NexusDoc, cred: { mode: 'bearer' }): 
     shared = false
   }
   const nexus = await createJsonFile('nexus.json', root.id, JSON.stringify(doc), cred)
-  const finalDoc: NexusDoc = { ...doc, ids: { rootFolderId: root.id, nexusFileId: nexus.id } }
-  await rewriteDoc(finalDoc, nexus.id, cred)
+  let nexusFileId = nexus.id
+  try {
+    // Adopt-oldest: if another client raced us, everyone converges on one file.
+    const res = await listChildren(root.id, cred, { query: "name = 'nexus.json'" })
+    if (res.files.length > 1) {
+      const oldest = oldestByCreated(res.files)
+      if (oldest.id !== nexusFileId) {
+        // The oldest file wins; if it parses, adopt it (it may hold the other
+        // client's admin user). Otherwise keep ours and trash theirs.
+        const { readFile, trashFile } = await import('./client')
+        const { parseDoc } = await import('../types/schema')
+        const raw = await readFile(oldest.id, cred).catch(() => null)
+        if (raw && parseDoc(raw).ok) {
+          nexusFileId = oldest.id
+          await trashFile(nexus.id, cred).catch(() => {})
+        } else {
+          await trashFile(oldest.id, cred).catch(() => {})
+        }
+      }
+    }
+  } catch {
+    /* quarantine is best-effort; the app only ever talks to nexusFileId */
+  }
+  const finalDoc: NexusDoc = { ...doc, ids: { rootFolderId: root.id, nexusFileId } }
+  await rewriteDoc(finalDoc, nexusFileId, cred)
   await createFolder('snapshots', root.id, cred)
-  return { rootFolderId: root.id, nexusFileId: nexus.id, ...(shared ? {} : { needsManualShare: true }) } as Workspace & {
+  return { rootFolderId: root.id, nexusFileId, ...(shared ? {} : { needsManualShare: true }) } as Workspace & {
     needsManualShare?: boolean
   }
 }

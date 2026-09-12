@@ -3,6 +3,7 @@ import { statusBucket, statusLabel, type NexusDoc } from '../types/schema'
 import { useStore } from '../sync/store'
 import { statusToIssue, type HealthIssue } from '../diagnostics/health'
 import { flush } from '../sync/writer'
+import { clearToken, requestToken } from '../auth/tokenClient'
 
 // ---- modal ----------------------------------------------------------------
 
@@ -75,13 +76,19 @@ export function SyncPill(): ReactNode {
       ? `${pendingCount} change${pendingCount === 1 ? '' : 's'} · syncing…`
       : STATUS_LABEL[status] ?? status
   const time = lastSyncAt ? new Date(lastSyncAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null
+  const onClick = () => {
+    if (status === 'queued') void flush()
+    if (status === 'reconnect') {
+      // Click is a user gesture: drop the dead token and mint a fresh one.
+      clearToken()
+      void requestToken({ silentFirst: true }).catch(() => void requestToken())
+    }
+  }
   return (
     <button
       className={cls}
-      style={{ cursor: status === 'reconnect' ? 'pointer' : 'default', font: 'inherit' }}
-      onClick={() => {
-        if (status === 'queued' || status === 'reconnect') void flush()
-      }}
+      style={{ cursor: status === 'reconnect' || status === 'queued' ? 'pointer' : 'default', font: 'inherit' }}
+      onClick={onClick}
       title={time ? `Last synced ${time}` : undefined}
     >
       <span className="dot" />

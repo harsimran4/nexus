@@ -69,7 +69,7 @@ export async function hashPassword(password: string): Promise<PasswordHash> {
     const key = await pbkdf2Bits(password, salt, PBKDF2_ITERATIONS)
     return {
       kind: 'pbkdf2',
-      hash: toBase64(key),
+      hash: toBase64(new Uint8Array(key)),
       salt: toBase64(salt),
       iterations: PBKDF2_ITERATIONS,
     }

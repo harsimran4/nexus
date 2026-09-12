@@ -1,6 +1,8 @@
 // App-managed sessions on top of the master doc.
 // - Editors/admins: sign in with the secret (token or password) the admin
-//   issued; identity lives in sessionStorage (dies with the tab).
+//   issued; identity lives in sessionStorage (dies with the tab). Sessions are
+//   bound to the user's credential epoch — a reset bumps it and every active
+//   session for that user is signed out on its next check.
 // - Viewers: the minted capability token is the identity — kept in
 //   localStorage (possession IS the identity) and re-verified against
 //   users.viewers on every poll so revocation lands within one cycle.
@@ -11,6 +13,7 @@ import { sha256Hex, verifyToken, verifyPassword, type PasswordHash } from './has
 import type { NexusDoc, Role } from '../types/schema'
 import { storeGet, useStore } from '../sync/store'
 import { sessionRef } from '../sync/identity'
+import { clearToken } from './tokenClient'
 
 export interface Session {
   appUserId: string
@@ -27,7 +30,26 @@ export function getSession(): Session | null {
 }
 sessionRef.getSession = getSession
 
-export async function loginWithSecret(secret: string): Promise<{ ok: true; session: Session } | { ok: false; error: string }> {
+function readJson<T>(store: Storage, key: string): T | null {
+  try {
+    const raw = store.getItem(key)
+    return raw ? (JSON.parse(raw) as T) : null
+  } catch {
+    return null
+  }
+}
+
+function writeSession(appUserId: string, authEpoch: number): void {
+  try {
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify({ appUserId, authEpoch }))
+  } catch {
+    /* ignore */
+  }
+}
+
+async function loginWithSecret(
+  secret: string,
+): Promise<{ ok: true; session: Session } | { ok: false; error: string }> {
   const doc = storeGet().doc
   if (!doc) return { ok: false, error: 'Workspace not loaded yet — try again in a moment' }
   const trimmed = secret.trim()
@@ -39,10 +61,10 @@ export async function loginWithSecret(secret: string): Promise<{ ok: true; sessi
   for (const user of doc.users.app) {
     if (user.disabled) continue
     if (user.auth.kind === 'token' && (await verifyToken(trimmed, user.auth.hash))) {
-      return grant({ appUserId: user.id, name: user.name, role: user.role }, null)
+      return grant(user, trimmed)
     }
     if (user.auth.kind !== 'token' && (await verifyPassword(trimmed, user.auth as PasswordHash))) {
-      return grant({ appUserId: user.id, name: user.name, role: user.role }, null)
+      return grant(user, trimmed)
     }
   }
 
@@ -55,77 +77,107 @@ export async function loginWithSecret(secret: string): Promise<{ ok: true; sessi
       } catch {
         /* ignore */
       }
-      return grant({ appUserId: viewer.id, name: viewer.name, role: 'viewer' }, trimmed)
+      useStore.setState({
+        session: { appUserId: viewer.id, name: viewer.name, role: 'viewer' },
+      })
+      return {
+        ok: true,
+        session: { appUserId: viewer.id, name: viewer.name, role: 'viewer' },
+      }
     }
   }
 
   return { ok: false, error: 'No matching login — check the token/password, or ask an admin' }
 }
 
-async function grant(session: Session, viewerToken: string | null): Promise<{ ok: true; session: Session }> {
-  useStore.setState({ session })
-  try {
-    if (viewerToken) sessionStorage.removeItem(SESSION_KEY)
-    else sessionStorage.setItem(SESSION_KEY, JSON.stringify({ appUserId: session.appUserId }))
-  } catch {
-    /* ignore */
-  }
-  return { ok: true, session }
+/** Bind the session to the credential generation so resets sign sessions out. */
+async function grant(
+  user: NexusDoc['users']['app'][number],
+  _secret: string,
+): Promise<{ ok: true; session: Session }> {
+  writeSession(user.id, user.sessionEpoch ?? 0)
+  useStore.setState({ session: { appUserId: user.id, name: user.name, role: user.role } })
+  return { ok: true, session: { appUserId: user.id, name: user.name, role: user.role } }
 }
 
-export function restoreSession(): void {
-  try {
-    const raw = sessionStorage.getItem(SESSION_KEY)
-    if (raw) {
-      const { appUserId } = JSON.parse(raw) as { appUserId: string }
-      rederive(appUserId)
-      return
-    }
-  } catch {
-    /* ignore */
+export async function loginWithSecretPublic(
+  secret: string,
+): Promise<{ ok: true; session: Session } | { ok: false; error: string }> {
+  return loginWithSecret(secret)
+}
+export { loginWithSecret }
+
+/** Restore the session at boot (editors from sessionStorage, viewers from their token). */
+export async function restoreSession(): Promise<void> {
+  const stored = readJson<{ appUserId: string; authEpoch?: number }>(sessionStorage, SESSION_KEY)
+  if (stored) {
+    await rederiveEditor(stored.appUserId, stored.authEpoch ?? 0)
+    if (storeGet().session) return
   }
-  reverifyViewerSession()
+  await verifyViewer()
 }
 
-/** Re-derive the session from the CURRENT doc — called on every poll. */
-export function rederiveSession(): void {
-  try {
-    const raw = sessionStorage.getItem(SESSION_KEY)
-    if (raw) {
-      const { appUserId } = JSON.parse(raw) as { appUserId: string }
-      rederive(appUserId)
-      return
-    }
-  } catch {
-    /* ignore */
+/** Poller hook: re-derive editor sessions + re-verify viewer tokens. */
+export async function reverifySessions(): Promise<void> {
+  const stored = readJson<{ appUserId: string; authEpoch?: number }>(sessionStorage, SESSION_KEY)
+  if (stored) {
+    await rederiveEditor(stored.appUserId, stored.authEpoch ?? 0)
+    if (storeGet().session) return
   }
-  reverifyViewerSession()
+  await verifyViewer()
 }
 
-function rederive(appUserId: string): void {
+/** Editor sessions: user must still exist, be enabled, and be on the same credential epoch. */
+async function rederiveEditor(appUserId: string, authEpoch: number): Promise<void> {
   const doc = storeGet().doc
   if (!doc) return
   const user = doc.users.app.find((u) => u.id === appUserId)
-  if (!user || user.disabled) {
+  if (!user || user.disabled || (user.sessionEpoch ?? 0) !== authEpoch) {
     logout()
-    return
+  } else {
+    useStore.setState({ session: { appUserId: user.id, name: user.name, role: user.role } })
   }
-  useStore.setState({ session: { appUserId: user.id, name: user.name, role: user.role } })
 }
 
-/** Poller hook: viewer tokens re-verified; revoked/disabled sessions cleared. */
-export function reverifyViewerSession(): void {
-  rederiveSession()
+/** Viewer sessions: the stored token must still hash to a non-revoked viewer. */
+async function verifyViewer(): Promise<void> {
+  const doc = storeGet().doc
+  let token: string | null = null
+  try {
+    token = localStorage.getItem(VIEWER_KEY)
+  } catch {
+    token = null
+  }
+  if (!token || !doc) return
+  const hash = 'sha256$' + (await sha256Hex(token))
+  const viewer = doc.users.viewers.find((v) => v.tokenHash === hash)
+  if (viewer && !viewer.revokedAt) {
+    useStore.setState({ session: { appUserId: viewer.id, name: viewer.name, role: 'viewer' } })
+  } else {
+    // Revoked or removed — clear the session and the stored token.
+    try {
+      localStorage.removeItem(VIEWER_KEY)
+    } catch {
+      /* ignore */
+    }
+    useStore.setState({ session: null })
+  }
 }
 
 export function logout(): void {
   useStore.setState({ session: null })
   try {
     sessionStorage.removeItem(SESSION_KEY)
-    localStorage.removeItem(VIEWER_KEY)
   } catch {
     /* ignore */
   }
+  // Do NOT clear VIEWER_KEY — signing out of an editor session shouldn't
+  // drop a viewer token on a shared machine; logout-then-login is explicit.
+  clearToken()
+  // Drop this session's unsynced edits: they were attributed to the signing-out
+  // user and must not be written under whoever signs in next. The IndexedDB
+  // draft keeps them recoverable.
+  void import('../sync/writer').then((w) => w.discardPendingForLogout())
 }
 
 export function currentSession(): Session | null {
