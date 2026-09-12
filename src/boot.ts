@@ -110,7 +110,21 @@ async function initialRead(nexusId: string): Promise<'ok' | 'corrupt' | 'none'> 
     ? { mode: 'auto' }
     : { mode: 'key', apiKey: effectiveKey() }
   try {
-    const raw = await readFile(nexusId, cred)
+    let raw: string
+    try {
+      raw = await readFile(nexusId, cred)
+    } catch (e) {
+      // A network/CORS TypeError on the key path almost always means the API
+      // key's HTTP-referrer restriction doesn't include this origin (Google
+      // answers such rejections without CORS headers, so fetch can't see them).
+      if (e instanceof DriveError && e.kind === 'network') {
+        throw new Error(
+          'The API key rejected this origin. In Google Cloud Console → Credentials → API key → Website restrictions, add: ' +
+            location.origin + '/* — then reload.',
+        )
+      }
+      throw e
+    }
     const parsed = parseDoc(raw)
     if (!parsed.ok) {
       store.setStatus('corrupt', 'The workspace file on Drive is not valid nexus.json')
