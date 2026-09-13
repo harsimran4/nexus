@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useStore } from '../../sync/store'
 import type { Project } from '../../types/schema'
 import { compareHlc } from '../../util/hlc'
-import { Empty, Modal, banner } from '../components'
+import { Empty, Modal, banner, PageQuote } from '../components'
 import { createProject, setProjectStatus } from '../../state/actions'
 import { canWrite } from '../../auth/session'
 import { navigate } from '../../App'
@@ -68,6 +68,7 @@ export function Dashboard(): React.JSX.Element {
         </div>
       </div>
 
+      <PageQuote topic="board" />
       <div className="card mb8">
         <div className="row wrap">
           <input

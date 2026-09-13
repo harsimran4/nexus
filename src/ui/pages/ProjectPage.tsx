@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../../sync/store'
-import { Empty, StatusBadge, banner, useDebouncedCommit } from '../components'
+import { Empty, StatusBadge, banner, useDebouncedCommit, PageQuote } from '../components'
 import { canWrite } from '../../auth/session'
 import {
   readScriptBody,
@@ -74,6 +74,8 @@ export function ProjectPage({ projectId }: { projectId: string }): React.JSX.Ele
           ))}
         </div>
       </div>
+
+      <PageQuote topic="project" />
 
       {tab === 'media' && <MediaTab projectId={projectId} />}
       {tab === 'scripts' && <ScriptsTab projectId={projectId} />}

@@ -5,7 +5,7 @@ import { compareHlc, decodeHlc } from '../../util/hlc'
 import { canWrite } from '../../auth/session'
 import { createScript, deleteScript, readScriptBody, saveScriptBody, setScriptStatus, updateScript } from '../../state/actions'
 import { webViewLink } from '../../drive/client'
-import { Empty, Modal, banner } from '../components'
+import { Empty, Modal, banner, PageQuote } from '../components'
 
 // Scripts run on their own draft → review → final ladder (not the item
 // pipeline). Badges reuse the bucket palette: muted / amber / green.
@@ -70,6 +70,8 @@ export function Scripts(): React.JSX.Element {
           + New script
         </button>
       </div>
+
+      <PageQuote topic="scripts" />
 
       {!writable &&
         banner('info', 'Read-only view', 'Your login can browse scripts but not change them — sign in as an editor or admin.')}

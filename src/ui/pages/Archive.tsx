@@ -4,7 +4,7 @@ import type { Project } from '../../types/schema'
 import { decodeHlc } from '../../util/hlc'
 import { canWrite } from '../../auth/session'
 import { commit, touch, recordTombstone, appendActivity, writerId } from '../../sync/writer'
-import { Empty, banner } from '../components'
+import { Empty, banner, PageQuote } from '../components'
 
 /** Restore a deleted project (clears the deleted marker). */
 function restoreProject(project: Project): void {
@@ -46,6 +46,8 @@ export function Archive(): React.JSX.Element {
           <div className="sub">Deleted projects live here until purged. Deleting a project moves its Drive folder to trash.</div>
         </div>
       </div>
+
+      <PageQuote topic="archive" />
 
       {!writable && banner('info', 'Read-only view', 'Sign in as an editor or admin to restore or purge.')}
 

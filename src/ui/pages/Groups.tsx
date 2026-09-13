@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../../sync/store'
 import { compareHlc } from '../../util/hlc'
-import { Empty, Modal, banner } from '../components'
+import { Empty, Modal, banner, PageQuote } from '../components'
 import { canWrite } from '../../auth/session'
 import { createGroup, deleteGroupCascade, renameGroup } from '../../state/actions'
 import { navigate } from '../../App'
@@ -34,6 +34,8 @@ export function Groups(): React.JSX.Element {
           <button className="btn primary" onClick={() => setCreating(true)}>+ New group</button>
         )}
       </div>
+
+      <PageQuote topic="groups" />
 
       {groups.length === 0 ? (
         <Empty icon="▦">
