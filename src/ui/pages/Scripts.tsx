@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '../../sync/store'
 import { SCRIPT_STATUSES, type Script, type ScriptStatus } from '../../types/schema'
 import { compareHlc, decodeHlc } from '../../util/hlc'
@@ -166,19 +166,28 @@ function ScriptRow({
   )
 }
 
+// Unsaved drafts survive switching between scripts within this session.
+const bodyDrafts = new Map<string, string>()
+
 function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => void }): React.JSX.Element {
   const doc = useStore((s) => s.doc)
-  const [body, setBody] = useState('')
+  const [body, setBody] = useState(() => bodyDrafts.get(script.id) ?? '')
   const [loaded, setLoaded] = useState(false)
+  const [dirty, setDirty] = useState(() => bodyDrafts.has(script.id))
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [statusBusy, setStatusBusy] = useState(false)
-  const saveTimer = useRef<number | null>(null)
-  const pendingBody = useRef<string | null>(null)
   const id = script.id
 
-  // Body loads from its Drive file (or the inline legacy body).
+  // Body loads from its Drive file — unless an unsaved draft exists.
   useEffect(() => {
     let alive = true
+    if (bodyDrafts.has(id)) {
+      setBody(bodyDrafts.get(id) ?? '')
+      setLoaded(true)
+      return () => {
+        alive = false
+      }
+    }
     void readScriptBody(id).then((text) => {
       if (alive) {
         setBody(text ?? '')
@@ -190,36 +199,31 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
     }
   }, [id])
 
-  const saveBody = (queued: string) => {
-    if (!canWrite()) return
+  const save = () => {
+    if (!canWrite() || !dirty) return
     setSaveState('saving')
-    void saveScriptBody(id, queued).then((r) => {
-      setSaveState(r.ok ? 'saved' : 'error')
+    void saveScriptBody(id, body).then((r) => {
+      if (r.ok) {
+        bodyDrafts.delete(id)
+        setDirty(false)
+        setSaveState('saved')
+      } else {
+        setSaveState('error')
+      }
     })
   }
 
-  const flushBody = () => {
-    if (saveTimer.current !== null) {
-      window.clearTimeout(saveTimer.current)
-      saveTimer.current = null
-    }
-    const queued = pendingBody.current
-    pendingBody.current = null
-    if (queued !== null && canWrite()) saveBody(queued)
-  }
-
-  const discardBody = () => {
-    if (saveTimer.current !== null) {
-      window.clearTimeout(saveTimer.current)
-      saveTimer.current = null
-    }
-    pendingBody.current = null
-  }
-
-  // Commit a pending edit when switching scripts or leaving the page.
+  // Ctrl+S / Cmd+S saves from anywhere in the editor.
   useEffect(() => {
-    return () => flushBody()
-  }, [id])
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        save()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  })
 
   if (!doc) return <></>
 
@@ -238,15 +242,10 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
     .sort((a, b) => a.title.localeCompare(b.title))
 
   const onBodyChange = (value: string) => {
-    setBody(value) // typing stays local and free
-    pendingBody.current = value
-    if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
-    saveTimer.current = window.setTimeout(() => {
-      saveTimer.current = null
-      const queued = pendingBody.current
-      pendingBody.current = null
-      if (queued !== null && canWrite()) saveBody(queued)
-    }, 600)
+    setBody(value)
+    bodyDrafts.set(id, value)
+    setDirty(true)
+    if (saveState === 'saved') setSaveState('idle')
   }
 
   const changeStatus = (next: ScriptStatus) => {
@@ -345,20 +344,30 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
         </div>
       ) : (
         <div className="field">
-          <label>
-            Body{' '}
-            {saveState === 'saving' ? '· saving…' : saveState === 'saved' ? '· saved ✓' : saveState === 'error' ? '· save failed — retry by editing again' : ''}
-          </label>
+          <div className="spread">
+            <label style={{ marginBottom: 0 }}>
+              Body{' '}
+              {dirty && saveState !== 'saving' ? '· unsaved changes' : saveState === 'saving' ? '· saving…' : saveState === 'saved' ? '· saved ✓' : saveState === 'error' ? '· save failed — press Save again' : ''}
+            </label>
+            {writable && (
+              <button className="btn primary small" disabled={!dirty || saveState === 'saving'} onClick={save}>
+                {saveState === 'saving' ? 'Saving…' : 'Save body'}
+              </button>
+            )}
+          </div>
           <textarea
             className="input"
             rows={14}
             value={loaded ? body : 'Loading…'}
             disabled={!writable || !loaded}
             onChange={(e) => onBodyChange(e.target.value)}
+            onKeyDown={(e) => {
+              if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') e.preventDefault()
+            }}
             placeholder="Write the script…"
           />
           <span className="faint small">
-            Saved as its own markdown file in Drive (scripts/) about half a second after you stop typing — with its own version history.
+            Press Save (or Ctrl+S) to write this script to its own markdown file in Drive (scripts/) — Drive keeps a version history for it.
           </span>
         </div>
       )}
@@ -394,7 +403,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
             className="btn danger"
             onClick={() => {
               if (confirm(`Delete "${script.title}"? It can be restored from the Archive.`)) {
-                discardBody()
+                bodyDrafts.delete(id)
                 deleteScript(id)
                 onDeleted()
               }

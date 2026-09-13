@@ -72,8 +72,9 @@ export function App(): ReactNode {
     return () => clearInterval(t)
   }, [])
 
-  // The moment Google connects, retry any project folders that failed to
-  // create earlier (e.g. the project was made before signing in).
+  // The moment Google connects: retry any project folders that failed to
+  // create earlier, and flush queued edits (e.g. a project created while
+  // signed out) so they reach Drive instead of waiting for the next save.
   useEffect(() => {
     if (!signedInGoogle) return
     void (async () => {
@@ -86,6 +87,8 @@ export function App(): ReactNode {
           await ensureProjectFolder(p.id).catch(() => {})
         }
       }
+      const { flush } = await import('./sync/writer')
+      await flush().catch(() => {})
     })()
   }, [signedInGoogle])
 
