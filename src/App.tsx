@@ -128,7 +128,7 @@ export function App(): ReactNode {
     )
   }
 
-  if (status === 'needsInit') {
+  if (status === 'needsReset' || status === 'needsInit') {
     return (
       <Shell bare>
         <Init />

@@ -127,8 +127,11 @@ async function initialRead(nexusId: string): Promise<'ok' | 'corrupt' | 'none'> 
     }
     const parsed = parseDoc(raw)
     if (!parsed.ok) {
-      store.setStatus('corrupt', 'The workspace file on Drive is not valid nexus.json')
-      store.setBootError('Ask an admin to restore from a snapshot (Admin → Maintenance). The corrupt copy was kept.')
+      store.setStatus('needsReset', 'The workspace file on Drive is not readable by this version of Nexus')
+      store.setBootError(
+        'The database on Drive was written by an older/different format. ' +
+          'Use the setup below — Nexus will reuse your existing Drive folder and write a fresh database into it (the old file goes to Drive trash).',
+      )
       return 'corrupt'
     }
     if (parsed.doc.schema > config.maxKnownSchema) {

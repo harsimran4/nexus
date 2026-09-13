@@ -18,6 +18,7 @@ export type SyncStatus =
   | 'readOnly'
   | 'blocked'
   | 'needsInit'
+  | 'needsReset'
   | 'corrupt'
 
 export interface BaseTokens {

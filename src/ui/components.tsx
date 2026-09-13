@@ -90,6 +90,7 @@ const STATUS_LABEL: Record<string, string> = {
   blocked: 'Blocked',
   corrupt: 'Needs repair',
   needsInit: 'Setup',
+  needsReset: 'Reset needed',
 }
 
 export function SyncPill(): ReactNode {
