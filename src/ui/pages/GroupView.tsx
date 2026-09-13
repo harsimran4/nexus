@@ -3,14 +3,12 @@ import { useStore } from '../../sync/store'
 import type { Group } from '../../types/schema'
 import { compareHlc, decodeHlc } from '../../util/hlc'
 import { Empty, Modal, StatusBadge, banner } from '../components'
-import { ProjectDialog } from './ProjectDialog'
 import { canWrite } from '../../auth/session'
 import { createProject, deleteGroupCascade, renameGroup } from '../../state/actions'
 import { navigate } from '../../App'
 
 export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
   const doc = useStore((s) => s.doc)
-  const [openProject, setOpenProject] = useState<string | null>(null)
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [newOpen, setNewOpen] = useState(false)
@@ -29,9 +27,11 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
     .filter((p) => p.groupId === groupId && p.deleted === null && p.archivedAt === null)
     .sort((a, b) => compareHlc(b.updatedAt, a.updatedAt))
 
-  const scriptsOfGroup = Object.values(doc.scripts).filter(
-    (s) => s.deleted === null && s.groupId === groupId,
-  )
+  // Scripts whose PROJECT belongs to this group (scripts link to projects only).
+  const scriptsOfGroup = Object.values(doc.scripts).filter((s) => {
+    if (s.deleted !== null || s.projectId === null) return false
+    return doc.projects[s.projectId]?.groupId === groupId
+  })
 
   return (
     <div>
@@ -75,7 +75,7 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
             </thead>
             <tbody>
               {projects.map((p) => (
-                <tr key={p.id} className="clickable" onClick={() => setOpenProject(p.id)}>
+                <tr key={p.id} className="clickable" onClick={() => navigate('project/' + p.id)}>
                   <td style={{ fontWeight: 570 }}>{p.name}</td>
                   <td><StatusBadge doc={doc} status={p.status} /></td>
                   <td className="small muted">{p.fileIds.length}</td>
@@ -101,12 +101,10 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
         </div>
       )}
 
-      {openProject && <ProjectDialog projectId={openProject} onClose={() => setOpenProject(null)} />}
-
       {renameOpen && <RenameGroupModal group={group} onClose={() => setRenameOpen(false)} />}
 
       {newOpen && (
-        <NewProjectInGroupModal groupId={groupId} onClose={() => setNewOpen(false)} onCreated={(id) => { setNewOpen(false); setOpenProject(id) }} />
+        <NewProjectInGroupModal groupId={groupId} onClose={() => setNewOpen(false)} onCreated={(id) => { setNewOpen(false); navigate('project/' + id) }} />
       )}
 
       {deleteOpen && (

@@ -265,8 +265,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
 
   const setProject = (projectId: string) => {
     const pid: string | null = projectId || null
-    const project = pid ? doc.projects[pid] : null
-    updateScript(id, { projectId: pid, groupId: project?.groupId ?? null })
+    updateScript(id, { projectId: pid })
   }
 
   return (

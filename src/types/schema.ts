@@ -108,7 +108,7 @@ export const scriptSchema = stampsSchema.extend({
   id: z.string(),
   title: z.string().min(1),
   storage: scriptStorageSchema.default({ type: 'md', fileId: '' }),
-  groupId: z.string().nullable().default(null),
+  // Scripts link to a PROJECT only — their group is whatever the project's is.
   projectId: z.string().nullable().default(null),
   status: z.enum(SCRIPT_STATUSES).default('draft'),
   copies: z.array(z.object({ fileId: z.string(), label: z.string(), at: z.string() })).default([]),

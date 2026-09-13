@@ -366,12 +366,10 @@ export function createScript(fields: { title: string; projectId?: string | null 
   assertWrite()
   const id = newScriptId()
   commit((doc) => {
-    const project = fields.projectId ? doc.projects[fields.projectId] : null
     const script: Script = {
       id,
       title: fields.title,
       storage: { type: 'md', fileId: '' }, // .md file created lazily on first save
-      groupId: project?.groupId ?? null,
       projectId: fields.projectId ?? null,
       status: 'draft',
       copies: [],
@@ -388,7 +386,7 @@ export function createScript(fields: { title: string; projectId?: string | null 
   return id
 }
 
-export function updateScript(id: string, fields: Partial<Pick<Script, 'title' | 'groupId' | 'projectId'>>): void {
+export function updateScript(id: string, fields: Partial<Pick<Script, 'title' | 'projectId'>>): void {
   assertWrite()
   commit((doc) => {
     const s = doc.scripts[id]

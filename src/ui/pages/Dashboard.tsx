@@ -3,9 +3,9 @@ import { useStore } from '../../sync/store'
 import type { Project } from '../../types/schema'
 import { compareHlc } from '../../util/hlc'
 import { Empty, Modal, banner } from '../components'
-import { ProjectDialog } from './ProjectDialog'
 import { createProject, setProjectStatus } from '../../state/actions'
 import { canWrite } from '../../auth/session'
+import { navigate } from '../../App'
 
 export function Dashboard(): React.JSX.Element {
   const doc = useStore((s) => s.doc)
@@ -13,7 +13,6 @@ export function Dashboard(): React.JSX.Element {
   const [groupFilter, setGroupFilter] = useState<string>('')
   const [labelFilter, setLabelFilter] = useState<string>('')
   const [assigneeFilter, setAssigneeFilter] = useState<string>('')
-  const [openProject, setOpenProject] = useState<string | null>(null)
   // Quick-add: launched from the header (status = first column) or a column "+".
   const [quickAdd, setQuickAdd] = useState<{ status: string } | null>(null)
   const [dragId, setDragId] = useState<string | null>(null)
@@ -145,7 +144,7 @@ export function Dashboard(): React.JSX.Element {
                       setDragId(null)
                       setDragOverCol(null)
                     }}
-                    onOpen={() => setOpenProject(project.id)}
+                    onOpen={() => navigate('project/' + project.id)}
                   />
                 ))}
                 {colProjects.length === 0 && <div className="faint small">{writable ? 'Drag a card here' : '—'}</div>}
@@ -155,8 +154,6 @@ export function Dashboard(): React.JSX.Element {
         </div>
       )}
 
-      {openProject && <ProjectDialog projectId={openProject} onClose={() => setOpenProject(null)} />}
-
       {quickAdd && (
         <QuickAddModal
           presetStatus={quickAdd.status}
@@ -164,7 +161,7 @@ export function Dashboard(): React.JSX.Element {
           onClose={() => setQuickAdd(null)}
           onCreated={(id) => {
             setQuickAdd(null)
-            setOpenProject(id)
+            navigate('project/' + id)
           }}
         />
       )}
