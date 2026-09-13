@@ -2,10 +2,12 @@ import { useMemo, useState } from 'react'
 import { useStore } from '../../sync/store'
 import type { Item } from '../../types/schema'
 import { compareHlc } from '../../util/hlc'
-import { Empty, KindBadge, StatusBadge } from '../components'
+import { Empty, KindBadge, Modal, StatusBadge } from '../components'
 import { ItemDialog } from './ItemDialog'
-import { createItem } from '../../state/actions'
+import { createItem, createProject } from '../../state/actions'
 import { canWrite } from '../../auth/session'
+import { navigate } from '../../App'
+import { banner } from '../components'
 
 const KIND_ICON: Record<string, string> = {
   video: '▶', script: '✎', thumbnail: '🖼', audio: '♪', doc: '☰', other: '◇',
@@ -20,6 +22,7 @@ export function Dashboard(): React.JSX.Element {
   const [openItem, setOpenItem] = useState<string | null>(null)
   const [quickTitle, setQuickTitle] = useState('')
   const [quickProject, setQuickProject] = useState('')
+  const [newProjectOpen, setNewProjectOpen] = useState(false)
 
   const items = useMemo(() => {
     if (!doc) return []
@@ -55,6 +58,13 @@ export function Dashboard(): React.JSX.Element {
           <div className="sub">
             {items.length} item{items.length === 1 ? '' : 's'} · {projects.length} project{projects.length === 1 ? '' : 's'}
           </div>
+        </div>
+        <div className="row">
+          {canWrite() && (
+            <button className="btn primary" onClick={() => setNewProjectOpen(true)}>
+              + New project
+            </button>
+          )}
         </div>
       </div>
 
@@ -114,6 +124,33 @@ export function Dashboard(): React.JSX.Element {
         </div>
       )}
 
+      {projects.length > 0 && (
+        <div className="card mb8">
+          <div className="spread mb8">
+            <h3 style={{ margin: 0 }}>Projects</h3>
+            {canWrite() && (
+              <button className="btn small ghost" onClick={() => setNewProjectOpen(true)}>+ new</button>
+            )}
+          </div>
+          <div className="chips">
+            {projects.map((p) => {
+              const count = items.filter((i) => i.projectId === p.id).length
+              return (
+                <button
+                  key={p.id}
+                  className={`chip ${projectFilter === p.id ? 'on' : ''}`}
+                  onClick={() => setProjectFilter(projectFilter === p.id ? '' : p.id)}
+                  title="Click to filter the board; double-click opens the project"
+                  onDoubleClick={() => navigate('project/' + p.id)}
+                >
+                  {p.name} · {count}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
       {items.length === 0 ? (
         <Empty icon="▦">
           Nothing here yet. {canWrite() ? 'Add your first item above — it lands on Drive and in this board instantly.' : 'Items will appear once the team adds them.'}
@@ -139,7 +176,68 @@ export function Dashboard(): React.JSX.Element {
       )}
 
       {openItem && <ItemDialog itemId={openItem} onClose={() => setOpenItem(null)} />}
+
+      {newProjectOpen && (
+        <NewProjectModal
+          onClose={() => setNewProjectOpen(false)}
+          onCreated={(id) => {
+            setNewProjectOpen(false)
+            navigate('project/' + id)
+          }}
+        />
+      )}
     </div>
+  )
+}
+
+function NewProjectModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }): React.JSX.Element {
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [error, setError] = useState<string | null>(null)
+
+  const create = () => {
+    const n = name.trim()
+    if (!n) return
+    void (async () => {
+      try {
+        const id = await createProject(n, { description: description.trim() })
+        onCreated(id)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Could not create the project')
+      }
+    })()
+  }
+
+  return (
+    <Modal title="New project" onClose={onClose}>
+      {banner('info', 'A Drive folder is created for it automatically', 'Nexus/projects/<name>/ — uploads for this project\'s items land there.')}
+      <div className="field">
+        <label>Project name</label>
+        <input
+          className="input"
+          autoFocus
+          placeholder="e.g. Q4 Launch"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && create()}
+        />
+      </div>
+      <div className="field">
+        <label>Description (optional)</label>
+        <input
+          className="input"
+          placeholder="What is this project about?"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && create()}
+        />
+      </div>
+      {error && banner('error', error)}
+      <div className="row" style={{ justifyContent: 'flex-end' }}>
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn primary" disabled={!name.trim()} onClick={create}>Create project</button>
+      </div>
+    </Modal>
   )
 }
 

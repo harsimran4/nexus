@@ -26,17 +26,21 @@ function assertWrite(): void {
 // Projects
 // ---------------------------------------------------------------------------
 
-export async function createProject(name: string, where?: { projectsParentId?: string }): Promise<string> {
-  void where
+export async function createProject(
+  name: string,
+  opts: { description?: string; labels?: string[] } = {},
+): Promise<string> {
   assertWrite()
   const id = newProjectId()
+  const description = opts.description ?? ''
+  const labels = opts.labels ?? []
   commit((doc) => {
     const project: Project = {
       id,
       name,
-      description: '',
+      description,
       folderId: null,
-      labels: [],
+      labels,
       createdAt: hlcNow(),
       updatedAt: hlcNow(),
       writerId: 'pending',
