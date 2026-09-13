@@ -13,6 +13,7 @@ import { Init } from './ui/pages/Init'
 import { Setup } from './ui/pages/Setup'
 import { Groups } from './ui/pages/Groups'
 import { GroupView } from './ui/pages/GroupView'
+import { ProjectPage } from './ui/pages/ProjectPage'
 import { Scripts } from './ui/pages/Scripts'
 import { Archive } from './ui/pages/Archive'
 import { Admin } from './ui/pages/Admin'
@@ -223,6 +224,8 @@ function renderPage(route: { page: string; arg: string }, hasDoc: boolean): Reac
       return <Groups />
     case 'group':
       return <GroupView groupId={route.arg} />
+    case 'project':
+      return <ProjectPage projectId={route.arg} />
     case 'scripts':
       return <Scripts />
     case 'archive':
