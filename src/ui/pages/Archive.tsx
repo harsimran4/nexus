@@ -52,7 +52,7 @@ export function Archive(): React.JSX.Element {
       {deletedProjects.length === 0 ? (
         <Empty icon="🗄">Nothing deleted — the Archive is empty.</Empty>
       ) : (
-        <div className="card">
+        <div className="card archived-paper">
           <table className="table">
             <thead>
               <tr>

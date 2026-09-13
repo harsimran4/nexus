@@ -344,7 +344,7 @@ function ScriptsTab({ projectId }: { projectId: string }): React.JSX.Element {
             </div>
           </div>
           {openScript === s.id && (
-            <pre className="token-box mt8" style={{ whiteSpace: 'pre-wrap', maxHeight: 420, overflowY: 'auto' }}>
+            <pre className="manuscript mt8" style={{ fontFamily: 'var(--mono)', fontSize: 13, whiteSpace: 'pre-wrap', padding: '12px 14px', borderRadius: 6, border: '1px solid var(--border)', maxHeight: 420, overflowY: 'auto', margin: 0 }}>
               {bodies[s.id] ?? 'Loading…'}
             </pre>
           )}

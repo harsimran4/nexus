@@ -35,6 +35,10 @@ export function Dashboard(): React.JSX.Element {
 
   const groups = Object.values(doc.groups).filter((g) => g.deleted === null)
   const labels = [...new Set(Object.values(doc.projects).flatMap((p) => p.labels))].sort()
+  // Sticky-note shade per group — a group reads as one paper color on the wall.
+  const STICKY = ['#fcf2cd', '#e3efd8', '#fae3dc', '#dfeaf2', '#e9e2f4']
+  const stickyByGroup: Record<string, string> = {}
+  groups.forEach((g, i) => { stickyByGroup[g.id] = STICKY[i % STICKY.length] })
 
   const drop = (status: string) => {
     if (dragId && writable) {
@@ -137,6 +141,7 @@ export function Dashboard(): React.JSX.Element {
                     key={project.id}
                     project={project}
                     groupName={doc.groups[project.groupId]?.name ?? null}
+                    sticky={stickyByGroup[project.groupId] ?? '#fdfcf8'}
                     draggable={writable}
                     dragging={dragId === project.id}
                     onDragStart={() => setDragId(project.id)}
@@ -172,6 +177,7 @@ export function Dashboard(): React.JSX.Element {
 function ProjectCard({
   project,
   groupName,
+  sticky,
   draggable,
   dragging,
   onDragStart,
@@ -180,6 +186,7 @@ function ProjectCard({
 }: {
   project: Project
   groupName: string | null
+  sticky: string
   draggable: boolean
   dragging: boolean
   onDragStart: () => void
@@ -192,7 +199,7 @@ function ProjectCard({
   return (
     <div
       className={`item-card ${overdue ? 'overdue' : ''}`}
-      style={dragging ? { opacity: 0.45 } : undefined}
+      style={{ ...( { '--sticky': sticky } as React.CSSProperties), ...(dragging ? { opacity: 0.45 } : {}) }}
       draggable={draggable}
       onDragStart={(e) => {
         e.dataTransfer.setData('text/plain', project.id)

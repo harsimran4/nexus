@@ -343,7 +343,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
             )}
           </div>
           <textarea
-            className="input"
+            className="input manuscript"
             rows={14}
             value={loaded ? body : 'Loading…'}
             disabled={!writable || !loaded}
