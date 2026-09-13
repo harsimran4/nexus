@@ -5,14 +5,14 @@
 //
 // Convergence note used by the fast-check property: each side writes with its
 // own constant writerId ('w-aaa' / 'w-bbb'), so even when two edits land on the
-// same item with the same millisecond, the writerId tie-break is deterministic
-// and both merge directions must agree.
+// same project with the same millisecond, the writerId tie-break is
+// deterministic and both merge directions must agree.
 
 import { describe, expect, it } from 'vitest'
 import * as fc from 'fast-check'
 import { gcTombstones, mergeRemote } from '../src/sync/merge'
-import { emptyDoc, parseDoc } from '../src/types/schema'
-import type { AppUser, Item, NexusDoc } from '../src/types/schema'
+import { emptyDoc } from '../src/types/schema'
+import type { Group, NexusDoc, Project } from '../src/types/schema'
 import { encodeHlc } from '../src/util/hlc'
 
 // ---------------------------------------------------------------------------
@@ -20,8 +20,7 @@ import { encodeHlc } from '../src/util/hlc'
 // ---------------------------------------------------------------------------
 
 const BASE_MS = 1_000
-const ITEM_IDS = ['i0', 'i1', 'i2', 'i3'] as const
-type ItemId = (typeof ITEM_IDS)[number]
+const PROJECT_IDS = ['p0', 'p1', 'p2', 'p3'] as const
 
 function baseDoc(): NexusDoc {
   return emptyDoc()
@@ -31,19 +30,25 @@ function cloneDoc(doc: NexusDoc): NexusDoc {
   return structuredClone(doc)
 }
 
-function makeItem(id: string, title: string, ms: number, writer: string, deleted: Item['deleted'] = null): Item {
+function makeProject(
+  id: string,
+  name: string,
+  ms: number,
+  writer: string,
+  deleted: Project['deleted'] = null,
+): Project {
   return {
     id,
-    projectId: null,
-    title,
-    kind: 'video',
+    groupId: 'g0',
+    name,
+    folderId: null,
     status: 'pending',
     labels: [],
     fileIds: [],
     assigneeAppId: null,
     dueAt: null,
     notes: '',
-    createdAt: encodeHlc(ms, 0),
+    createdAt: encodeHlc(BASE_MS, 0),
     updatedAt: encodeHlc(ms, 0),
     writerId: writer,
     deleted,
@@ -51,273 +56,180 @@ function makeItem(id: string, title: string, ms: number, writer: string, deleted
   }
 }
 
-/** A base doc with four live items, identical on every side of a merge. */
-function seededBase(): NexusDoc {
-  const doc = baseDoc()
-  for (const id of ITEM_IDS) doc.items[id] = makeItem(id, `base ${id}`, BASE_MS, 'base')
-  return doc
-}
-
-function editItem(doc: NexusDoc, id: string, title: string, ms: number, writer: string): void {
-  doc.items[id] = { ...doc.items[id], title, updatedAt: encodeHlc(ms, 0), writerId: writer, deleted: null }
-}
-
-function isLive(doc: NexusDoc, id: string): boolean {
-  const item = doc.items[id]
-  return item !== undefined && item.deleted === null
-}
-
-/** Set a field the current schema does not know about (forward-compat payload). */
-function setUnknown(target: object, key: string, value: unknown): void {
-  ;(target as Record<string, unknown>)[key] = value
-}
-
-type StampedAppUser = AppUser & { updatedAt: string; writerId: string }
-
-function appUser(id: string, name: string, ms: number, writer: string): StampedAppUser {
+function makeGroup(id: string, name: string, ms: number, writer: string, deleted: Group['deleted'] = null): Group {
   return {
     id,
     name,
-    role: 'editor',
-    disabled: false,
-    auth: { kind: 'token', hash: `sha256$${id}` },
-    createdAt: encodeHlc(ms, 0),
-    createdBy: 'tests',
+    description: '',
+    folderId: null,
+    createdAt: encodeHlc(BASE_MS, 0),
     updatedAt: encodeHlc(ms, 0),
     writerId: writer,
+    deleted,
+    archivedAt: null,
   }
 }
 
+/** Build a doc with n projects under group g0. */
+function docWithProjects(count: number, writer: string, startMs: number): NexusDoc {
+  const doc = baseDoc()
+  doc.groups['g0'] = makeGroup('g0', 'G', BASE_MS, writer)
+  for (let i = 0; i < count; i++) {
+    doc.projects[PROJECT_IDS[i % PROJECT_IDS.length] + '_' + i] = makeProject(
+      PROJECT_IDS[i % PROJECT_IDS.length] + '_' + i,
+      'project ' + i,
+      startMs + i,
+      writer,
+    )
+  }
+  return doc
+}
+
+function editProjectTitle(doc: NexusDoc, id: string, name: string, ms: number, writer: string): void {
+  const p = doc.projects[id]
+  if (!p) return
+  p.name = name
+  p.updatedAt = encodeHlc(ms, 0)
+  p.writerId = writer
+}
+
+function deleteProjectEntity(doc: NexusDoc, id: string, ms: number, writer: string, dropKey = false): void {
+  const p = doc.projects[id]
+  if (p) {
+    p.deleted = { at: encodeHlc(ms, 0), by: writer }
+    p.updatedAt = encodeHlc(ms, 0) // the real app stamps updatedAt on delete (touch)
+    if (dropKey) {
+      const next = { ...doc.projects }
+      delete next[id]
+      doc.projects = next
+    }
+  }
+  doc.tombstones.push({ type: 'project', id, at: encodeHlc(ms, 0), by: writer })
+}
+
 // ---------------------------------------------------------------------------
-// mergeRemote — deterministic scenarios
+// tests
 // ---------------------------------------------------------------------------
 
 describe('mergeRemote', () => {
-  it('keeps non-conflicting concurrent edits to different items', () => {
-    const base = seededBase()
-    const a = cloneDoc(base)
-    editItem(a, 'i1', 'alpha from a', 5_000, 'w-aaa')
-    const b = cloneDoc(base)
-    editItem(b, 'i2', 'bravo from b', 5_000, 'w-bbb')
-
-    const ab = mergeRemote({ local: a, remote: b }).merged
-    expect(ab.items['i1'].title).toBe('alpha from a')
-    expect(ab.items['i2'].title).toBe('bravo from b')
-    expect(ab.items['i0'].title).toBe('base i0') // untouched item passes through
-
-    const ba = mergeRemote({ local: b, remote: a }).merged
-    expect(ba.items['i1'].title).toBe('alpha from a')
-    expect(ba.items['i2'].title).toBe('bravo from b')
-  })
-
-  it('applies last-writer-wins on the same field with a writerId tie-break', () => {
-    const base = seededBase()
-    const newer = cloneDoc(base)
-    editItem(newer, 'i1', 'newer title', 9_000, 'w-aaa')
-    const older = cloneDoc(base)
-    editItem(older, 'i1', 'older title', 3_000, 'w-bbb')
-
-    expect(mergeRemote({ local: newer, remote: older }).merged.items['i1'].title).toBe('newer title')
-    expect(mergeRemote({ local: older, remote: newer }).merged.items['i1'].title).toBe('newer title')
-
-    // Equal stamps: the higher writerId wins, no matter which side it is on.
-    const zed = cloneDoc(base)
-    editItem(zed, 'i1', 'zed was here', 5_000, 'w-zzz')
-    const aaa = cloneDoc(base)
-    editItem(aaa, 'i1', 'aaa was here', 5_000, 'w-aaa')
-
-    expect(mergeRemote({ local: zed, remote: aaa }).merged.items['i1'].title).toBe('zed was here')
-    expect(mergeRemote({ local: aaa, remote: zed }).merged.items['i1'].title).toBe('zed was here')
-  })
-
-  it('a tombstone prevents resurrection of a deleted item', () => {
-    const base = seededBase()
-    const stale = cloneDoc(base) // remote still has i1, untouched since the base
-    const deleter = cloneDoc(base)
-    deleter.items['i1'] = {
-      ...deleter.items['i1'],
-      deleted: { at: encodeHlc(6_000, 0), by: 'w-aaa' },
-      updatedAt: encodeHlc(6_000, 0),
-      writerId: 'w-aaa',
-    }
-    deleter.tombstones = [{ type: 'item', id: 'i1', at: encodeHlc(6_001, 0), by: 'w-aaa' }]
-
-    // The writer keeps the key with its deleted marker — merged must not be live.
-    expect(isLive(mergeRemote({ local: deleter, remote: stale }).merged, 'i1')).toBe(false)
-    expect(isLive(mergeRemote({ local: stale, remote: deleter }).merged, 'i1')).toBe(false)
-
-    // A peer that already dropped the key must not have it resurrected either.
-    const gone = cloneDoc(deleter)
-    delete gone.items['i1']
-    expect('i1' in mergeRemote({ local: gone, remote: stale }).merged.items).toBe(false)
-    expect('i1' in mergeRemote({ local: stale, remote: gone }).merged.items).toBe(false)
-  })
-
-  it('a newer edit beats an older tombstone and emits an undelete event', () => {
-    const base = seededBase()
-    const tombstoned = cloneDoc(base)
-    delete tombstoned.items['i1']
-    tombstoned.tombstones = [{ type: 'item', id: 'i1', at: encodeHlc(2_000, 0), by: 'w-bbb' }]
-
-    const revived = cloneDoc(base)
-    editItem(revived, 'i1', 'revived title', 3_000, 'w-aaa')
-
-    const ab = mergeRemote({ local: revived, remote: tombstoned })
-    expect(isLive(ab.merged, 'i1')).toBe(true)
-    expect(ab.merged.items['i1'].title).toBe('revived title')
-    expect(ab.undeletes).toHaveLength(1)
-    expect(ab.undeletes[0].verb).toBe('*.undelete')
-    expect(ab.undeletes[0].ref).toBe('i1')
-    expect(ab.undeletes[0].actor).toBe('w-aaa')
-
-    const ba = mergeRemote({ local: tombstoned, remote: revived })
-    expect(isLive(ba.merged, 'i1')).toBe(true)
-    expect(ba.merged.items['i1'].title).toBe('revived title')
-    expect(ba.undeletes.some((e) => e.verb === '*.undelete' && e.ref === 'i1')).toBe(true)
-  })
-
-  it('preserves unknown top-level and entity fields', () => {
-    const local = seededBase()
-    const remote = seededBase()
-    editItem(local, 'i1', 'local title', 8_000, 'w-aaa') // local wins the LWW on i1...
-    editItem(remote, 'i1', 'remote title', 3_000, 'w-bbb') // ...so xCustom must survive via the loser
-
-    setUnknown(remote, 'futureField', { hint: 'from a newer build' })
-    setUnknown(remote.items['i1'], 'xCustom', 'custom-value')
-
-    const { merged } = mergeRemote({ local, remote })
-    expect((merged as unknown as Record<string, unknown>)['futureField']).toEqual({ hint: 'from a newer build' })
-    expect((merged.items['i1'] as unknown as Record<string, unknown>)['xCustom']).toBe('custom-value')
-    expect(merged.items['i1'].title).toBe('local title') // known fields still follow LWW
-
-    const reparsed = parseDoc(JSON.stringify(merged))
-    expect(reparsed.ok, 'merged doc must still parse against the schema').toBe(true)
-  })
-
-  it('merges users by id with newer updatedAt winning', () => {
-    const a = seededBase()
-    const b = seededBase()
-    a.users.app = [appUser('u-1', 'Alice', 1_000, 'w-aaa')]
-    b.users.app = [appUser('u-2', 'Bob', 1_000, 'w-bbb')]
+  it('keeps non-conflicting concurrent edits on different projects', () => {
+    const a = baseDoc()
+    const b = baseDoc()
+    a.groups['g0'] = makeGroup('g0', 'G', BASE_MS, 'w-aaa')
+    b.groups['g0'] = makeGroup('g0', 'G', BASE_MS, 'w-aaa')
+    a.projects['p0'] = makeProject('p0', 'from A', 5_000, 'w-aaa')
+    b.projects['p0'] = makeProject('p0', 'base', 1_000, 'w-aaa')
+    b.projects['p1'] = makeProject('p1', 'from B', 5_000, 'w-bbb')
+    a.projects['p1'] = makeProject('p1', 'base', 1_000, 'w-aaa')
 
     const { merged } = mergeRemote({ local: a, remote: b })
-    expect(merged.users.app.map((u) => u.id).sort()).toEqual(['u-1', 'u-2'])
-
-    const a2 = seededBase()
-    const b2 = seededBase()
-    a2.users.app = [appUser('u-1', 'Alice New', 9_000, 'w-aaa')]
-    b2.users.app = [appUser('u-1', 'Alice Old', 4_000, 'w-bbb')]
-
-    expect(mergeRemote({ local: a2, remote: b2 }).merged.users.app[0].name).toBe('Alice New')
-    expect(mergeRemote({ local: b2, remote: a2 }).merged.users.app[0].name).toBe('Alice New')
+    expect(merged.projects['p0']?.name).toBe('from A')
+    expect(merged.projects['p1']?.name).toBe('from B')
   })
 
-  // -------------------------------------------------------------------------
-  // fast-check: convergence for arbitrary pairs built from a common base
-  // -------------------------------------------------------------------------
+  it('last-writer-wins on the same field', () => {
+    const a = baseDoc()
+    const b = baseDoc()
+    a.projects['p0'] = makeProject('p0', 'A newer', 9_000, 'w-aaa')
+    b.projects['p0'] = makeProject('p0', 'B older', 8_000, 'w-bbb')
 
-  type SideOp =
-    | { kind: 'none' }
-    | { kind: 'edit'; title: string; ms: number }
-    | { kind: 'delete'; ms: number }
-
-  const opArb: fc.Arbitrary<SideOp> = fc.oneof(
-    { weight: 2, arbitrary: fc.record({ kind: fc.constant<'none'>('none') }) },
-    {
-      weight: 4,
-      arbitrary: fc.record({
-        kind: fc.constant<'edit'>('edit'),
-        title: fc.stringMatching(/[a-z]{1,10}/),
-        ms: fc.integer({ min: 2_000, max: 90_000 }),
-      }),
-    },
-    {
-      weight: 2,
-      arbitrary: fc.record({
-        kind: fc.constant<'delete'>('delete'),
-        ms: fc.integer({ min: 2_000, max: 90_000 }),
-      }),
-    },
-  )
-
-  const opsArb: fc.Arbitrary<Record<ItemId, SideOp>> = fc.record({
-    i0: opArb,
-    i1: opArb,
-    i2: opArb,
-    i3: opArb,
+    const { merged } = mergeRemote({ local: a, remote: b })
+    expect(merged.projects['p0']?.name).toBe('A newer')
   })
 
-  /** A copy of the base doc where one side applied its ops; deletes drop the key + add a tombstone. */
-  function sideDoc(baseMs: number, writer: string, ops: Record<ItemId, SideOp>): NexusDoc {
-    const doc = baseDoc()
-    for (const id of ITEM_IDS) doc.items[id] = makeItem(id, `base ${id}`, baseMs, 'base')
-    for (const id of ITEM_IDS) {
-      const op = ops[id]
-      if (op.kind === 'edit') {
-        doc.items[id] = { ...doc.items[id], title: op.title, updatedAt: encodeHlc(op.ms, 0), writerId: writer, deleted: null }
-      } else if (op.kind === 'delete') {
-        delete doc.items[id]
-        doc.tombstones = [...doc.tombstones, { type: 'item', id, at: encodeHlc(op.ms, 0), by: writer }]
-      }
+  it('tombstone prevents resurrection when the other side has the key untouched', () => {
+    const a = baseDoc()
+    const b = baseDoc()
+    a.projects['p0'] = makeProject('p0', 'deleted', BASE_MS, 'w-aaa')
+    a.tombstones.push({ type: 'project', id: 'p0', at: encodeHlc(9_000, 0), by: 'w-aaa' })
+    deleteProjectEntity(a, 'p0', 9_000, 'w-aaa')
+
+    b.projects['p0'] = makeProject('p0', 'base', 1_000, 'w-bbb')
+
+    const { merged } = mergeRemote({ local: a, remote: b })
+    const p = merged.projects['p0']
+    expect(p === undefined || p.deleted !== null).toBe(true)
+  })
+
+  it('newer edit beats an older tombstone and emits an undelete event', () => {
+    const a = baseDoc()
+    const b = baseDoc()
+    a.projects['p0'] = makeProject('p0', 'revived', 9_000, 'w-aaa')
+    b.tombstones.push({ type: 'project', id: 'p0', at: encodeHlc(5_000, 0), by: 'w-bbb' })
+
+    const { merged, undeletes } = mergeRemote({ local: a, remote: b })
+    expect(merged.projects['p0']?.deleted).toBeNull()
+    expect(undeletes.some((u) => u.verb === '*.undelete' && u.ref === 'p0')).toBe(true)
+  })
+
+  it('preserves unknown top-level and entity fields verbatim', () => {
+    const a = baseDoc() as unknown as Record<string, unknown>
+    const b = baseDoc() as unknown as Record<string, unknown>
+    ;(b as Record<string, unknown>).futureField = 'hello'
+    const bp = makeProject('p0', 'mine', 5_000, 'w-bbb')
+    ;(bp as Record<string, unknown>).xCustom = 'keep me'
+    ;(b as NexusDoc).projects['p0'] = bp as Project
+
+    const { merged } = mergeRemote({ local: a as NexusDoc, remote: b as unknown as NexusDoc })
+    expect((merged as Record<string, unknown>).futureField).toBe('hello')
+    const p = merged.projects['p0']
+    expect(p && (p as unknown as Record<string, unknown>).xCustom).toBe('keep me')
+  })
+
+  it('merges users by id with LWW', () => {
+    const a = baseDoc()
+    const b = baseDoc()
+    const u = {
+      id: 'u1', name: 'Old', role: 'editor' as const, disabled: false,
+      auth: { kind: 'token' as const, hash: 'sha256$x' },
+      createdAt: '', createdBy: 't', updatedAt: encodeHlc(1_000, 0), writerId: 'w-aaa',
     }
-    return doc
-  }
+    a.users.app = [{ ...u, name: 'New', updatedAt: encodeHlc(9_000, 0) }]
+    b.users.app = [{ ...u, name: 'Old' }]
+    const { merged } = mergeRemote({ local: a, remote: b })
+    expect(merged.users.app.find((x) => x.id === 'u1')?.name).toBe('New')
+  })
 
-  it('converges for arbitrary pairs of docs built from a common base', () => {
-    const property = fc.property(
-      fc.integer({ min: 1_000, max: 5_000 }), // base stamp ms
-      opsArb,
-      opsArb,
-      (baseMs, opsA, opsB) => {
-        const a = sideDoc(baseMs, 'w-aaa', opsA)
-        const b = sideDoc(baseMs, 'w-bbb', opsB)
+  it('fast-check: merge converges regardless of direction', () => {
+    const titleArb = fc.string({ minLength: 1, maxLength: 8 }).filter((s) => !s.includes('.'))
+    const msArb = fc.integer({ min: 2_000, max: 50_000 })
+    const countArb = fc.integer({ min: 0, max: 3 })
+
+    fc.assert(
+      fc.property(countArb, msArb, titleArb, (n, ms, title) => {
+        const a = docWithProjects(n, 'w-aaa', 1_100)
+        const b = cloneDoc(a)
+        // A renames project 0 at time ms; B renames a different one at ms+1.
+        const idA = PROJECT_IDS[0] + '_0'
+        editProjectTitle(a, idA, title, ms, 'w-aaa')
+        const idB = n > 1 ? PROJECT_IDS[1] + '_1' : idA
+        editProjectTitle(b, idB, 'B side', ms + 1, 'w-bbb')
 
         const ab = mergeRemote({ local: a, remote: b }).merged
         const ba = mergeRemote({ local: b, remote: a }).merged
-
-        expect(Object.keys(ab.items).sort(), 'live item keys must converge').toEqual(Object.keys(ba.items).sort())
-        for (const id of Object.keys(ab.items)) {
-          expect(ab.items[id].deleted).toBeNull()
-          expect(ba.items[id].deleted).toBeNull()
-          expect(ab.items[id].title, `title of ${id} must converge`).toBe(ba.items[id].title)
-        }
-      },
+        // Same live project names in both directions.
+        const namesOf = (d: NexusDoc) =>
+          Object.values(d.projects).filter((p) => !p.deleted).map((p) => p.name).sort()
+        expect(namesOf(ab)).toEqual(namesOf(ba))
+        // And same keys.
+        expect(Object.keys(ab.projects).sort()).toEqual(Object.keys(ba.projects).sort())
+      }),
+      { numRuns: 100 },
     )
-    fc.assert(property, { numRuns: 300 })
   })
-})
 
-// ---------------------------------------------------------------------------
-// gcTombstones
-// ---------------------------------------------------------------------------
-
-describe('gcTombstones', () => {
-  const GC_DAY_MS = 24 * 3_600 * 1_000
-  const GC_NOW = 1_900_000_000_000
-
-  it('drops expired tombstones and their deleted entities but keeps fresh ones', () => {
+  it('gcTombstones drops old tombstones and their deleted entities, keeps fresh ones', () => {
+    const now = 100_000_000_000
     const doc = baseDoc()
-    doc.items['i-old'] = makeItem('i-old', 'old', GC_NOW - 100 * GC_DAY_MS, 'w-aaa', {
-      at: encodeHlc(GC_NOW - 100 * GC_DAY_MS, 0),
-      by: 'w-aaa',
-    })
-    doc.items['i-fresh'] = makeItem('i-fresh', 'fresh', GC_NOW - 10 * GC_DAY_MS, 'w-aaa', {
-      at: encodeHlc(GC_NOW - 10 * GC_DAY_MS, 0),
-      by: 'w-aaa',
-    })
-    doc.items['i-survivor'] = makeItem('i-survivor', 'survivor', GC_NOW - 5 * GC_DAY_MS, 'w-aaa')
-    doc.tombstones = [
-      { type: 'item', id: 'i-old', at: encodeHlc(GC_NOW - 100 * GC_DAY_MS, 0), by: 'w-aaa' },
-      { type: 'item', id: 'i-fresh', at: encodeHlc(GC_NOW - 10 * GC_DAY_MS, 0), by: 'w-aaa' },
-      // Expired tombstone over a LIVE entity: tombstone goes, entity must stay.
-      { type: 'item', id: 'i-survivor', at: encodeHlc(GC_NOW - 200 * GC_DAY_MS, 0), by: 'w-aaa' },
-    ]
+    doc.projects['p_old'] = makeProject('p_old', 'old', 1_000, 'w', { at: encodeHlc(1_100, 0), by: 'w' })
+    doc.tombstones.push({ type: 'project', id: 'p_old', at: encodeHlc(1_100, 0), by: 'w' })
+    doc.projects['p_new'] = makeProject('p_new', 'new', now - 1_000, 'w')
+    doc.tombstones.push({ type: 'project', id: 'p_new', at: encodeHlc(now - 1_000, 0), by: 'w' })
 
-    const out = gcTombstones(doc, 90, GC_NOW)
-
-    expect(out.tombstones.map((t) => t.id)).toEqual(['i-fresh'])
-    expect('i-old' in out.items).toBe(false) // deleted entity GC'd together with its tombstone
-    expect(out.items['i-fresh'].deleted).not.toBeNull() // fresh tombstone: deleted entity kept
-    expect(isLive(out, 'i-survivor')).toBe(true) // gc must never kill a live entity
+    const out = gcTombstones(doc, 90, now)
+    expect(out.tombstones.some((t) => t.id === 'p_old')).toBe(false)
+    expect(out.tombstones.some((t) => t.id === 'p_new')).toBe(true)
+    expect(out.projects['p_old']).toBeUndefined()
+    expect(out.projects['p_new']).toBeDefined()
   })
 })

@@ -20,7 +20,7 @@ import { writerId, sessionActor } from './identity'
 
 const MAX_ATTEMPTS = 5
 
-type EntityMapName = 'projects' | 'items' | 'scripts'
+type EntityMapName = 'groups' | 'projects' | 'scripts'
 export { writerId }
 
 /** Stamp an entity after mutating it — call INSIDE your commit mutator. */
@@ -31,7 +31,7 @@ export function touch(map: EntityMapName, entity: { updatedAt: string; writerId:
 }
 
 /** Append a deletion marker + tombstone (deletes never remove keys). */
-export function recordTombstone(doc: NexusDoc, type: 'project' | 'item' | 'script', id: string, by: string): void {
+export function recordTombstone(doc: NexusDoc, type: 'group' | 'project' | 'script', id: string, by: string): void {
   const at = hlcNow()
   doc.tombstones = [...doc.tombstones.filter((t) => !(t.type === type && t.id === id)), { type, id, at, by }]
 }

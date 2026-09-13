@@ -236,18 +236,12 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
   if (!doc) return <></>
 
   const writable = canWrite()
+  // Scripts link to a PROJECT (one piece of content); picking one also sets
+  // the group so the script's group assignment follows automatically.
   const projects = Object.values(doc.projects)
     .filter((p) => p.deleted === null)
+    .map((p) => ({ ...p, groupName: doc.groups[p.groupId]?.name ?? '' }))
     .sort((a, b) => a.name.localeCompare(b.name))
-  // Items of the chosen project — plus the currently linked item so the
-  // select never points at a missing option.
-  const itemChoices = Object.values(doc.items)
-    .filter((i) => i.deleted === null && i.archivedAt === null)
-    .filter((i) =>
-      i.id === script.itemId ||
-      (script.projectId !== null ? i.projectId === script.projectId : i.projectId === null),
-    )
-    .sort((a, b) => a.title.localeCompare(b.title))
 
   const onBodyChange = (value: string) => {
     setBody(value)
@@ -271,8 +265,8 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
 
   const setProject = (projectId: string) => {
     const pid: string | null = projectId || null
-    const keepItem = script.itemId !== null && doc.items[script.itemId]?.projectId === pid
-    updateScript(id, { projectId: pid, itemId: keepItem ? script.itemId : null })
+    const project = pid ? doc.projects[pid] : null
+    updateScript(id, { projectId: pid, groupId: project?.groupId ?? null })
   }
 
   return (
@@ -309,7 +303,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
         </select>
         <select
           className="input"
-          style={{ maxWidth: 200 }}
+          style={{ maxWidth: 260 }}
           value={script.projectId ?? ''}
           disabled={!writable}
           onChange={(e) => setProject(e.target.value)}
@@ -317,21 +311,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
           <option value="">No project</option>
           {projects.map((p) => (
             <option key={p.id} value={p.id}>
-              {p.name}
-            </option>
-          ))}
-        </select>
-        <select
-          className="input"
-          style={{ maxWidth: 220 }}
-          value={script.itemId ?? ''}
-          disabled={!writable}
-          onChange={(e) => updateScript(id, { itemId: e.target.value || null })}
-        >
-          <option value="">No item</option>
-          {itemChoices.map((i) => (
-            <option key={i.id} value={i.id}>
-              {i.title}
+              {p.name}{p.groupName ? ` — ${p.groupName}` : ''}
             </option>
           ))}
         </select>

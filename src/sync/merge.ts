@@ -129,8 +129,8 @@ export function mergeRemote(input: MergeInput): { merged: NexusDoc; undeletes: A
   const { local, remote } = input
   const undeletes: ActivityEvent[] = []
 
+  const groups = mergeEntityMaps(local.groups, remote.groups, local.tombstones, remote.tombstones, undeletes)
   const projects = mergeEntityMaps(local.projects, remote.projects, local.tombstones, remote.tombstones, undeletes)
-  const items = mergeEntityMaps(local.items, remote.items, local.tombstones, remote.tombstones, undeletes)
   const scripts = mergeEntityMaps(local.scripts, remote.scripts, local.tombstones, remote.tombstones, undeletes)
 
   // settings / top-level scalars: whole-value LWW
@@ -181,8 +181,8 @@ export function mergeRemote(input: MergeInput): { merged: NexusDoc; undeletes: A
     ids: local.ids.nexusFileId ? local.ids : remote.ids,
     users,
     settings: settingsWinner,
+    groups,
     projects,
-    items,
     scripts,
     tombstones,
     activity,
@@ -205,20 +205,20 @@ export function gcTombstones(doc: NexusDoc, gcDays: number, nowMs: number): Nexu
   if (expiredIds.size === 0) return doc
   const out: NexusDoc = { ...doc, tombstones: kept }
   for (const key of expiredIds) {
-    const [type, id] = key.split('|') as ['project' | 'item' | 'script', string]
-    if (type === 'project') {
+    const [type, id] = key.split('|') as ['group' | 'project' | 'script', string]
+    if (type === 'group') {
+      const e = out.groups[id]
+      if (e && e.deleted) {
+        const next = { ...out.groups }
+        delete next[id]
+        out.groups = next
+      }
+    } else if (type === 'project') {
       const e = out.projects[id]
       if (e && e.deleted) {
         const next = { ...out.projects }
         delete next[id]
         out.projects = next
-      }
-    } else if (type === 'item') {
-      const e = out.items[id]
-      if (e && e.deleted) {
-        const next = { ...out.items }
-        delete next[id]
-        out.items = next
       }
     } else if (type === 'script') {
       const e = out.scripts[id]

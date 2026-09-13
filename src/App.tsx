@@ -11,7 +11,7 @@ import { config } from './config'
 import { Login } from './ui/pages/Login'
 import { Init } from './ui/pages/Init'
 import { Setup } from './ui/pages/Setup'
-import { ProjectView } from './ui/pages/ProjectView'
+import { GroupView } from './ui/pages/GroupView'
 import { Scripts } from './ui/pages/Scripts'
 import { Archive } from './ui/pages/Archive'
 import { Admin } from './ui/pages/Admin'
@@ -218,8 +218,8 @@ function renderPage(route: { page: string; arg: string }, hasDoc: boolean): Reac
   switch (route.page) {
     case 'dash':
       return <Dashboard />
-    case 'project':
-      return <ProjectView projectId={route.arg} />
+    case 'group':
+      return <GroupView groupId={route.arg} />
     case 'scripts':
       return <Scripts />
     case 'archive':

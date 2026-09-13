@@ -9,9 +9,6 @@ import { z } from 'zod'
 export const BUCKETS = ['todo', 'doing', 'done'] as const
 export type Bucket = (typeof BUCKETS)[number]
 
-export const ITEM_KINDS = ['video', 'script', 'thumbnail', 'audio', 'doc', 'other'] as const
-export type ItemKind = (typeof ITEM_KINDS)[number]
-
 export const ROLES = ['admin', 'editor', 'viewer'] as const
 export type Role = (typeof ROLES)[number]
 
@@ -73,20 +70,23 @@ const stampsSchema = z.object({
   archivedAt: z.string().nullable().default(null),
 })
 
-export const projectSchema = stampsSchema.extend({
+/** Group = the container (e.g. "Personal", "Client Work"). Maps to
+ *  Nexus/groups/<name>/ on Drive. */
+export const groupSchema = stampsSchema.extend({
   id: z.string(),
   name: z.string().min(1),
   description: z.string().default(''),
   folderId: z.string().nullable().default(null),
-  labels: z.array(z.string()).default([]),
 })
-export type Project = z.infer<typeof projectSchema>
+export type Group = z.infer<typeof groupSchema>
 
-export const itemSchema = stampsSchema.extend({
+/** Project = one piece of content being tracked (a video, a clip…). Lives in
+ *  Nexus/groups/<Group>/<name>/ and moves across the status pipeline. */
+export const projectSchema = stampsSchema.extend({
   id: z.string(),
-  projectId: z.string().nullable().default(null),
-  title: z.string().min(1),
-  kind: z.enum(ITEM_KINDS).default('video'),
+  groupId: z.string(),
+  name: z.string().min(1),
+  folderId: z.string().nullable().default(null), // own subfolder: groups/<Group>/<name>/
   status: z.string().default('pending'),
   labels: z.array(z.string()).default([]),
   fileIds: z.array(z.string()).default([]),
@@ -94,7 +94,7 @@ export const itemSchema = stampsSchema.extend({
   dueAt: z.string().nullable().default(null),
   notes: z.string().default(''),
 })
-export type Item = z.infer<typeof itemSchema>
+export type Project = z.infer<typeof projectSchema>
 
 export const scriptStorageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('inline'), body: z.string().default('') }),
@@ -107,9 +107,9 @@ export const scriptStorageSchema = z.discriminatedUnion('type', [
 export const scriptSchema = stampsSchema.extend({
   id: z.string(),
   title: z.string().min(1),
-  storage: scriptStorageSchema.default({ type: 'inline', body: '' }),
+  storage: scriptStorageSchema.default({ type: 'md', fileId: '' }),
+  groupId: z.string().nullable().default(null),
   projectId: z.string().nullable().default(null),
-  itemId: z.string().nullable().default(null),
   status: z.enum(SCRIPT_STATUSES).default('draft'),
   copies: z.array(z.object({ fileId: z.string(), label: z.string(), at: z.string() })).default([]),
 })
@@ -146,7 +146,7 @@ export const activityEventSchema = z.object({
 export type ActivityEvent = z.infer<typeof activityEventSchema>
 
 export const tombstoneSchema = z.object({
-  type: z.enum(['project', 'item', 'script']),
+  type: z.enum(['group', 'project', 'script']),
   id: z.string(),
   at: z.string(),
   by: z.string(),
@@ -198,17 +198,16 @@ export const nexusDocSchema = z.object({
         .object({
           master: z.string().optional(),
           snapshots: z.string().optional(),
-          projects: z.string().optional(),
+          groups: z.string().optional(),
           scripts: z.string().optional(),
-          unsorted: z.string().optional(),
         })
         .optional(),
     })
     .default({ rootFolderId: '', nexusFileId: '' }),
   users: usersSchema,
   settings: settingsSchema,
+  groups: z.record(z.string(), groupSchema).default({}),
   projects: z.record(z.string(), projectSchema).default({}),
-  items: z.record(z.string(), itemSchema).default({}),
   scripts: z.record(z.string(), scriptSchema).default({}),
   tombstones: z.array(tombstoneSchema).default([]),
   activity: z.array(activityEventSchema).default([]),
@@ -218,7 +217,7 @@ export const nexusDocSchema = z.object({
 export type NexusDoc = z.infer<typeof nexusDocSchema>
 
 /** Entities whose LWW merge happens per-key inside a Record. */
-export type EntityMaps = Pick<NexusDoc, 'projects' | 'items' | 'scripts'>
+export type EntityMaps = Pick<NexusDoc, 'groups' | 'projects' | 'scripts'>
 export type EntityOf<K extends keyof EntityMaps> = EntityMaps[K][string]
 
 export function emptyDoc(): NexusDoc {

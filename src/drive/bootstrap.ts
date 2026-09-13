@@ -16,9 +16,8 @@ export interface Workspace {
 export interface SystemFolders {
   master?: string
   snapshots?: string
-  projects?: string
+  groups?: string
   scripts?: string
-  unsorted?: string
 }
 
 const FOLDER_MIME = "mimeType = 'application/vnd.google-apps.folder'"
@@ -64,10 +63,9 @@ async function ensureSystemFolder(rootId: string, name: string, cred: { mode: 'b
   return folder.id
 }
 
-/** Ensure all five system folders exist; returns their IDs (and writes them
- *  into the doc when anything changed). */
+/** Ensure all system folders exist; returns their IDs. */
 export async function ensureSystemFolders(rootId: string, cred: { mode: 'bearer' }): Promise<SystemFolders> {
-  const names: (keyof SystemFolders)[] = ['master', 'snapshots', 'projects', 'scripts', 'unsorted']
+  const names: (keyof SystemFolders)[] = ['master', 'snapshots', 'groups', 'scripts']
   const out: SystemFolders = {}
   for (const name of names) {
     out[name] = await ensureSystemFolder(rootId, name, cred)
@@ -87,7 +85,7 @@ export async function migrateWorkspaceFolders(cred: { mode: 'bearer' }): Promise
   const created: string[] = []
   const existing = doc.ids.systemFolders ?? {}
   const folders: SystemFolders = { ...existing }
-  for (const name of ['master', 'snapshots', 'projects', 'scripts', 'unsorted'] as const) {
+  for (const name of ['master', 'snapshots', 'groups', 'scripts'] as const) {
     if (folders[name]) {
       const check = await listChildren(rootId, cred, { query: FOLDER_MIME + ` and name = '${name}'` })
       if (check.files.some((f) => f.id === folders[name])) continue // still there
@@ -120,7 +118,7 @@ export async function migrateWorkspaceFolders(cred: { mode: 'bearer' }): Promise
 
 export function workspaceUsesSystemFolders(doc: NexusDoc): boolean {
   const f = doc.ids.systemFolders
-  return Boolean(f?.master && f.projects && f.scripts && f.unsorted && f.snapshots)
+  return Boolean(f?.master && f.groups && f.scripts && f.snapshots)
 }
 
 /** Create the full workspace: root, link-share, system folders, nexus.json in master/. */
@@ -190,16 +188,10 @@ export async function ensureScriptsFolder(doc: NexusDoc, cred: { mode: 'bearer' 
   return ensureSystemFolder(doc.ids.rootFolderId, 'scripts', cred)
 }
 
-/** Resolve the projects parent folder. */
-export async function ensureProjectsFolder(doc: NexusDoc, cred: { mode: 'bearer' }): Promise<string> {
-  if (doc.ids.systemFolders?.projects) return doc.ids.systemFolders.projects
-  return ensureSystemFolder(doc.ids.rootFolderId, 'projects', cred)
-}
-
-/** Resolve the Unsorted folder (uploads for items without a project). */
-export async function ensureUnsortedFolder(doc: NexusDoc, cred: { mode: 'bearer' }): Promise<string> {
-  if (doc.ids.systemFolders?.unsorted) return doc.ids.systemFolders.unsorted
-  return ensureSystemFolder(doc.ids.rootFolderId, 'Unsorted', cred)
+/** Resolve the groups parent folder (contains one subfolder per group). */
+export async function ensureGroupsFolder(doc: NexusDoc, cred: { mode: 'bearer' }): Promise<string> {
+  if (doc.ids.systemFolders?.groups) return doc.ids.systemFolders.groups
+  return ensureSystemFolder(doc.ids.rootFolderId, 'groups', cred)
 }
 
 /** Duplicate nexus.json (bootstrap race) — keep the oldest, trash the rest. */

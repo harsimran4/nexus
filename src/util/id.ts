@@ -16,7 +16,7 @@ export function uid(prefix: string): string {
 }
 
 export const newProjectId = () => uid('prj')
-export const newItemId = () => uid('itm')
+export const newGroupId = () => uid('grp')
 export const newScriptId = () => uid('scr')
 export const newUserId = () => uid('usr')
 export const newViewerId = () => uid('vw')

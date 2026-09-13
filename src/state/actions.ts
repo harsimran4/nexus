@@ -1,46 +1,174 @@
-// Every mutation in the app flows through commit() here. Mutators assert the
-// role FIRST (fails before any write UI effect), mutate + touch() entities,
-// append activity, and let the writer handle sync.
+// Every mutation flows through commit() here. Mutators assert the role FIRST
+// (fails before any write UI is offered), mutate + touch() entities, append
+// activity, and let the writer handle sync.
 
 import {
-  newItemId,
   newProjectId,
+  newGroupId,
   newScriptId,
   newUserId,
   newViewerId,
 } from '../util/id'
 import { hlcNow } from '../util/hlc'
-import { defaultStatus, type Item, type ItemKind, type NexusDoc, type Project, type Script, type ScriptStatus } from '../types/schema'
+import {
+  defaultStatus,
+  type NexusDoc,
+  type Project,
+  type Group,
+  type Script,
+  type ScriptStatus,
+} from '../types/schema'
 import { canWrite, canAdmin } from '../auth/session'
 import { commit, touch, recordTombstone, appendActivity, flush, writerId } from '../sync/writer'
 import { hashPassword, mintToken, passwordPolicyError } from '../auth/hashing'
 import { DriveError, createFolder, uploadFile, renameFile } from '../drive/client'
-import { ensureProjectsFolder, ensureScriptsFolder, ensureUnsortedFolder } from '../drive/bootstrap'
+import { ensureGroupsFolder, ensureScriptsFolder } from '../drive/bootstrap'
 import { sessionRef } from '../sync/identity'
 
 function assertWrite(): void {
   if (!canWrite()) throw new Error('Your login cannot modify content — sign in as an editor or admin')
 }
 
+// Late-bound to avoid a circular import at module init.
+function sessionModule(): { getSession: () => { appUserId: string } | null } {
+  return { getSession: () => sessionRef.getSession?.() ?? null }
+}
+
 // ---------------------------------------------------------------------------
-// Projects
+// Groups (containers: "Personal", "Client Work" — one Drive folder each)
 // ---------------------------------------------------------------------------
 
-export async function createProject(
-  name: string,
-  opts: { description?: string; labels?: string[] } = {},
-): Promise<string> {
+export async function createGroup(name: string, description = ''): Promise<string> {
   assertWrite()
-  const id = newProjectId()
-  const description = opts.description ?? ''
-  const labels = opts.labels ?? []
+  const id = newGroupId()
   commit((doc) => {
-    const project: Project = {
+    const group: Group = {
       id,
       name,
       description,
       folderId: null,
-      labels,
+      createdAt: hlcNow(),
+      updatedAt: hlcNow(),
+      writerId: 'pending',
+      deleted: null,
+      archivedAt: null,
+    }
+    doc.groups[id] = group
+    touch('groups', doc.groups[id])
+    appendActivity(doc, 'group.create', id, { name })
+  })
+  void ensureGroupFolder(id).catch(() => {})
+  return id
+}
+
+/** Create the group's Drive folder (Nexus/groups/<name>/) if missing. */
+export async function ensureGroupFolder(groupId: string): Promise<string | null> {
+  const { storeGet } = await import('../sync/store')
+  const doc = storeGet().doc
+  const group = doc?.groups[groupId]
+  if (!doc || !group) return null
+  if (group.folderId) return group.folderId
+  const groupsParentId = await ensureGroupsFolder(doc, { mode: 'bearer' })
+  const folder = await createFolder(group.name, groupsParentId, { mode: 'bearer' })
+  commit((d) => {
+    const g = d.groups[groupId]
+    if (g && !g.folderId) {
+      g.folderId = folder.id
+      touch('groups', g)
+      appendActivity(d, 'group.folder', groupId, { folderId: folder.id })
+    }
+  })
+  return folder.id
+}
+
+export function renameGroup(groupId: string, name: string): void {
+  assertWrite()
+  commit((doc) => {
+    const g = doc.groups[groupId]
+    if (!g) return
+    g.name = name
+    touch('groups', g)
+    appendActivity(doc, 'group.rename', groupId, { name })
+  })
+  void (async () => {
+    const { storeGet } = await import('../sync/store')
+    const folderId = storeGet().doc?.groups[groupId]?.folderId
+    if (folderId) await renameFile(folderId, name, { mode: 'bearer' }).catch(() => {})
+  })()
+}
+
+/**
+ * Delete a group AND everything inside it: the group folder (with all project
+ * subfolders and files) goes to Drive trash, and every project in the group is
+ * tombstoned. The UI must show the list first.
+ */
+export async function deleteGroupCascade(groupId: string): Promise<{ projects: number; folderTrashed: boolean }> {
+  assertWrite()
+  const { storeGet } = await import('../sync/store')
+  const doc = storeGet().doc
+  const group = doc?.groups[groupId]
+  if (!doc || !group) throw new Error('Group not found')
+  const projectsInGroup = Object.values(doc.projects).filter(
+    (p) => p.groupId === groupId && p.deleted === null,
+  )
+  const { trashFile } = await import('../drive/client')
+  let folderTrashed = false
+  if (group.folderId) {
+    await trashFile(group.folderId, { mode: 'bearer' }).catch(() => {})
+    folderTrashed = true
+  }
+  commit((d) => {
+    const g = d.groups[groupId]
+    if (g) {
+      g.deleted = { at: hlcNow(), by: writerId() }
+      touch('groups', g)
+      recordTombstone(d, 'group', groupId, writerId())
+    }
+    for (const p of projectsInGroup) {
+      const live = d.projects[p.id]
+      if (!live || live.deleted) continue
+      live.deleted = { at: hlcNow(), by: writerId() }
+      touch('projects', live)
+      recordTombstone(d, 'project', p.id, writerId())
+    }
+    appendActivity(d, 'group.delete', groupId, {
+      name: group.name,
+      projectsTrashed: projectsInGroup.length,
+    })
+  })
+  return { projects: projectsInGroup.length, folderTrashed }
+}
+
+// ---------------------------------------------------------------------------
+// Projects (the tracked content: one video, one clip — with status and files)
+// ---------------------------------------------------------------------------
+
+export async function createProject(fields: {
+  groupId: string
+  name: string
+  description?: string
+  labels?: string[]
+  assigneeAppId?: string | null
+  dueAt?: string | null
+  notes?: string
+}): Promise<string> {
+  assertWrite()
+  if (!fields.groupId) throw new Error('A group is required — pick which group this project belongs to')
+  const id = newProjectId()
+  commit((doc) => {
+    const group = doc.groups[fields.groupId]
+    if (!group || group.deleted) throw new Error('That group no longer exists — refresh and pick again')
+    const project: Project = {
+      id,
+      groupId: fields.groupId,
+      name: fields.name,
+      folderId: null,
+      status: defaultStatus(doc),
+      labels: fields.labels ?? [],
+      fileIds: [],
+      assigneeAppId: fields.assigneeAppId ?? null,
+      dueAt: fields.dueAt ?? null,
+      notes: fields.notes ?? fields.description ?? '',
       createdAt: hlcNow(),
       updatedAt: hlcNow(),
       writerId: 'pending',
@@ -49,25 +177,22 @@ export async function createProject(
     }
     doc.projects[id] = project
     touch('projects', doc.projects[id])
-    appendActivity(doc, 'project.create', id, { name })
+    appendActivity(doc, 'project.create', id, { name: fields.name, groupId: fields.groupId })
   })
-  // Drive folder creation is async + metadata lands on the next save.
-  // (Silently swallowed here — the App-level retry re-runs it on Google connect.)
   void ensureProjectFolder(id).catch(() => {})
   return id
 }
 
-/** Create the project's Drive folder if missing — inside the workspace's
- *  projects/ system folder. Returns its id, or null when it can't be created
- *  right now (caller decides whether that's fatal). */
+/** Project subfolder: Nexus/groups/<Group>/<Project name>/. Created on demand. */
 export async function ensureProjectFolder(projectId: string): Promise<string | null> {
   const { storeGet } = await import('../sync/store')
   const doc = storeGet().doc
   const project = doc?.projects[projectId]
   if (!doc || !project) return null
   if (project.folderId) return project.folderId
-  const projectsParentId = await ensureProjectsFolder(doc, { mode: 'bearer' })
-  const folder = await createFolder(project.name, projectsParentId, { mode: 'bearer' })
+  const groupFolderId = await ensureGroupFolder(project.groupId)
+  if (!groupFolderId) return null
+  const folder = await createFolder(project.name, groupFolderId, { mode: 'bearer' })
   commit((d) => {
     const p = d.projects[projectId]
     if (p && !p.folderId) {
@@ -78,184 +203,101 @@ export async function ensureProjectFolder(projectId: string): Promise<string | n
   return folder.id
 }
 
-export function renameProject(projectId: string, name: string): void {
-  assertWrite()
-  commit((doc) => {
-    const p = doc.projects[projectId]
-    if (!p) return
-    p.name = name
-    touch('projects', p)
-    appendActivity(doc, 'project.rename', projectId, { name })
-  })
-  // Keep the Drive folder name in sync (best-effort; metadata already renamed).
-  void (async () => {
-    const { storeGet } = await import('../sync/store')
-    const folderId = storeGet().doc?.projects[projectId]?.folderId
-    if (folderId) {
-      await renameFile(folderId, name, { mode: 'bearer' }).catch(() => {})
-    }
-  })()
-}
-
-export function deleteProject(projectId: string): void {
-  assertWrite()
-  commit((doc) => {
-    const p = doc.projects[projectId]
-    if (!p) return
-    p.deleted = { at: hlcNow(), by: writerId() }
-    touch('projects', p)
-    recordTombstone(doc, 'project', projectId, writerId())
-    appendActivity(doc, 'project.delete', projectId, { name: p.name })
-  })
-}
-
-// ---------------------------------------------------------------------------
-// Items
-// ---------------------------------------------------------------------------
-
-export function createItem(fields: {
-  title: string
-  projectId: string | null
-  kind?: ItemKind
-  labels?: string[]
-  assigneeAppId?: string | null
-  dueAt?: string | null
-  notes?: string
-  fileIds?: string[]
-}): string {
-  assertWrite()
-  const id = newItemId()
-  commit((doc) => {
-    const item: Item = {
-      id,
-      projectId: fields.projectId,
-      title: fields.title,
-      kind: fields.kind ?? 'video',
-      status: defaultStatus(doc),
-      labels: fields.labels ?? [],
-      fileIds: fields.fileIds ?? [],
-      assigneeAppId: fields.assigneeAppId ?? null,
-      dueAt: fields.dueAt ?? null,
-      notes: fields.notes ?? '',
-      createdAt: hlcNow(),
-      updatedAt: hlcNow(),
-      writerId: 'pending',
-      deleted: null,
-      archivedAt: null,
-    }
-    doc.items[id] = item
-    touch('items', doc.items[id])
-    appendActivity(doc, 'item.create', id, { title: fields.title, projectId: fields.projectId })
-  })
-  return id
-}
-
-export function setItemStatus(itemId: string, status: string): void {
-  assertWrite()
-  commit((doc) => {
-    const item = doc.items[itemId]
-    if (!item) return
-    const from = item.status
-    item.status = status
-    touch('items', item)
-    appendActivity(doc, 'item.status', itemId, { from, to: status })
-  })
-}
-
-export function updateItem(itemId: string, fields: Partial<Pick<Item, 'title' | 'projectId' | 'kind' | 'labels' | 'assigneeAppId' | 'dueAt' | 'notes'>>): void {
-  assertWrite()
-  let movedToProject: string | null = null
-  commit((doc) => {
-    const item = doc.items[itemId]
-    if (!item) return
-    if (fields.projectId !== undefined && fields.projectId !== item.projectId && item.fileIds.length > 0) {
-      movedToProject = fields.projectId // files slide into the project folder
-    }
-    Object.assign(item, fields)
-    touch('items', item)
-    // Notes are content, not workflow events — don't log them (typing used to
-    // flood the feed with one entry per keystroke).
-    const meaningful = Object.keys(fields).filter((k) => k !== 'notes')
-    if (meaningful.length > 0) appendActivity(doc, 'item.update', itemId, { fields: meaningful })
-  })
-  if (movedToProject) void moveItemFilesToProject(itemId, movedToProject)
-}
-
-/** Best-effort: move an item's Drive files into its project folder. */
-async function moveItemFilesToProject(itemId: string, projectId: string): Promise<void> {
-  const { storeGet } = await import('../sync/store')
-  const doc = storeGet().doc
-  const item = doc?.items[itemId]
-  if (!doc || !item || item.fileIds.length === 0) return
-  const target = await ensureProjectFolder(projectId)
-  if (!target) return
-  const { moveFile } = await import('../drive/client')
-  for (const fileId of item.fileIds) {
-    await moveFile(fileId, target, null, { mode: 'bearer' }).catch(() => {})
-  }
-}
-
-/**
- * Delete a project AND its Drive content. Destructive-but-recoverable:
- * the folder and every file move to Drive trash (30-day recovery), and the
- * metadata is tombstoned. The UI must show the caller the list first.
- */
-export async function deleteProjectCascade(
+export function updateProject(
   projectId: string,
-): Promise<{ files: number; folder: string | null }> {
+  fields: Partial<Pick<Project, 'name' | 'groupId' | 'labels' | 'assigneeAppId' | 'dueAt' | 'notes' | 'status'>>,
+): void {
   assertWrite()
+  let moveToGroup: string | null = null
+  let oldGroupFolder: string | null = null
+  commit((doc) => {
+    const p = doc.projects[projectId]
+    if (!p) return
+    if (fields.groupId !== undefined && fields.groupId !== p.groupId) {
+      const target = doc.groups[fields.groupId]
+      if (!target || target.deleted) {
+        throw new Error('Target group no longer exists — refresh and pick again')
+      }
+      moveToGroup = fields.groupId
+      oldGroupFolder = doc.groups[p.groupId]?.folderId ?? null
+    }
+    Object.assign(p, fields)
+    touch('projects', p)
+    const meaningful = Object.keys(fields).filter((k) => k !== 'notes')
+    if (meaningful.length > 0) appendActivity(doc, 'project.update', projectId, { fields: meaningful })
+  })
+  if (moveToGroup) void moveProjectToGroup(projectId, moveToGroup, oldGroupFolder)
+}
+
+/** Move a project (its Drive subfolder + all files) into another group. */
+export async function moveProjectToGroup(
+  projectId: string,
+  toGroupId: string,
+  fromFolderId: string | null,
+): Promise<void> {
   const { storeGet } = await import('../sync/store')
   const doc = storeGet().doc
   const project = doc?.projects[projectId]
-  if (!doc || !project) throw new Error('Project not found')
-  const items = Object.values(doc.items).filter(
-    (i) => i.projectId === projectId && i.deleted === null,
-  )
-  const fileIds = [...new Set(items.flatMap((i) => i.fileIds))]
-
-  // Drive-side first (each best-effort; a missed file stays findable via sweep).
-  const { trashFile } = await import('../drive/client')
-  for (const f of fileIds) await trashFile(f, { mode: 'bearer' }).catch(() => {})
-  if (project.folderId) await trashFile(project.folderId, { mode: 'bearer' }).catch(() => {})
-
-  commit((d) => {
-    const p = d.projects[projectId]
-    if (p) {
-      p.deleted = { at: hlcNow(), by: writerId() }
-      touch('projects', p)
-      recordTombstone(d, 'project', projectId, writerId())
-    }
-    for (const item of items) {
-      const live = d.items[item.id]
-      if (!live || live.deleted) continue
-      live.deleted = { at: hlcNow(), by: writerId() }
-      touch('items', live)
-      recordTombstone(d, 'item', item.id, writerId())
-    }
-    appendActivity(d, 'project.delete', projectId, {
-      name: project.name,
-      filesTrashed: fileIds.length,
-      itemsTrashed: items.length,
-    })
-  })
-  return { files: fileIds.length, folder: project.folderId }
+  if (!doc || !project || !project.folderId) return
+  const to = await ensureGroupFolder(toGroupId)
+  if (!to) return
+  const { moveFile } = await import('../drive/client')
+  await moveFile(project.folderId, to, fromFolderId, { mode: 'bearer' }).catch(() => {})
 }
 
-export function attachFiles(itemId: string, fileIds: string[]): void {
+export function setProjectStatus(projectId: string, status: string): void {
   assertWrite()
   commit((doc) => {
-    const item = doc.items[itemId]
-    if (!item) return
-    item.fileIds = [...new Set([...item.fileIds, ...fileIds])]
-    touch('items', item)
-    appendActivity(doc, 'item.attach', itemId, { fileIds })
+    const p = doc.projects[projectId]
+    if (!p) return
+    const from = p.status
+    p.status = status
+    touch('projects', p)
+    appendActivity(doc, 'project.status', projectId, { from, to: status })
   })
 }
 
-/** Remove a file from an item — optionally trashing it on Drive (30-day
+export function updateProjectMeta(
+  projectId: string,
+  fields: Partial<Pick<Project, 'name' | 'labels' | 'assigneeAppId' | 'dueAt' | 'notes'>>,
+): void {
+  updateProject(projectId, fields)
+}
+
+/** Upload a file into the project's own Drive subfolder, then link it. */
+export async function uploadToProject(
+  projectId: string,
+  file: File,
+  onProgress?: (pct: number) => void,
+): Promise<{ ok: true; fileId: string } | { ok: false; error: string }> {
+  const { storeGet } = await import('../sync/store')
+  const doc = storeGet().doc
+  const project = doc?.projects[projectId]
+  if (!doc || !project) return { ok: false, error: 'Project not found' }
+  try {
+    const folderId = await ensureProjectFolder(projectId)
+    if (!folderId) return { ok: false, error: 'Group folder not ready — try again in a few seconds' }
+    const meta = await uploadFile(folderId, file, { mode: 'bearer' }, onProgress)
+    commit((d) => {
+      const p = d.projects[projectId]
+      if (!p) return
+      p.fileIds = [...new Set([...p.fileIds, meta.id])]
+      touch('projects', p)
+      appendActivity(d, 'project.attach', projectId, { fileId: meta.id, fileName: file.name })
+    })
+    return { ok: true, fileId: meta.id }
+  } catch (e) {
+    if (e instanceof DriveError && e.kind === 'auth')
+      return { ok: false, error: 'Sign in with Google to upload (top bar → Connect Google)' }
+    if (e instanceof DriveError) return { ok: false, error: `${e.message} — ${e.kind}` }
+    return { ok: false, error: e instanceof Error ? e.message : 'Upload failed' }
+  }
+}
+
+/** Remove a file from a project — optionally trashing it on Drive (30-day
  *  recovery). Unlinking alone leaves the file where it is on Drive. */
-export async function removeItemFile(
-  itemId: string,
+export async function removeProjectFile(
+  projectId: string,
   fileId: string,
   opts: { trashInDrive?: boolean } = {},
 ): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -275,77 +317,62 @@ export async function removeItemFile(
     }
   }
   commit((doc) => {
-    const it = doc.items[itemId]
-    if (!it) return
-    it.fileIds = it.fileIds.filter((f) => f !== fileId)
-    touch('items', it)
-    appendActivity(doc, opts.trashInDrive ? 'item.file.delete' : 'item.detach', itemId, { fileId })
+    const p = doc.projects[projectId]
+    if (!p) return
+    p.fileIds = p.fileIds.filter((f) => f !== fileId)
+    touch('projects', p)
+    appendActivity(doc, opts.trashInDrive ? 'project.file.delete' : 'project.detach', projectId, { fileId })
   })
   return { ok: true }
 }
 
-export function deleteItem(itemId: string): void {
+/**
+ * Delete a project: its Drive subfolder (with all files) moves to Drive trash
+ * (30-day recovery) and the metadata is tombstoned. The UI shows the list first.
+ */
+export async function deleteProjectCascade(projectId: string): Promise<{ files: number; folderTrashed: boolean }> {
   assertWrite()
-  commit((doc) => {
-    const item = doc.items[itemId]
-    if (!item) return
-    item.deleted = { at: hlcNow(), by: writerId() }
-    touch('items', item)
-    recordTombstone(doc, 'item', itemId, writerId())
-    appendActivity(doc, 'item.delete', itemId, { title: item.title })
-  })
-}
-
-/** Upload a file into the item's project folder (creating it if missing);
- *  project-less items go to Unsorted/. Then link it. */
-export async function uploadToItem(
-  itemId: string,
-  file: File,
-  onProgress?: (pct: number) => void,
-): Promise<{ ok: true; fileId: string } | { ok: false; error: string }> {
   const { storeGet } = await import('../sync/store')
   const doc = storeGet().doc
-  const item = doc?.items[itemId]
-  if (!doc || !item) return { ok: false, error: 'Item not found' }
-  try {
-    let folderId: string | null
-    if (item.projectId != null) {
-      // Never upload flat: make sure the project's Drive folder exists first.
-      folderId = await ensureProjectFolder(item.projectId)
-      if (!folderId) return { ok: false, error: 'Project not found — re-open this item and try again' }
-    } else {
-      folderId = await ensureUnsortedFolder(doc, { mode: 'bearer' })
-    }
-    if (!folderId) return { ok: false, error: 'Workspace folder not set — finish setup first' }
-    const meta = await uploadFile(folderId, file, { mode: 'bearer' }, onProgress)
-    attachFiles(itemId, [meta.id])
-    return { ok: true, fileId: meta.id }
-  } catch (e) {
-    if (e instanceof DriveError && e.kind === 'auth') return { ok: false, error: 'Sign in with Google to upload (top bar → Connect Google)' }
-    if (e instanceof DriveError) return { ok: false, error: `${e.message} — ${e.kind}` }
-    return { ok: false, error: e instanceof Error ? e.message : 'Upload failed' }
+  const project = doc?.projects[projectId]
+  if (!doc || !project) throw new Error('Project not found')
+  const { trashFile } = await import('../drive/client')
+  let folderTrashed = false
+  for (const f of project.fileIds) await trashFile(f, { mode: 'bearer' }).catch(() => {})
+  if (project.folderId) {
+    await trashFile(project.folderId, { mode: 'bearer' }).catch(() => {})
+    folderTrashed = true
   }
+  commit((d) => {
+    const p = d.projects[projectId]
+    if (p) {
+      p.deleted = { at: hlcNow(), by: writerId() }
+      touch('projects', p)
+      recordTombstone(d, 'project', projectId, writerId())
+    }
+    appendActivity(d, 'project.delete', projectId, {
+      name: project.name,
+      filesTrashed: project.fileIds.length,
+    })
+  })
+  return { files: project.fileIds.length, folderTrashed }
 }
 
 // ---------------------------------------------------------------------------
-// Scripts
+// Scripts — bodies live as markdown files in scripts/; metadata in the master.
 // ---------------------------------------------------------------------------
 
-export function createScript(fields: {
-  title: string
-  projectId?: string | null
-  itemId?: string | null
-  body?: string
-}): string {
+export function createScript(fields: { title: string; projectId?: string | null }): string {
   assertWrite()
   const id = newScriptId()
   commit((doc) => {
+    const project = fields.projectId ? doc.projects[fields.projectId] : null
     const script: Script = {
       id,
       title: fields.title,
-      storage: { type: 'md', fileId: '' }, // .md file created lazily on first edit
+      storage: { type: 'md', fileId: '' }, // .md file created lazily on first save
+      groupId: project?.groupId ?? null,
       projectId: fields.projectId ?? null,
-      itemId: fields.itemId ?? null,
       status: 'draft',
       copies: [],
       createdAt: hlcNow(),
@@ -361,7 +388,7 @@ export function createScript(fields: {
   return id
 }
 
-export function updateScript(id: string, fields: Partial<Pick<Script, 'title' | 'projectId' | 'itemId'>>): void {
+export function updateScript(id: string, fields: Partial<Pick<Script, 'title' | 'groupId' | 'projectId'>>): void {
   assertWrite()
   commit((doc) => {
     const s = doc.scripts[id]
@@ -373,7 +400,7 @@ export function updateScript(id: string, fields: Partial<Pick<Script, 'title' | 
 
 /**
  * Save a script's body to its markdown file in scripts/ (creating the file on
- * first edit). Metadata stays in nexus.json; the text lives on Drive where it
+ * first save). Metadata stays in nexus.json; the text lives on Drive where it
  * gets its own revision history and never bloats the master file.
  */
 export async function saveScriptBody(id: string, body: string): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -437,12 +464,12 @@ export async function setScriptStatus(id: string, status: ScriptStatus): Promise
     const doc = storeGet().doc
     const script = doc?.scripts[id]
     if (!doc || !script) return
-    if (script.storage.type !== 'md') return
+    if (script.storage.type !== 'md' || !script.storage.fileId) return
     try {
       const scriptsFolderId = await ensureScriptsFolder(doc, { mode: 'bearer' })
-      const { createTextFile } = await import('../drive/client')
       const body = await readScriptBody(id)
       if (body === null) return
+      const { createTextFile } = await import('../drive/client')
       const copy = await createTextFile(`${id}-${status}.md`, scriptsFolderId, body, 'text/markdown', {
         mode: 'bearer',
       })
@@ -471,7 +498,7 @@ export function deleteScript(id: string): void {
 }
 
 // ---------------------------------------------------------------------------
-// Admin: app users, viewer tokens, settings
+// Admin: app users, viewer tokens, settings, workspace reset
 // ---------------------------------------------------------------------------
 
 export function assertAdmin(): void {
@@ -523,8 +550,7 @@ export async function createAppUser(
 
 export function setUserDisabled(userId: string, disabled: boolean): void {
   assertAdmin()
-  const { getSession } = sessionModule()
-  const me = getSession()
+  const me = sessionModule().getSession()
   if (disabled && me?.appUserId === userId) {
     throw new Error('You cannot disable your own account — ask another admin')
   }
@@ -542,11 +568,6 @@ export function setUserDisabled(userId: string, disabled: boolean): void {
     user.writerId = writerId()
     appendActivity(doc, disabled ? 'user.disable' : 'user.enable', userId, { name: user.name })
   })
-}
-
-// Late-bound to avoid a circular import at module init.
-function sessionModule(): { getSession: () => { appUserId: string } | null } {
-  return { getSession: () => sessionRef.getSession?.() ?? null }
 }
 
 export async function resetUserPassword(userId: string, secret: string | undefined): Promise<{ raw: string }> {
@@ -625,6 +646,43 @@ export function setApiKeyOverride(key: string | null): void {
     doc.settings.api.keyOverride = key
     doc.settings.updatedAt = hlcNow()
     doc.settings.writerId = writerId()
-    appendActivity(doc, 'settings.apiKey', 'settings', { set: key !== null })
+    appendActivity(doc, 'settings.apiKey', 'settings', {})
   })
+}
+
+/**
+ * Wipe all content data (groups, projects, scripts, activity, tombstones) and
+ * trash their Drive files. Users, settings and workspace ids are KEPT so the
+ * admin login still works. Intended for starting over while testing.
+ */
+export async function resetWorkspaceData(): Promise<{ groups: number; projects: number; scripts: number }> {
+  assertAdmin()
+  const { storeGet } = await import('../sync/store')
+  const doc = storeGet().doc
+  if (!doc) throw new Error('Workspace not loaded')
+  const groups = Object.values(doc.groups)
+  const scripts = Object.values(doc.scripts)
+
+  // Drive-side: trash group folders (contain all project files) + script files.
+  const { trashFile } = await import('../drive/client')
+  for (const g of groups) {
+    if (g.folderId) await trashFile(g.folderId, { mode: 'bearer' }).catch(() => {})
+  }
+  for (const s of scripts) {
+    if (s.storage.type === 'md' && s.storage.fileId) {
+      await trashFile(s.storage.fileId, { mode: 'bearer' }).catch(() => {})
+    }
+  }
+
+  commit((d) => {
+    d.groups = {}
+    d.projects = {}
+    d.scripts = {}
+    d.tombstones = []
+    d.activity = [{ at: hlcNow(), actor: sessionRef.getSession?.()?.appUserId ?? 'system', verb: 'workspace.reset', ref: 'workspace', meta: {} }]
+    d.snapshots = []
+    d.rev = d.rev + 1
+  })
+  await flush()
+  return { groups: groups.length, projects: Object.keys(doc.projects).length, scripts: scripts.length }
 }

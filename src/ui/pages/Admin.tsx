@@ -814,6 +814,34 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
       </div>
 
       <div className="card">
+        <div className="spread mb8">
+          <h2>Reset workspace data</h2>
+          <button
+            className="btn danger"
+            onClick={async () => {
+              const msg =
+                'Wipe ALL groups, projects and scripts?\n\n' +
+                'Their Drive files move to Drive trash (30-day recovery). Your login, settings and the workspace itself are kept.'
+              if (!confirm(msg)) return
+              try {
+                const { resetWorkspaceData } = await import('../../state/actions')
+                const r = await resetWorkspaceData()
+                alert(`Wiped: ${r.groups} groups, ${r.projects} projects, ${r.scripts} scripts. Drive files are in Drive trash.`)
+              } catch (e) {
+                alert(e instanceof Error ? e.message : 'Wipe failed')
+              }
+            }}
+          >
+            Wipe workspace data
+          </button>
+        </div>
+        <p className="muted small" style={{ marginTop: 0 }}>
+          Removes every group, project and script from the database and moves their Drive files to trash.
+          Your login, other users, settings and the workspace folders are kept. For starting over while testing.
+        </p>
+      </div>
+
+      <div className="card">
         <h2>Workspace ids</h2>
         {ids.map(([label, id]) => (
           <div

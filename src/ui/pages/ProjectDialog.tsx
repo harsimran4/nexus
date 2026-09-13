@@ -1,63 +1,66 @@
 import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../../sync/store'
-import { Modal, KindBadge, CopyButton, banner, useDebouncedCommit } from '../components'
+import { Modal, CopyButton, banner, useDebouncedCommit } from '../components'
 import { canWrite } from '../../auth/session'
-import { deleteItem, removeItemFile, setItemStatus, updateItem, uploadToItem } from '../../state/actions'
+import {
+  deleteProjectCascade,
+  removeProjectFile,
+  setProjectStatus,
+  updateProject,
+  uploadToProject,
+} from '../../state/actions'
 import { isSignedIn } from '../../auth/tokenClient'
 import { describeError, downloadToBrowser } from '../../drive/preview'
 import { thumbnailUrl, webViewLink } from '../../drive/client'
 import { touch } from '../../sync/writer'
 
-export function ItemDialog({ itemId, onClose }: { itemId: string; onClose: () => void }): React.JSX.Element | null {
+export function ProjectDialog({ projectId, onClose }: { projectId: string; onClose: () => void }): React.JSX.Element | null {
   const doc = useStore((s) => s.doc)
   const session = useStore((s) => s.session)
   const [labelInput, setLabelInput] = useState('')
   const [uploadPct, setUploadPct] = useState<number | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
-  const commitDebounced = useDebouncedCommit(800)
+  const commitNotesDebounced = useDebouncedCommit(800)
 
-  // Notes draft: local while typing, committed once after the user pauses —
-  // never one commit (and one activity entry) per keystroke.
-  const item0 = doc?.items[itemId]
-  const [notesDraft, setNotesDraft] = useState(item0?.notes ?? '')
+  // Notes draft: local while typing, committed once after the user pauses.
+  const project = doc?.projects[projectId]
+  const [notesDraft, setNotesDraft] = useState(project?.notes ?? '')
   const notesDirty = useRef(false)
   useEffect(() => {
-    // Adopt remote notes only while the user isn't mid-edit.
-    if (!notesDirty.current && item0 && item0.notes !== notesDraft) setNotesDraft(item0.notes)
+    if (!notesDirty.current && project && project.notes !== notesDraft) setNotesDraft(project.notes)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item0?.notes])
-  const commitNotes = (value: string) => {
-    commitDebounced((d) => {
-      const it = d.items[itemId]
-      if (!it) return
-      it.notes = value
-      touch('items', it)
-    })
-  }
+  }, [project?.notes])
 
-  const item = doc?.items[itemId]
-  if (!doc || !item) return null
+  if (!doc || !project) return null
 
   const writable = canWrite()
   const googleReady = isSignedIn()
-  const activity = doc.activity.filter((a) => a.ref === itemId).slice(-12).reverse()
-  const project = item.projectId ? doc.projects[item.projectId] : null
+  const activity = doc.activity.filter((a) => a.ref === projectId).slice(-12).reverse()
+  const group = doc.groups[project.groupId]
+
+  const commitNotes = (value: string) => {
+    commitNotesDebounced((d) => {
+      const p = d.projects[projectId]
+      if (!p) return
+      p.notes = value
+      touch('projects', p)
+    })
+  }
 
   const startUpload = async (file: File) => {
     setUploadError(null)
     setUploadPct(0)
-    const result = await uploadToItem(itemId, file, setUploadPct)
+    const r = await uploadToProject(projectId, file, setUploadPct)
     setUploadPct(null)
-    if (!result.ok) setUploadError(result.error)
+    if (!r.ok) setUploadError(r.error)
   }
 
   return (
-    <Modal title={item.title} onClose={onClose} wide>
+    <Modal title={project.name} onClose={onClose} wide>
       <div className="row wrap mb8">
-        <KindBadge kind={item.kind} />
-        {project && <span className="badge">{project.name}</span>}
-        {item.fileIds.map((f) => (
+        {group && <span className="badge">{group.name}</span>}
+        {project.fileIds.map((f) => (
           <img
             key={f}
             src={thumbnailUrl(f, 64)}
@@ -72,48 +75,61 @@ export function ItemDialog({ itemId, onClose }: { itemId: string; onClose: () =>
         <select
           className="input"
           style={{ maxWidth: 180 }}
-          value={item.status}
+          value={project.status}
           disabled={!writable}
-          onChange={(e) => setItemStatus(itemId, e.target.value)}
+          onChange={(e) => setProjectStatus(projectId, e.target.value)}
         >
-          {doc.settings.pipeline.map((p) => (
-            <option key={p.id} value={p.id}>{p.label}</option>
-          ))}
+          {doc.settings.pipeline.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+        </select>
+        <select
+          className="input"
+          style={{ maxWidth: 200 }}
+          value={project.groupId}
+          disabled={!writable}
+          onChange={(e) => {
+            const next = e.target.value
+            if (next === project.groupId) return
+            if (confirm('Move this project (and its files) to the selected group?')) {
+              updateProject(projectId, { groupId: next })
+            }
+          }}
+        >
+          {Object.values(doc.groups)
+            .filter((g) => g.deleted === null)
+            .map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
         </select>
         <select
           className="input"
           style={{ maxWidth: 170 }}
-          value={item.assigneeAppId ?? ''}
+          value={project.assigneeAppId ?? ''}
           disabled={!writable}
-          onChange={(e) => updateItem(itemId, { assigneeAppId: e.target.value || null })}
+          onChange={(e) => updateProject(projectId, { assigneeAppId: e.target.value || null })}
         >
           <option value="">Unassigned</option>
-          {doc.users.app.map((u) => (
-            <option key={u.id} value={u.id}>{u.name}</option>
-          ))}
+          {doc.users.app.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
         </select>
         <input
           className="input"
           style={{ maxWidth: 160 }}
           type="date"
-          value={item.dueAt ? item.dueAt.slice(0, 10) : ''}
+          value={project.dueAt ? project.dueAt.slice(0, 10) : ''}
           disabled={!writable}
-          onChange={(e) => updateItem(itemId, { dueAt: e.target.value || null })}
+          onChange={(e) => updateProject(projectId, { dueAt: e.target.value || null })}
         />
       </div>
 
       <div className="field">
         <label>Labels</label>
         <div className="chips">
-          {[...new Set([...doc.settings.labels, ...item.labels])].map((l) => {
-            const on = item.labels.includes(l)
+          {[...new Set([...doc.settings.labels, ...project.labels])].map((l) => {
+            const on = project.labels.includes(l)
             return (
               <button
                 key={l}
                 className={`chip ${on ? 'on' : ''}`}
                 disabled={!writable}
                 onClick={() =>
-                  updateItem(itemId, { labels: on ? item.labels.filter((x) => x !== l) : [...item.labels, l] })
+                  updateProject(projectId, { labels: on ? project.labels.filter((x) => x !== l) : [...project.labels, l] })
                 }
               >
                 {l}
@@ -130,7 +146,7 @@ export function ItemDialog({ itemId, onClose }: { itemId: string; onClose: () =>
               onKeyDown={(e) => {
                 const v = labelInput.trim()
                 if (e.key === 'Enter' && v) {
-                  updateItem(itemId, { labels: [...new Set([...item.labels, v])] })
+                  updateProject(projectId, { labels: [...new Set([...project.labels, v])] })
                   setLabelInput('')
                 }
               }}
@@ -140,8 +156,8 @@ export function ItemDialog({ itemId, onClose }: { itemId: string; onClose: () =>
       </div>
 
       <div className="field">
-        <label>Files ({item.fileIds.length})</label>
-        {item.fileIds.map((f) => (
+        <label>Files ({project.fileIds.length})</label>
+        {project.fileIds.map((f) => (
           <div className="row spread mb8" key={f} style={{ background: 'var(--bg-raised)', padding: '7px 10px', borderRadius: 8 }}>
             <span className="mono small" style={{ wordBreak: 'break-all' }}>{f}</span>
             <span className="row">
@@ -150,7 +166,7 @@ export function ItemDialog({ itemId, onClose }: { itemId: string; onClose: () =>
                 className="btn small"
                 onClick={async () => {
                   try {
-                    await downloadToBrowser(f, item.title)
+                    await downloadToBrowser(f, project.name)
                   } catch (e) {
                     setUploadError(describeError(e).fix)
                   }
@@ -161,11 +177,11 @@ export function ItemDialog({ itemId, onClose }: { itemId: string; onClose: () =>
               {writable && (
                 <button
                   className="btn small danger"
-                  title="Moves the file to Drive trash (recoverable for 30 days) and unlinks it from this item"
+                  title="Moves the file to Drive trash (recoverable for 30 days) and unlinks it from this project"
                   onClick={async () => {
-                    if (!confirm('Delete this file? It moves to Drive trash (recoverable for 30 days) and is removed from this item.')) return
+                    if (!confirm('Delete this file? It moves to Drive trash (recoverable for 30 days) and is removed from this project.')) return
                     setUploadError(null)
-                    const r = await removeItemFile(itemId, f, { trashInDrive: true })
+                    const r = await removeProjectFile(projectId, f, { trashInDrive: true })
                     if (!r.ok) setUploadError(r.error)
                   }}
                 >
@@ -187,10 +203,8 @@ export function ItemDialog({ itemId, onClose }: { itemId: string; onClose: () =>
                 if (file) void startUpload(file)
               }}
             >
-              Drop a file here or click to upload → project folder on Drive
-              {uploadPct !== null && (
-                <div className="progress"><div style={{ width: `${uploadPct}%` }} /></div>
-              )}
+              Drop a file here or click to upload → this project's folder on Drive
+              {uploadPct !== null && <div className="progress"><div style={{ width: `${uploadPct}%` }} /></div>}
             </div>
             <input
               ref={fileInput}
@@ -241,16 +255,23 @@ export function ItemDialog({ itemId, onClose }: { itemId: string; onClose: () =>
         <div className="row spread mt16">
           <button
             className="btn danger"
-            onClick={() => {
-              if (confirm(`Delete "${item.title}"? It can be restored from the Archive.`)) {
-                deleteItem(itemId)
-                onClose()
+            onClick={async () => {
+              const fileList = project.fileIds.length
+                ? `It has ${project.fileIds.length} file${project.fileIds.length === 1 ? '' : 's'} — all move to Drive trash (30-day recovery).`
+                : 'It has no files.'
+              if (confirm(`Delete project "${project.name}"?\n\n${fileList}\n\nYou can restore it from the Archive.`)) {
+                try {
+                  await deleteProjectCascade(projectId)
+                  onClose()
+                } catch (e) {
+                  setUploadError(e instanceof Error ? e.message : 'Delete failed')
+                }
               }
             }}
           >
-            Delete
+            Delete project
           </button>
-          <CopyButton text={itemId} label="Copy item id" />
+          <CopyButton text={projectId} label="Copy project id" />
         </div>
       )}
       {session === null && banner('info', 'Viewing as guest', 'Sign in to make changes.')}
