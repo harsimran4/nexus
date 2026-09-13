@@ -249,13 +249,18 @@ function Shell({ children, bare, signedInGoogle }: { children: ReactNode; bare?:
   const route = useRoute()
   if (bare) return <div className="center-screen"><div className="center-card">{children}</div></div>
 
+  const icon = (paths: React.JSX.Element): React.JSX.Element => (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {paths}
+    </svg>
+  )
   const nav = [
-    { id: 'dash', label: 'Board', icon: '▦' },
-    { id: 'groups', label: 'Groups', icon: '▦' },
-    { id: 'scripts', label: 'Scripts', icon: '✎' },
-    { id: 'archive', label: 'Archive', icon: '🗄' },
-    ...(session?.role === 'admin' ? [{ id: 'admin', label: 'Admin', icon: '⚙' }] : []),
-    { id: 'security', label: 'Security', icon: '🛡' },
+    { id: 'dash', label: 'Board', icon: icon(<><rect x="3" y="4" width="5" height="16" rx="1" /><rect x="10" y="4" width="5" height="10" rx="1" /><rect x="17" y="4" width="4" height="13" rx="1" /></>) },
+    { id: 'groups', label: 'Groups', icon: icon(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />) },
+    { id: 'scripts', label: 'Scripts', icon: icon(<><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></>) },
+    { id: 'archive', label: 'Archive', icon: icon(<><rect x="3" y="4" width="18" height="4" rx="1" /><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8" /><path d="M10 12h4" /></>) },
+    ...(session?.role === 'admin' ? [{ id: 'admin', label: 'Admin', icon: icon(<><path d="M4 6h16" /><path d="M4 12h16" /><path d="M4 18h16" /><circle cx="9" cy="6" r="1.6" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none" /><circle cx="7" cy="18" r="1.6" fill="currentColor" stroke="none" /></>) }] : []),
+    { id: 'security', label: 'Security', icon: icon(<path d="M12 3l8 3v6c0 4.5-3.5 8-8 9-4.5-1-8-4.5-8-9V6z" />) },
   ]
   return (
     <div className="shell">
