@@ -57,9 +57,11 @@ export async function boot(): Promise<void> {
   const params = parseBootParams()
   if (params.rootIdParam) rememberIds({ rootFolderId: params.rootIdParam, nexusFileId: recallIds()?.nexusFileId ?? '' })
 
-  // Resolve workspace IDs: URL param → lastGoodIds → baked config.
+  // Resolve workspace IDs. The BAKED config id wins over browser memory:
+  // localStorage survives across deploys and can point at a stale (pre-reset)
+  // database, which then fails the new-format parse and dead-ends in setup.
   let rootId = params.rootIdParam ?? recallIds()?.rootFolderId ?? config.rootFolderId
-  let nexusId = recallIds()?.nexusFileId || config.nexusFileId
+  let nexusId = config.nexusFileId || recallIds()?.nexusFileId || ''
 
   try {
     // Quietly try to reuse a live Google session so returning editors read via
