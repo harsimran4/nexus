@@ -11,6 +11,7 @@ import { config } from './config'
 import { Login } from './ui/pages/Login'
 import { Init } from './ui/pages/Init'
 import { Setup } from './ui/pages/Setup'
+import { Groups } from './ui/pages/Groups'
 import { GroupView } from './ui/pages/GroupView'
 import { Scripts } from './ui/pages/Scripts'
 import { Archive } from './ui/pages/Archive'
@@ -218,6 +219,8 @@ function renderPage(route: { page: string; arg: string }, hasDoc: boolean): Reac
   switch (route.page) {
     case 'dash':
       return <Dashboard />
+    case 'groups':
+      return <Groups />
     case 'group':
       return <GroupView groupId={route.arg} />
     case 'scripts':
@@ -244,7 +247,8 @@ function Shell({ children, bare, signedInGoogle }: { children: ReactNode; bare?:
   if (bare) return <div className="center-screen"><div className="center-card">{children}</div></div>
 
   const nav = [
-    { id: 'dash', label: 'Dashboard', icon: '▦' },
+    { id: 'dash', label: 'Board', icon: '▦' },
+    { id: 'groups', label: 'Groups', icon: '▦' },
     { id: 'scripts', label: 'Scripts', icon: '✎' },
     { id: 'archive', label: 'Archive', icon: '🗄' },
     ...(session?.role === 'admin' ? [{ id: 'admin', label: 'Admin', icon: '⚙' }] : []),

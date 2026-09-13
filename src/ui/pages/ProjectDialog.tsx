@@ -7,6 +7,7 @@ import {
   removeProjectFile,
   setProjectStatus,
   updateProject,
+  updateScript,
   uploadToProject,
 } from '../../state/actions'
 import { isSignedIn } from '../../auth/tokenClient'
@@ -38,6 +39,13 @@ export function ProjectDialog({ projectId, onClose }: { projectId: string; onClo
   const googleReady = isSignedIn()
   const activity = doc.activity.filter((a) => a.ref === projectId).slice(-12).reverse()
   const group = doc.groups[project.groupId]
+  // Scripts assigned to this project + linkable candidates.
+  const projectScripts = Object.values(doc.scripts).filter(
+    (s) => s.deleted === null && s.projectId === projectId,
+  )
+  const unlinkedScripts = Object.values(doc.scripts).filter(
+    (s) => s.deleted === null && s.projectId === null && s.storage.type === 'md',
+  )
 
   const commitNotes = (value: string) => {
     commitNotesDebounced((d) => {
@@ -238,6 +246,47 @@ export function ProjectDialog({ projectId, onClose }: { projectId: string; onClo
           }}
           placeholder="Context, links, feedback…"
         />
+      </div>
+
+      <div className="field">
+        <label>Scripts for this project ({projectScripts.length})</label>
+        {projectScripts.length === 0 && (
+          <span className="faint small">
+            None yet — create one on the Scripts page and assign it to this project.
+          </span>
+        )}
+        {projectScripts.map((s) => (
+          <div key={s.id} className="row spread small" style={{ background: 'var(--bg-raised)', padding: '7px 10px', borderRadius: 8, marginBottom: 6 }}>
+            <span className="row">
+              <span className={`badge ${s.status === 'final' ? 'done' : s.status === 'review' ? 'doing' : ''}`}>{s.status}</span>
+              <span style={{ fontWeight: 550 }}>{s.title}</span>
+            </span>
+            {writable && (
+              <button
+                className="btn small ghost"
+                title="Unlink from this project (the script itself is kept)"
+                onClick={() => updateScript(s.id, { projectId: null, groupId: null })}
+              >
+                Unlink
+              </button>
+            )}
+          </div>
+        ))}
+        {writable && unlinkedScripts.length > 0 && (
+          <select
+            className="input"
+            value=""
+            onChange={(e) => {
+              if (e.target.value) updateScript(e.target.value, { projectId: projectId, groupId: project.groupId })
+            }}
+          >
+            <option value="">+ Link an existing script…</option>
+            {unlinkedScripts.map((s) => (
+              <option key={s.id} value={s.id}>{s.title}</option>
+            ))}
+          </select>
+        )}
+        <a className="btn small" href="#/scripts">Open Scripts page →</a>
       </div>
 
       <div className="field">

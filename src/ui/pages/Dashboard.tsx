@@ -4,9 +4,8 @@ import type { Project } from '../../types/schema'
 import { compareHlc } from '../../util/hlc'
 import { Empty, Modal, banner } from '../components'
 import { ProjectDialog } from './ProjectDialog'
-import { createProject, createGroup } from '../../state/actions'
+import { createProject, setProjectStatus } from '../../state/actions'
 import { canWrite } from '../../auth/session'
-import { navigate } from '../../App'
 
 export function Dashboard(): React.JSX.Element {
   const doc = useStore((s) => s.doc)
@@ -15,9 +14,10 @@ export function Dashboard(): React.JSX.Element {
   const [labelFilter, setLabelFilter] = useState<string>('')
   const [assigneeFilter, setAssigneeFilter] = useState<string>('')
   const [openProject, setOpenProject] = useState<string | null>(null)
-  const [quickName, setQuickName] = useState('')
-  const [quickGroup, setQuickGroup] = useState('')
-  const [newGroupOpen, setNewGroupOpen] = useState(false)
+  // Quick-add: launched from the header (status = first column) or a column "+".
+  const [quickAdd, setQuickAdd] = useState<{ status: string } | null>(null)
+  const [dragId, setDragId] = useState<string | null>(null)
+  const [dragOverCol, setDragOverCol] = useState<string | null>(null)
   const writable = canWrite()
 
   const projects = useMemo(() => {
@@ -37,32 +37,31 @@ export function Dashboard(): React.JSX.Element {
   const groups = Object.values(doc.groups).filter((g) => g.deleted === null)
   const labels = [...new Set(Object.values(doc.projects).flatMap((p) => p.labels))].sort()
 
-  const quickAdd = () => {
-    const name = quickName.trim()
-    if (!name || !writable) return
-    if (!quickGroup) {
-      // Group is compulsory — nudge instead of failing silently.
-      alert('Pick a group for this project first (the dropdown next to the input).')
-      return
+  const drop = (status: string) => {
+    if (dragId && writable) {
+      const p = doc.projects[dragId]
+      if (p && p.status !== status) setProjectStatus(dragId, status)
     }
-    void (async () => {
-      const id = await createProject({ groupId: quickGroup, name })
-      setQuickName('')
-      setOpenProject(id)
-    })()
+    setDragId(null)
+    setDragOverCol(null)
   }
 
   return (
     <div>
       <div className="content-header">
         <div>
-          <h1>Dashboard</h1>
+          <h1>Board</h1>
           <div className="sub">
-            {projects.length} project{projects.length === 1 ? '' : 's'} · {groups.length} group{groups.length === 1 ? '' : 's'}
+            {projects.length} project{projects.length === 1 ? '' : 's'} on the board ·{' '}
+            <a href="#/groups">manage groups</a> · <a href="#/scripts">scripts</a>
           </div>
         </div>
         <div className="row">
-          <button className="btn" onClick={() => setNewGroupOpen(true)}>+ New group</button>
+          {writable && (
+            <button className="btn primary" onClick={() => setQuickAdd({ status: doc.settings.pipeline[0]?.id ?? 'pending' })}>
+              + New project
+            </button>
+          )}
         </div>
       </div>
 
@@ -70,16 +69,16 @@ export function Dashboard(): React.JSX.Element {
         <div className="row wrap">
           <input
             className="input"
-            style={{ maxWidth: 260 }}
-            placeholder="Search projects and notes…"
+            style={{ maxWidth: 240 }}
+            placeholder="Search…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <select className="input" style={{ maxWidth: 190 }} value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
+          <select className="input" style={{ maxWidth: 180 }} value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
             <option value="">All groups</option>
             {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
           </select>
-          <select className="input" style={{ maxWidth: 170 }} value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
+          <select className="input" style={{ maxWidth: 160 }} value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
             <option value="">Anyone</option>
             {doc.users.app.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
@@ -95,72 +94,61 @@ export function Dashboard(): React.JSX.Element {
         </div>
       </div>
 
-      {writable && (
-        <div className="card mb8">
-          <div className="row wrap">
-            <input
-              className="input"
-              style={{ maxWidth: 300 }}
-              placeholder="New project name…"
-              value={quickName}
-              onChange={(e) => setQuickName(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && quickAdd()}
-            />
-            <select className="input" style={{ maxWidth: 190 }} value={quickGroup} onChange={(e) => setQuickGroup(e.target.value)}>
-              <option value="">Pick a group…</option>
-              {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
-            </select>
-            <button className="btn primary" onClick={quickAdd} disabled={!quickName.trim() || !quickGroup}>Add</button>
-            <span className="faint small">Group is required — projects always live in a group's folder on Drive.</span>
-          </div>
-        </div>
-      )}
-
-      {groups.length > 0 && (
-        <div className="card mb8">
-          <div className="spread mb8">
-            <h3 style={{ margin: 0 }}>Groups</h3>
-            <span className="faint small">click to filter · double-click to open</span>
-          </div>
-          <div className="chips">
-            {groups.map((g) => {
-              const count = Object.values(doc.projects).filter((p) => p.groupId === g.id && p.deleted === null).length
-              return (
-                <button
-                  key={g.id}
-                  className={`chip ${groupFilter === g.id ? 'on' : ''}`}
-                  onClick={() => setGroupFilter(groupFilter === g.id ? '' : g.id)}
-                  onDoubleClick={() => navigate('group/' + g.id)}
-                >
-                  {g.name} · {count}
-                </button>
-              )
-            })}
-          </div>
-        </div>
-      )}
-
       {projects.length === 0 ? (
         <Empty icon="▦">
-          No projects yet.{' '}
-          {writable
-            ? 'Add one above — pick a group, name it, and it appears on this board with its own Drive folder.'
-            : 'Projects will appear here as the team adds them.'}
+          No projects on the board yet.{' '}
+          {writable ? 'Create one with "+ New project" — or drag cards between columns once you have a few.' : ''}
         </Empty>
       ) : (
         <div className="kanban">
           {doc.settings.pipeline.map((col) => {
             const colProjects = projects.filter((p) => p.status === col.id)
             return (
-              <div className="kanban-col" key={col.id}>
+              <div
+                key={col.id}
+                className={`kanban-col ${dragOverCol === col.id ? 'drag-over' : ''}`}
+                onDragOver={(e) => {
+                  if (!writable || dragId === null) return
+                  e.preventDefault()
+                  setDragOverCol(col.id)
+                }}
+                onDragLeave={() => setDragOverCol((c) => (c === col.id ? null : c))}
+                onDrop={(e) => {
+                  e.preventDefault()
+                  drop(col.id)
+                }}
+              >
                 <div className="kanban-col-head">
                   <h3>{col.label}</h3>
-                  <span className="count">{colProjects.length}</span>
+                  <span className="row">
+                    <span className="count">{colProjects.length}</span>
+                    {writable && (
+                      <button
+                        className="btn ghost small"
+                        title={`Add a project in ${col.label}`}
+                        onClick={() => setQuickAdd({ status: col.id })}
+                      >
+                        +
+                      </button>
+                    )}
+                  </span>
                 </div>
                 {colProjects.map((project) => (
-                  <ProjectCard key={project.id} project={project} groupName={doc.groups[project.groupId]?.name ?? null} onOpen={() => setOpenProject(project.id)} />
+                  <ProjectCard
+                    key={project.id}
+                    project={project}
+                    groupName={doc.groups[project.groupId]?.name ?? null}
+                    draggable={writable}
+                    dragging={dragId === project.id}
+                    onDragStart={() => setDragId(project.id)}
+                    onDragEnd={() => {
+                      setDragId(null)
+                      setDragOverCol(null)
+                    }}
+                    onOpen={() => setOpenProject(project.id)}
+                  />
                 ))}
-                {colProjects.length === 0 && <div className="faint small">—</div>}
+                {colProjects.length === 0 && <div className="faint small">{writable ? 'Drag a card here' : '—'}</div>}
               </div>
             )
           })}
@@ -169,13 +157,14 @@ export function Dashboard(): React.JSX.Element {
 
       {openProject && <ProjectDialog projectId={openProject} onClose={() => setOpenProject(null)} />}
 
-      {newGroupOpen && (
-        <NewGroupModal
-          onClose={() => setNewGroupOpen(false)}
+      {quickAdd && (
+        <QuickAddModal
+          presetStatus={quickAdd.status}
+          defaultGroup={groupFilter}
+          onClose={() => setQuickAdd(null)}
           onCreated={(id) => {
-            setNewGroupOpen(false)
-            setQuickGroup(id)
-            setGroupFilter(id)
+            setQuickAdd(null)
+            setOpenProject(id)
           }}
         />
       )}
@@ -183,17 +172,44 @@ export function Dashboard(): React.JSX.Element {
   )
 }
 
-function ProjectCard({ project, groupName, onOpen }: { project: Project; groupName: string | null; onOpen: () => void }): React.JSX.Element {
+function ProjectCard({
+  project,
+  groupName,
+  draggable,
+  dragging,
+  onDragStart,
+  onDragEnd,
+  onOpen,
+}: {
+  project: Project
+  groupName: string | null
+  draggable: boolean
+  dragging: boolean
+  onDragStart: () => void
+  onDragEnd: () => void
+  onOpen: () => void
+}): React.JSX.Element {
   const doc = useStore((s) => s.doc)
   const overdue = project.dueAt !== null && new Date(project.dueAt) < new Date()
   const assignee = project.assigneeAppId ? doc?.users.app.find((u) => u.id === project.assigneeAppId)?.name : null
   return (
-    <div className={`item-card ${overdue ? 'overdue' : ''}`} onClick={onOpen}>
+    <div
+      className={`item-card ${overdue ? 'overdue' : ''}`}
+      style={dragging ? { opacity: 0.45 } : undefined}
+      draggable={draggable}
+      onDragStart={(e) => {
+        e.dataTransfer.setData('text/plain', project.id)
+        e.dataTransfer.effectAllowed = 'move'
+        onDragStart()
+      }}
+      onDragEnd={onDragEnd}
+      onClick={onOpen}
+    >
       <div className="title">{project.name}</div>
       <div className="meta">
         {groupName && <span>{groupName}</span>}
         {assignee && <span>· {assignee}</span>}
-        {project.dueAt && <span>· due {new Date(project.dueAt).toLocaleDateString()}</span>}
+        {project.dueAt && <span style={overdue ? { color: 'var(--red)' } : undefined}>· due {new Date(project.dueAt).toLocaleDateString()}</span>}
         {project.fileIds.length > 0 && <span>· 📎{project.fileIds.length}</span>}
       </div>
       {project.labels.length > 0 && (
@@ -205,52 +221,69 @@ function ProjectCard({ project, groupName, onOpen }: { project: Project; groupNa
   )
 }
 
-function NewGroupModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }): React.JSX.Element {
+function QuickAddModal({
+  presetStatus,
+  defaultGroup,
+  onClose,
+  onCreated,
+}: {
+  presetStatus: string
+  defaultGroup: string
+  onClose: () => void
+  onCreated: (id: string) => void
+}): React.JSX.Element {
+  const doc = useStore((s) => s.doc)
   const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
+  const [groupId, setGroupId] = useState(defaultGroup)
   const [error, setError] = useState<string | null>(null)
+  const groups = Object.values(doc?.groups ?? {}).filter((g) => g.deleted === null)
+
+  if (!doc) return <></>
 
   const create = () => {
     const n = name.trim()
     if (!n) return
+    if (!groupId) {
+      setError('Pick a group — projects always live in a group folder on Drive.')
+      return
+    }
     void (async () => {
       try {
-        const id = await createGroup(n, description.trim())
+        const id = await createProject({ groupId, name: n })
+        const { setProjectStatus } = await import('../../state/actions')
+        if (presetStatus) setProjectStatus(id, presetStatus)
         onCreated(id)
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Could not create the group')
+        setError(e instanceof Error ? e.message : 'Could not create the project')
       }
     })()
   }
 
   return (
-    <Modal title="New group" onClose={onClose}>
-      {banner('info', 'One Drive folder per group', 'Nexus/groups/<name>/ — every project inside gets its own subfolder.')}
+    <Modal title="New project" onClose={onClose}>
       <div className="field">
-        <label>Group name</label>
+        <label>Name</label>
         <input
           className="input"
           autoFocus
-          placeholder="e.g. Personal, Client Work"
+          placeholder="e.g. Q4 Launch"
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && create()}
         />
       </div>
       <div className="field">
-        <label>Description (optional)</label>
-        <input
-          className="input"
-          placeholder="What belongs in this group?"
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && create()}
-        />
+        <label>Group (required — it picks the Drive folder)</label>
+        <select className="input" value={groupId} onChange={(e) => setGroupId(e.target.value)}>
+          <option value="">Pick a group…</option>
+          {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+        </select>
+        {groups.length === 0 && banner('warn', 'No groups yet', 'Create one on the Groups page first.')}
       </div>
       {error && banner('error', error)}
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" disabled={!name.trim()} onClick={create}>Create group</button>
+        <button className="btn primary" disabled={!name.trim()} onClick={create}>Create project</button>
       </div>
     </Modal>
   )
