@@ -260,7 +260,6 @@ function Shell({ children, bare, signedInGoogle }: { children: ReactNode; bare?:
     { id: 'scripts', label: 'Scripts', icon: icon(<><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></>) },
     { id: 'archive', label: 'Archive', icon: icon(<><rect x="3" y="4" width="18" height="4" rx="1" /><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8" /><path d="M10 12h4" /></>) },
     ...(session?.role === 'admin' ? [{ id: 'admin', label: 'Admin', icon: icon(<><path d="M4 6h16" /><path d="M4 12h16" /><path d="M4 18h16" /><circle cx="9" cy="6" r="1.6" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none" /><circle cx="7" cy="18" r="1.6" fill="currentColor" stroke="none" /></>) }] : []),
-    { id: 'security', label: 'Security', icon: icon(<path d="M12 3l8 3v6c0 4.5-3.5 8-8 9-4.5-1-8-4.5-8-9V6z" />) },
   ]
   return (
     <div className="shell">
