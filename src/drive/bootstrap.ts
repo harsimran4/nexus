@@ -3,7 +3,7 @@
 // Drive has no atomic create, so two clients racing #/init can both create
 // nexus.json — the rule is list-by-name and adopt the OLDEST createdTime.
 
-import { createAnyoneReaderPermission, createFolder, createJsonFile, listChildren, moveFile, trashFile, type Credential } from './client'
+import { createAnyoneReaderPermission, createFolder, createJsonFile, listChildren, moveFile, trashFile, type Credential, type FileMeta } from './client'
 import { emptyDoc, type NexusDoc } from '../types/schema'
 import { writerId } from '../sync/identity'
 import { hlcNow } from '../util/hlc'
@@ -121,16 +121,27 @@ export function workspaceUsesSystemFolders(doc: NexusDoc): boolean {
   return Boolean(f?.master && f.groups && f.scripts && f.snapshots)
 }
 
-/** Create the full workspace: root, link-share, system folders, nexus.json in master/. */
-export async function createWorkspace(doc: NexusDoc, cred: { mode: 'bearer' }): Promise<Workspace> {
-  const root = await createFolder(doc.settings.rootFolderName, null, cred)
+/** Create the full workspace: root (reused when the folder already exists),
+ *  link-share, system folders, nexus.json in master/. */
+export async function createWorkspace(
+  doc: NexusDoc,
+  cred: { mode: 'bearer' },
+  existingRootId?: string | null,
+): Promise<Workspace> {
   let shared = true
-  try {
-    await createAnyoneReaderPermission(root.id, cred) // children inherit
-  } catch {
-    // Workspace org policies can block anyone-links (cannotShareDriveItem) —
-    // the UI falls back to printed manual-share instructions.
-    shared = false
+  let root: FileMeta
+  if (existingRootId) {
+    // Re-init into an existing folder: don't create or re-share it.
+    root = { id: existingRootId, name: doc.settings.rootFolderName }
+  } else {
+    root = await createFolder(doc.settings.rootFolderName, null, cred)
+    try {
+      await createAnyoneReaderPermission(root.id, cred) // children inherit
+    } catch {
+      // Workspace org policies can block anyone-links (cannotShareDriveItem) —
+      // the UI falls back to printed manual-share instructions.
+      shared = false
+    }
   }
   const folders = await ensureSystemFolders(root.id, cred)
   const nexus = await createJsonFile('nexus.json', folders.master!, JSON.stringify(doc), cred)

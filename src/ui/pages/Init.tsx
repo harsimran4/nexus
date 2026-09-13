@@ -66,16 +66,33 @@ export function Init(): React.JSX.Element {
           return
         }
       }
-      // Refuse to create a second workspace from this Google account.
+      // Refuse to create a second workspace from this Google account — unless
+      // the found nexus.json is unreadable by THIS app version (old format /
+      // corrupted). In that case we reset: reuse the same root folder and
+      // write a fresh database into it.
       const { findWorkspace } = await import('../../drive/bootstrap')
       const existing = await findWorkspace('', { mode: 'bearer' })
-      if (existing?.nexusFileId) {
-        setError(
-          `A workspace already exists on this account (root ${existing.rootFolderId.slice(0, 12)}…). ` +
-            'Open it from the app URL, or use that account\'s Admin → Maintenance to delete it first.',
-        )
-        setBusy(false)
-        return
+      let existingRootId: string | null = null
+      let oldBrokenNexusId: string | null = null
+      if (existing?.rootFolderId) {
+        if (existing.nexusFileId) {
+          const { readFile } = await import('../../drive/client')
+          const raw = await readFile(existing.nexusFileId, { mode: 'bearer' }).catch(() => null)
+          const parsed = raw ? (await import('../../types/schema')).parseDoc(raw) : null
+          if (parsed?.ok) {
+            setError(
+              `A working workspace already exists on this account (root ${existing.rootFolderId.slice(0, 12)}…). ` +
+                'Reload the app to open it, or delete its nexus.json on Drive to reset.',
+            )
+            setBusy(false)
+            return
+          }
+          // Old format / broken — reset into the same folder.
+          existingRootId = existing.rootFolderId
+          oldBrokenNexusId = existing.nexusFileId
+        } else {
+          existingRootId = existing.rootFolderId
+        }
       }
       const doc = initialDoc()
       doc.settings.rootFolderName = rootName.trim() || 'Nexus Root'
@@ -92,7 +109,12 @@ export function Init(): React.JSX.Element {
       ]
       doc.writerId = `bootstrap|${newDeviceId()}|init`
       doc.updatedAt = hlcNow()
-      const ws = await createWorkspace(doc, { mode: 'bearer' })
+      const ws = await createWorkspace(doc, { mode: 'bearer' }, existingRootId)
+      if (oldBrokenNexusId && oldBrokenNexusId !== ws.nexusFileId) {
+        // The unreadable old database goes to Drive trash (30-day recovery).
+        const { trashFile } = await import('../../drive/client')
+        await trashFile(oldBrokenNexusId, { mode: 'bearer' }).catch(() => {})
+      }
       // Re-parse the fully-formed doc (with ids) so the app boots on it directly.
       const { parseDoc } = await import('../../types/schema')
       const done = { ...doc, ids: { rootFolderId: ws.rootFolderId, nexusFileId: ws.nexusFileId ?? '' } }
