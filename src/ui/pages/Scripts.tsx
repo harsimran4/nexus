@@ -175,6 +175,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
   const [loaded, setLoaded] = useState(false)
   const [dirty, setDirty] = useState(() => bodyDrafts.has(script.id))
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [statusBusy, setStatusBusy] = useState(false)
   const id = script.id
 
@@ -200,17 +201,24 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
   }, [id])
 
   const save = () => {
-    if (!canWrite() || !dirty) return
+    if (!canWrite() || !dirty || saveState === 'saving') return
     setSaveState('saving')
-    void saveScriptBody(id, body).then((r) => {
-      if (r.ok) {
-        bodyDrafts.delete(id)
-        setDirty(false)
-        setSaveState('saved')
-      } else {
+    setSaveError(null)
+    void saveScriptBody(id, body)
+      .then((r) => {
+        if (r.ok) {
+          bodyDrafts.delete(id)
+          setDirty(false)
+          setSaveState('saved')
+        } else {
+          setSaveError(r.error)
+          setSaveState('error')
+        }
+      })
+      .catch((e: unknown) => {
+        setSaveError(e instanceof Error ? e.message : 'Save failed')
         setSaveState('error')
-      }
-    })
+      })
   }
 
   // Ctrl+S / Cmd+S saves from anywhere in the editor.
@@ -369,6 +377,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
           <span className="faint small">
             Press Save (or Ctrl+S) to write this script to its own markdown file in Drive (scripts/) — Drive keeps a version history for it.
           </span>
+          {saveState === 'error' && saveError && banner('error', 'Could not save the script', saveError)}
         </div>
       )}
 
