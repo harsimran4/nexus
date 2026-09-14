@@ -53,6 +53,8 @@ export async function boot(): Promise<void> {
   // Pre-load Google Identity Services so the first sign-in click opens its
   // popup while the browser still honors the user gesture.
   void import('./auth/tokenClient').then((t) => t.warmupAuth())
+  // Same for the picker: warm it silently so the first Connect click is instant.
+  void import('./auth/connect').then((c) => c.warmupPicker())
 
   const params = parseBootParams()
   if (params.rootIdParam) rememberIds({ rootFolderId: params.rootIdParam, nexusFileId: recallIds()?.nexusFileId ?? '' })

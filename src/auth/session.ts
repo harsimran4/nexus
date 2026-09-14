@@ -93,10 +93,18 @@ async function loginWithSecret(
 /** Bind the session to the credential generation so resets sign sessions out. */
 async function grant(
   user: NexusDoc['users']['app'][number],
-  _secret: string,
+  secret: string,
 ): Promise<{ ok: true; session: Session }> {
   writeSession(user.id, user.sessionEpoch ?? 0)
   useStore.setState({ session: { appUserId: user.id, name: user.name, role: user.role } })
+  // Best-effort: exchange the secret for a write-relay ticket (used only when
+  // the tab has no Google session — relay-configured deploys let editors
+  // write with zero Google). A failed exchange surfaces at the next write.
+  if (user.role !== 'viewer') {
+    void import('./relay')
+      .then((r) => r.relayVerify(secret))
+      .catch(() => {})
+  }
   return { ok: true, session: { appUserId: user.id, name: user.name, role: user.role } }
 }
 

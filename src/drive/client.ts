@@ -345,6 +345,58 @@ export async function createAnyoneReaderPermission(fileId: string, cred: Credent
   await res.json()
 }
 
+/** Share a file/folder with a specific Google account (role 'writer' = Drive
+ *  Editor). This is what lets an editor's OWN account connect the workspace
+ *  via the picker — the studio password never leaves the room. */
+export async function createUserPermission(
+  fileId: string,
+  email: string,
+  role: 'writer' | 'reader',
+  cred: Credential,
+  opts: { notify?: boolean } = {},
+): Promise<void> {
+  const bearer = cred.bearer ?? getGlobalBearer()
+  if (!bearer) throw new DriveError('auth', 'Sign in with Google to share')
+  const params = new URLSearchParams({
+    fields: 'id',
+    sendNotificationEmail: String(opts.notify ?? true),
+  })
+  const res = await driveFetch(
+    `${API}/files/${fileId}/permissions?${params.toString()}`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${bearer}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'user', role, emailAddress: email }),
+    },
+    cred,
+  )
+  await res.json()
+}
+
+export interface DrivePermission {
+  id: string
+  type: string
+  emailAddress?: string
+  role: string
+}
+
+/** List sharing entries on a file/folder (owner-only data; bearer required —
+ *  the API key can never see permissions). */
+export async function listPermissions(fileId: string, cred: Credential): Promise<DrivePermission[]> {
+  const params = new URLSearchParams({ fields: 'permissions(id,type,emailAddress,role)', pageSize: '100' })
+  const res = await driveFetch(`${API}/files/${fileId}/permissions?${params.toString()}`, { method: 'GET' }, cred)
+  const body = (await res.json()) as { permissions?: DrivePermission[] }
+  return body.permissions ?? []
+}
+
+/** Revoke one sharing entry. */
+export async function deletePermission(fileId: string, permissionId: string, cred: Credential): Promise<void> {
+  const bearer = cred.bearer ?? getGlobalBearer()
+  if (!bearer) throw new DriveError('auth', 'Sign in with Google to share')
+  // 204 no-content — there is no body to parse.
+  await driveFetch(`${API}/files/${fileId}/permissions/${permissionId}`, { method: 'DELETE' }, cred)
+}
+
 /**
  * Resumable upload with progress (XHR — fetch can't report upload progress).
  * Falls back to a single multipart request for small files.

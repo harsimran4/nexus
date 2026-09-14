@@ -8,6 +8,9 @@ export const config = {
   apiKey: import.meta.env.VITE_NEXUS_API_KEY ?? '',
   rootFolderId: import.meta.env.VITE_NEXUS_ROOT_FOLDER_ID ?? '',
   nexusFileId: import.meta.env.VITE_NEXUS_FILE_ID ?? '',
+  // Optional write relay (Deno Deploy) — when set, editors without a Google
+  // session write through it instead of Drive-direct. Empty = disabled.
+  relayUrl: import.meta.env.VITE_NEXUS_RELAY_URL ?? '',
   appVersion: '0.1.0',
   maxKnownSchema: 1,
   scopes: ['https://www.googleapis.com/auth/drive.file'],

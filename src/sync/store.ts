@@ -44,6 +44,8 @@ interface NexusState {
   lastReadViaKey: boolean
   activeProjectId: string | null
   session: SessionInfo | null
+  /** blocked-by-404 with a picker escape hatch (editor's Google account can't see the workspace) */
+  needConnect: boolean
 
   setDoc: (doc: NexusDoc) => void
   setBase: (t: BaseTokens) => void
@@ -53,6 +55,7 @@ interface NexusState {
   markSynced: () => void
   setLastReadViaKey: (v: boolean) => void
   setActiveProject: (id: string | null) => void
+  setNeedConnect: (v: boolean) => void
 }
 
 export const useStore = create<NexusState>((set) => ({
@@ -66,6 +69,7 @@ export const useStore = create<NexusState>((set) => ({
   lastReadViaKey: false,
   activeProjectId: null,
   session: null,
+  needConnect: false,
 
   setDoc: (doc) => set({ doc }),
   setBase: (t) => set({ base: t }),
@@ -75,6 +79,7 @@ export const useStore = create<NexusState>((set) => ({
   markSynced: () => set({ lastSyncAt: new Date().toISOString() }),
   setLastReadViaKey: (lastReadViaKey) => set({ lastReadViaKey }),
   setActiveProject: (activeProjectId) => set({ activeProjectId }),
+  setNeedConnect: (needConnect) => set({ needConnect }),
 }))
 
 /** Non-hook accessor for modules outside React (sync kernel, health). */

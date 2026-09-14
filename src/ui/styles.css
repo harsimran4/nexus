@@ -140,6 +140,18 @@ code { font-family: var(--mono); font-size: 12.5px; background: var(--panel-2); 
 .input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-dim); }
 .input::placeholder { color: var(--faint); }
 textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); font-size: 13px; line-height: 1.55; }
+
+/* secret input with trailing eye toggle (login) */
+.secret-wrap { position: relative; }
+.secret-wrap .input { padding-right: 40px; }
+.eye-btn {
+  position: absolute; right: 5px; top: 50%; transform: translateY(-50%);
+  display: flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; padding: 0;
+  border: none; background: none; border-radius: var(--radius-sm);
+  color: var(--faint); cursor: pointer;
+}
+.eye-btn:hover { color: var(--text); background: var(--panel-2); }
 :where(button, a, input, select, textarea):focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }

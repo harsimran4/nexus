@@ -3,7 +3,9 @@ import { statusBucket, statusLabel, type NexusDoc } from '../types/schema'
 import { useStore } from '../sync/store'
 import { statusToIssue, type HealthIssue } from '../diagnostics/health'
 import { commit, flush } from '../sync/writer'
-import { clearToken, requestToken } from '../auth/tokenClient'
+import { clearToken, requestToken, getBearerToken } from '../auth/tokenClient'
+import { connectWorkspace } from '../auth/connect'
+import { relayConfigured } from '../auth/relay'
 
 /**
  * Merge rapid mutations (typing in an input) into ONE commit after the user
@@ -73,9 +75,61 @@ export function IssueBanner({ issue, onDismiss }: { issue: HealthIssue; onDismis
 export function StatusBanners(): ReactNode {
   const status = useStore((s) => s.status)
   const detail = useStore((s) => s.statusDetail)
+  const needConnect = useStore((s) => s.needConnect)
+  const nexusFileId = useStore((s) => s.doc?.ids.nexusFileId ?? null)
+  if (status === 'blocked' && needConnect && nexusFileId) {
+    return <ConnectBanner expectedNexusFileId={nexusFileId} />
+  }
   const issue = statusToIssue(status, detail)
   if (!issue) return null
   return <IssueBanner issue={issue} />
+}
+
+/** The editor path: Google is signed in with an account whose drive.file
+ *  grant can't see the workspace (it lives in the studio account's Drive).
+ *  The editor connects their OWN account to the shared folder — one-time
+ *  picker pick; Google persists the grant for that (user, app) pair. */
+function ConnectBanner({ expectedNexusFileId }: { expectedNexusFileId: string }): ReactNode {
+  const [busy, setBusy] = useState(false)
+  const [err, setErr] = useState<string | null>(null)
+  const run = async () => {
+    setBusy(true)
+    setErr(null)
+    try {
+      const result = await connectWorkspace(expectedNexusFileId)
+      if (result === 'connected') {
+        useStore.getState().setNeedConnect(false)
+        useStore.getState().setStatus('saving', 'Connected — syncing…')
+        const ok = await flush() // push the queued edits through the new grant
+        if (!ok) {
+          useStore.getState().setStatus('queued', 'Connected, but the sync did not finish — your changes stay queued; click the status pill to retry.')
+        }
+      } else if (result === 'wrongFolder') {
+        setErr("That folder doesn't hold this workspace's nexus.json — pick the Nexus Root folder the studio shared with you.")
+      } else if (result === 'noGrant') {
+        setErr('The folder is right, but Google has not unlocked it for your account yet — this usually clears within a minute. Click Connect workspace folder again.')
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Connect failed')
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="banner error" role="alert">
+      <div className="body">
+        <b>Google can&apos;t see the workspace from the signed-in account</b>
+        <div className="fix">
+          The workspace lives in the studio account&apos;s Drive. Your Nexus login is separate — it decides your role.
+          Click Connect and pick the Nexus Root folder that was shared with your Google account (one-time).
+        </div>
+        {err && <div className="fix" style={{ color: 'var(--red)' }}>{err}</div>}
+      </div>
+      <button className="btn small" disabled={busy} onClick={() => void run()}>
+        {busy ? 'Connecting…' : 'Connect workspace folder'}
+      </button>
+    </div>
+  )
 }
 
 // ---- sync pill -------------------------------------------------------------
@@ -106,6 +160,12 @@ export function SyncPill(): ReactNode {
   const onClick = () => {
     if (status === 'queued') void flush()
     if (status === 'reconnect') {
+      // Relay-only editor (no Google session by design): the fix is a Nexus
+      // re-login, not a Google popup — send them to the login page.
+      if (getBearerToken() === null && relayConfigured()) {
+        void import('../App').then((m) => m.navigate('login'))
+        return
+      }
       // Click is a user gesture: drop the dead token and mint a fresh one
       // (direct popup — no silent attempt to lose the gesture context).
       clearToken()

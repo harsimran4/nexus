@@ -2,10 +2,11 @@
 // maintenance/health tooling. Every action re-asserts the admin role itself —
 // the UI gate below is orientation, not security.
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useStore } from '../../sync/store'
 import { banner, CopyButton, Empty, IssueBanner, Modal, TokenReveal, useDebouncedCommit } from '../components'
 import { canAdmin } from '../../auth/session'
+import { getBearerToken } from '../../auth/tokenClient'
 import {
   createAppUser,
   mintViewerToken,
@@ -15,6 +16,12 @@ import {
   setUserDisabled,
   updateSettings,
 } from '../../state/actions'
+import {
+  createUserPermission,
+  deletePermission,
+  listPermissions,
+  type DrivePermission,
+} from '../../drive/client'
 import { BUCKETS, ROLES, type Bucket, type NexusDoc, type Role } from '../../types/schema'
 import { runHealthChecks, type HealthIssue } from '../../diagnostics/health'
 import { workspaceUsesSystemFolders } from '../../drive/bootstrap'
@@ -115,11 +122,12 @@ function UsersTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
   const [resetting, setResetting] = useState<{ id: string; name: string } | null>(null)
 
   return (
-    <div className="card">
-      <div className="spread mb8">
-        <h2>App users</h2>
-        <button className="btn primary" onClick={() => setAdding(true)}>Add user</button>
-      </div>
+    <>
+      <div className="card">
+        <div className="spread mb8">
+          <h2>App users</h2>
+          <button className="btn primary" onClick={() => setAdding(true)}>Add user</button>
+        </div>
 
       {doc.users.app.length === 0 ? (
         <Empty icon="◍">
@@ -177,6 +185,122 @@ function UsersTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
 
       {adding && <AddUserModal onClose={() => setAdding(false)} />}
       {resetting && <ResetSecretModal user={resetting} onClose={() => setResetting(null)} />}
+      </div>
+      <DriveSharingCard doc={doc} />
+    </>
+  )
+}
+
+/** Drive-level share for editors: their Google account needs Editor on the
+ *  Nexus Root folder before the app's picker connect can grant write access.
+ *  This card does what the Drive "Share" dialog does, without leaving Nexus. */
+function DriveSharingCard({ doc }: { doc: NexusDoc }): React.JSX.Element {
+  const rootId = doc.ids.rootFolderId
+  const [perms, setPerms] = useState<DrivePermission[] | null>(null)
+  const [email, setEmail] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
+
+  const load = async () => {
+    try {
+      setPerms(await listPermissions(rootId, { mode: 'bearer' }))
+      setError(null)
+    } catch (e) {
+      setPerms([])
+      setError(errText(e))
+    }
+  }
+  useEffect(() => { void load() }, [rootId])
+
+  const people = (perms ?? []).filter((p) => p.type === 'user' && p.role !== 'organizer' && p.role !== 'owner')
+  const valid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+  const googleReady = getBearerToken() !== null
+
+  const share = async () => {
+    setBusy(true)
+    setError(null)
+    setNote(null)
+    try {
+      await createUserPermission(rootId, email.trim(), 'writer', { mode: 'bearer' })
+      setNote(
+        `Invite sent to ${email.trim()}. They sign in with that Google account and click "Connect workspace folder" in the app — once; Google remembers it.`,
+      )
+      setEmail('')
+      await load()
+    } catch (e) {
+      setError(errText(e))
+    }
+    setBusy(false)
+  }
+
+  const revoke = async (p: DrivePermission) => {
+    if (!confirm(`Remove ${p.emailAddress ?? p.id}'s access to the Nexus Root folder on Drive?`)) return
+    setError(null)
+    try {
+      await deletePermission(rootId, p.id, { mode: 'bearer' })
+      await load()
+    } catch (e) {
+      setError(errText(e))
+    }
+  }
+
+  return (
+    <div className="card">
+      <h2>Drive folder sharing</h2>
+      <p className="muted small" style={{ maxWidth: 640 }}>
+        The workspace lives in the studio account&apos;s Drive. To let an editor work, share the Nexus Root folder with their
+        Gmail address here — then the next time the app shows them the connect banner, their own Google account can pick the
+        folder and Google remembers the grant. The in-app role above decides what they may touch; this share only decides
+        whether their Google account can connect at all.
+      </p>
+
+      {!googleReady && banner('warn', 'Not signed in to Google', 'Sharing needs the studio Google session — click Reconnect in the header, then reload this page.')}
+      {note && banner('info', note)}
+      {error && banner('error', error)}
+
+      <div className="row wrap mt8">
+        <input
+          className="input"
+          style={{ maxWidth: 320 }}
+          type="email"
+          placeholder="editor@gmail.com"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && valid && !busy && void share()}
+          disabled={!googleReady}
+        />
+        <button className="btn primary" disabled={busy || !valid || !googleReady} onClick={() => void share()}>
+          {busy ? 'Sharing…' : 'Share as editor'}
+        </button>
+      </div>
+
+      {perms === null ? (
+        <p className="muted small mt8">Loading shares…</p>
+      ) : people.length === 0 ? (
+        <p className="muted small mt8">No individual Google accounts have access yet.</p>
+      ) : (
+        <table className="table mt8">
+          <thead>
+            <tr>
+              <th>Google account</th>
+              <th>Drive role</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {people.map((p) => (
+              <tr key={p.id}>
+                <td>{p.emailAddress ?? p.id}</td>
+                <td><span className="badge">{p.role === 'writer' ? 'editor' : p.role}</span></td>
+                <td>
+                  <button className="btn small danger" onClick={() => void revoke(p)}>Remove</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   )
 }

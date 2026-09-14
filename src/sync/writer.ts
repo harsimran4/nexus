@@ -14,7 +14,8 @@ import { mergeRemote, gcTombstones } from './merge'
 import { loadDraft, clearDraft, saveDraft } from './drafts'
 import { storeGet, useStore } from './store'
 import { ensureSnapshotsFolder } from '../drive/bootstrap'
-import { getBearerToken, clearToken } from '../auth/tokenClient'
+import { getBearerToken, clearToken, isTokenValid } from '../auth/tokenClient'
+import { relayConfigured, getRelayTicket, clearRelayTicket, relayWriteDoc } from '../auth/relay'
 import { canWrite } from '../auth/session'
 import { writerId, sessionActor } from './identity'
 
@@ -136,12 +137,60 @@ async function saveLoop(): Promise<boolean> {
   if (!nexusId) return false
   const cred = { mode: 'bearer' as const }
 
-  if (tokenUnavailable()) {
-    storeGet().setStatus('reconnect', 'Sign in with Google to continue writing')
+  // Write-path choice: the direct Google bearer when the tab has one (admins,
+  // picker-connected editors); the write relay when there's a Nexus ticket and
+  // no Google (relay-configured deploys — editors never touch Google). No
+  // Google AND no ticket → reconnect.
+  const viaRelay = tokenUnavailable() && relayConfigured() && getRelayTicket() !== null
+  if (tokenUnavailable() && !viaRelay) {
+    storeGet().setStatus(
+      'reconnect',
+      relayConfigured()
+        ? 'Sign in again to continue writing — your write session is missing or expired'
+        : 'Sign in with Google to continue writing',
+    )
     return false
   }
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    if (viaRelay) {
+      const store = storeGet()
+      const res = await relayWriteDoc(store.doc!, store.base.version)
+      if (res.ok) {
+        scratch.clear()
+        store.setPending(0)
+        store.setBase({ version: res.version, md5Checksum: res.md5Checksum })
+        store.setStatus('ok', null)
+        store.markSynced()
+        await clearDraft()
+        if (isTokenValid()) void snapshotHook(nexusId, cred)
+        return true
+      }
+      if (res.kind === 'auth') {
+        clearRelayTicket()
+        storeGet().setStatus('reconnect', 'Your write session expired — sign in again to continue writing')
+        return false
+      }
+      if (res.kind === 'conflict') {
+        // Same rebase contract as the direct path: merge remote, loop, and the
+        // next pass should write clean against the version the server named.
+        const parsed = parseDoc(res.remote)
+        if (!parsed.ok) {
+          storeGet().setStatus('corrupt', 'The workspace file on Drive is not valid nexus.json — it was quarantined')
+          return false
+        }
+        if (parsed.doc.schema > config.maxKnownSchema) {
+          store.setDoc(parsed.doc) // show newer content, read-only
+          store.setStatus('readOnly', `Written by a newer Nexus (schema ${parsed.doc.schema} > ${config.maxKnownSchema}) — update the app`)
+          return false
+        }
+        const { merged } = mergeRemote({ local: storeGet().doc ?? emptyDoc(), remote: parsed.doc })
+        applyMerged(merged)
+        continue
+      }
+      storeGet().setStatus('queued', `Relay write failed (${res.message}) — changes are saved locally and will retry`)
+      return false
+    }
     try {
       // Fresh state EVERY iteration: after a rebase the doc/base have changed
       // and a stale snapshot would re-merge forever or write pre-merge state.
@@ -186,7 +235,23 @@ async function saveLoop(): Promise<boolean> {
           return false
         }
         if (err.kind === 'notFound') {
-          storeGet().setStatus('blocked', 'Workspace file not found with your Google account — re-run setup or check sign-in')
+          // drive.file scope: the signed-in Google account can't see this
+          // workspace's file. Classic editor case — their own account, folder
+          // not connected yet. Offer the picker connect instead of dead-ending.
+          storeGet().setNeedConnect(true)
+          storeGet().setStatus(
+            'blocked',
+            "Google can't see the workspace from the signed-in account — connect the Nexus Root folder shared with you",
+          )
+          return false
+        }
+        if (err.kind === 'permission') {
+          // Bearer write refused: the folder is likely shared view-only with
+          // this account (or Drive-side sharing is restricted).
+          storeGet().setStatus(
+            'blocked',
+            'Drive refused the write — the Nexus Root folder may be shared with your Google account view-only. Ask the studio to share it as Editor.',
+          )
           return false
         }
         // rateLimit/network already retried by backoffRetry; give up for now — edits stay queued

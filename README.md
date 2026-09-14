@@ -44,7 +44,8 @@ Common setups:
 
 ## Security model (honest version)
 
-- **Editors/admins** sign in with the studio Google account (scope `drive.file`) and their Nexus app login. All writes flow through a verified read-modify-write loop with per-item merge — concurrent edits don't clobber each other.
+- **Editors/admins** sign in to Google with an account that can see the workspace (scope `drive.file`) and their Nexus app login. The workspace lives in the studio account's Drive; the studio shares the **Nexus Root** folder with each editor's Google address (as **Editor**), and the editor connects it once via Google's folder picker (the app shows a **Connect workspace folder** button when Google can't see the workspace). Google persists that per-file grant for the (user, app) pair until the user deauthorizes the app — the studio password is never shared. All writes flow through a verified read-modify-write loop with per-item merge — concurrent edits don't clobber each other.
+- **Write relay (optional)**: deploy `relay/main.ts` on Deno Deploy and set `VITE_NEXUS_RELAY_URL` — editors then write with **zero Google** (their Nexus secret alone, exchanged for a 7-day ticket; the relay writes as the studio account). See `relay/README.md`.
 - **Viewers** get a 256-bit capability token (a login link). They read through the API key — Google structurally denies writes to it. Only the token's hash is stored.
 - **Not guaranteed**: viewer login gates the app, not the data (link-shared files are technically fetchable); the embedded API key is extractable (worst case: quota burn — restrict + rotate it); admin-vs-editor is procedural. Full details are rendered in-app at `#/security`.
 
