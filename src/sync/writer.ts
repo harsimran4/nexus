@@ -137,11 +137,14 @@ async function saveLoop(): Promise<boolean> {
   if (!nexusId) return false
   const cred = { mode: 'bearer' as const }
 
-  // Write-path choice: the direct Google bearer when the tab has one (admins,
-  // picker-connected editors); the write relay when there's a Nexus ticket and
-  // no Google (relay-configured deploys — editors never touch Google). No
-  // Google AND no ticket → reconnect.
-  const viaRelay = tokenUnavailable() && relayConfigured() && getRelayTicket() !== null
+  // Write-path choice. Admins keep the direct Google bearer (fast, and their
+  // token can see the workspace). Editors prefer the relay whenever a ticket
+  // exists — a stray Google token on their side (silent sign-in) can't see the
+  // workspace under drive.file and only leads to 404s. No path → reconnect.
+  const viaRelay =
+    relayConfigured() &&
+    getRelayTicket() !== null &&
+    (tokenUnavailable() || storeGet().session?.role !== 'admin')
   if (tokenUnavailable() && !viaRelay) {
     storeGet().setStatus(
       'reconnect',

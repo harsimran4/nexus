@@ -155,14 +155,36 @@ export interface FileMeta {
 
 const META_FIELDS = 'id,name,headRevisionId,md5Checksum,version,modifiedTime,mimeType,trashed,createdTime'
 
+/** The drive.file no-grant signature: a signed-in Google token that cannot see
+ *  this file at all (editors with a stray session but no picker grant). For
+ *  'auto' READS this is safely recoverable — the folder is link-shared, so the
+ *  public API key can always read it. Writes never get this fallback. */
+function isNoGrantRead(err: unknown): boolean {
+  return err instanceof DriveError && (err.kind === 'notFound' || err.kind === 'permission')
+}
+
 export async function getMeta(fileId: string, cred: Credential): Promise<FileMeta> {
-  const res = await driveFetch(withKey(`${API}/files/${fileId}?fields=${META_FIELDS}`, cred), { method: 'GET' }, cred)
-  return res.json()
+  try {
+    const res = await driveFetch(withKey(`${API}/files/${fileId}?fields=${META_FIELDS}`, cred), { method: 'GET' }, cred)
+    return res.json()
+  } catch (e) {
+    if (cred.mode === 'auto' && isNoGrantRead(e)) {
+      return getMeta(fileId, { mode: 'key', apiKey: getGlobalApiKey() ?? '' })
+    }
+    throw e
+  }
 }
 
 export async function readFile(fileId: string, cred: Credential): Promise<string> {
-  const res = await driveFetch(withKey(`${API}/files/${fileId}?alt=media`, cred), { method: 'GET' }, cred)
-  return res.text()
+  try {
+    const res = await driveFetch(withKey(`${API}/files/${fileId}?alt=media`, cred), { method: 'GET' }, cred)
+    return res.text()
+  } catch (e) {
+    if (cred.mode === 'auto' && isNoGrantRead(e)) {
+      return readFile(fileId, { mode: 'key', apiKey: getGlobalApiKey() ?? '' })
+    }
+    throw e
+  }
 }
 
 /** Whole-file JSON write (uploadType=media). Drive creates a new revision per write. */
