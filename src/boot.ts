@@ -3,14 +3,13 @@
 // already signed in) → session restore → poller → draft-recovery check.
 
 import { config } from './config'
-import { readFile, setGlobalApiKey, DriveError } from './drive/client'
+import { readFile, setGlobalApiKey, DriveError, hasBearer } from './drive/client'
 import { findWorkspace } from './drive/bootstrap'
 import { parseDoc } from './types/schema'
 import { storeGet } from './sync/store'
 import { rememberIds, recallIds, loadDraft } from './sync/drafts'
 import { restoreSession } from './auth/session'
 import { startPolling } from './sync/poller'
-import { isSignedIn, requestToken } from './auth/tokenClient'
 import { originCheck } from './diagnostics/health'
 
 export interface BootParams {
@@ -64,12 +63,6 @@ export async function boot(): Promise<void> {
   let nexusId = config.nexusFileId || recallIds()?.nexusFileId || ''
 
   try {
-    // Quietly try to reuse a live Google session so returning editors read via
-    // bearer immediately (never pops up — 8s cap so boot never hangs).
-    if (!isSignedIn()) {
-      await requestToken({ silentOnly: true }).catch(() => {})
-    }
-
     if (!nexusId && rootId) {
       const ws = await findWorkspace(rootId, { mode: 'key', apiKey: effectiveKey() })
       if (ws?.nexusFileId) nexusId = ws.nexusFileId
@@ -108,7 +101,7 @@ function effectiveKey(): string {
 
 async function initialRead(nexusId: string): Promise<'ok' | 'corrupt' | 'none'> {
   const store = storeGet()
-  const cred: Parameters<typeof readFile>[1] = isSignedIn()
+  const cred: Parameters<typeof readFile>[1] = hasBearer()
     ? { mode: 'auto' }
     : { mode: 'key', apiKey: effectiveKey() }
   try {

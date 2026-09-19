@@ -7,14 +7,13 @@
 // reconnect (queued, never dropped).
 
 import { config } from '../config'
-import { DriveError, backoffRetry, getMeta, readFile, writeFileJson, copyFile } from '../drive/client'
+import { DriveError, backoffRetry, getMeta, readFile, writeFileJson, copyFile, hasBearer, setGlobalBearer } from '../drive/client'
 import { emptyDoc, parseDoc, type NexusDoc } from '../types/schema'
 import { hlcNow, observeHlc } from '../util/hlc'
 import { mergeRemote, gcTombstones } from './merge'
 import { loadDraft, clearDraft, saveDraft } from './drafts'
 import { storeGet, useStore } from './store'
 import { ensureSnapshotsFolder } from '../drive/bootstrap'
-import { getBearerToken, clearToken } from '../auth/tokenClient'
 import { canWrite } from '../auth/session'
 import { writerId, sessionActor } from './identity'
 
@@ -137,7 +136,7 @@ async function saveLoop(): Promise<boolean> {
   const cred = { mode: 'bearer' as const }
 
   if (tokenUnavailable()) {
-    storeGet().setStatus('reconnect', 'Sign in with Google to continue writing')
+    storeGet().setStatus('reconnect', 'Sign in to continue writing')
     return false
   }
 
@@ -181,12 +180,12 @@ async function saveLoop(): Promise<boolean> {
     } catch (err) {
       if (err instanceof DriveError) {
         if (err.kind === 'auth') {
-          clearToken() // drop the dead token — un-hides "Connect Google" immediately
-          storeGet().setStatus('reconnect', 'Google session expired — click Reconnect to continue')
+          setGlobalBearer(null) // drop the dead session token so sign-in is offered again
+          storeGet().setStatus('reconnect', 'Session expired — sign in again to continue')
           return false
         }
         if (err.kind === 'notFound') {
-          storeGet().setStatus('blocked', 'Workspace file not found with your Google account — re-run setup or check sign-in')
+          storeGet().setStatus('blocked', 'Workspace file not found — re-run setup or check sign-in')
           return false
         }
         // rateLimit/network already retried by backoffRetry; give up for now — edits stay queued
@@ -205,7 +204,7 @@ async function saveLoop(): Promise<boolean> {
 }
 
 function tokenUnavailable(): boolean {
-  return getBearerToken() === null
+  return !hasBearer()
 }
 
 async function writeWholeDoc(nexusId: string, cred: { mode: 'bearer' }): Promise<void> {
@@ -320,7 +319,7 @@ export async function applyRemoteIfChanged(
   if (scratch.size === 0) {
     if (storeGet().status !== 'ok' && storeGet().status !== 'saving') storeGet().setStatus('ok', null)
   } else if (storeGet().status === 'queued' || storeGet().status === 'reconnect') {
-    if (getBearerToken() !== null) void flush() // reads work again — retry the pending writes now
+    if (hasBearer()) void flush() // reads work again — retry the pending writes now
   }
   return 'applied'
 }

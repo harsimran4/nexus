@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { requestToken, isSignedIn, onTokenChange } from '../../auth/tokenClient'
+import { requestToken, isSignedIn, onTokenChange, getBearerToken } from '../../auth/tokenClient'
 import { hashPassword, mintToken, passwordPolicyError } from '../../auth/hashing'
 import { createWorkspace, initialDoc } from '../../drive/bootstrap'
 import { type NexusDoc } from '../../types/schema'
@@ -71,13 +71,13 @@ export function Init(): React.JSX.Element {
       // corrupted). In that case we reset: reuse the same root folder and
       // write a fresh database into it.
       const { findWorkspace } = await import('../../drive/bootstrap')
-      const existing = await findWorkspace('', { mode: 'bearer' })
+      const existing = await findWorkspace('', { mode: 'google', bearer: getBearerToken() })
       let existingRootId: string | null = null
       let oldBrokenNexusId: string | null = null
       if (existing?.rootFolderId) {
         if (existing.nexusFileId) {
           const { readFile } = await import('../../drive/client')
-          const raw = await readFile(existing.nexusFileId, { mode: 'bearer' }).catch(() => null)
+          const raw = await readFile(existing.nexusFileId, { mode: 'google', bearer: getBearerToken() }).catch(() => null)
           const parsed = raw ? (await import('../../types/schema')).parseDoc(raw) : null
           if (parsed?.ok) {
             setError(
@@ -109,11 +109,11 @@ export function Init(): React.JSX.Element {
       ]
       doc.writerId = `bootstrap|${newDeviceId()}|init`
       doc.updatedAt = hlcNow()
-      const ws = await createWorkspace(doc, { mode: 'bearer' }, existingRootId)
+      const ws = await createWorkspace(doc, { mode: 'google', bearer: getBearerToken() }, existingRootId)
       if (oldBrokenNexusId && oldBrokenNexusId !== ws.nexusFileId) {
         // The unreadable old database goes to Drive trash (30-day recovery).
         const { trashFile } = await import('../../drive/client')
-        await trashFile(oldBrokenNexusId, { mode: 'bearer' }).catch(() => {})
+        await trashFile(oldBrokenNexusId, { mode: 'google', bearer: getBearerToken() }).catch(() => {})
       }
       // Re-parse the fully-formed doc (with ids) so the app boots on it directly.
       const { parseDoc } = await import('../../types/schema')

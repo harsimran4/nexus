@@ -3,7 +3,6 @@ import { statusBucket, statusLabel, type NexusDoc } from '../types/schema'
 import { useStore } from '../sync/store'
 import { statusToIssue, type HealthIssue } from '../diagnostics/health'
 import { commit, flush } from '../sync/writer'
-import { clearToken, requestToken } from '../auth/tokenClient'
 
 /**
  * Merge rapid mutations (typing in an input) into ONE commit after the user
@@ -106,10 +105,8 @@ export function SyncPill(): ReactNode {
   const onClick = () => {
     if (status === 'queued') void flush()
     if (status === 'reconnect') {
-      // Click is a user gesture: drop the dead token and mint a fresh one
-      // (direct popup — no silent attempt to lose the gesture context).
-      clearToken()
-      void requestToken()
+      // Session expired — the login page is the one way back.
+      location.hash = '#/login'
     }
   }
   return (

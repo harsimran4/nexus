@@ -1,0 +1,16 @@
+{
+  "name": "nexus-drive-proxy",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "get-refresh-token": "node scripts/get-refresh-token.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  },
+  "dependencies": {
+    "hash-wasm": "^4.11.0"
+  }
+}

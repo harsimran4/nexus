@@ -1,7 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useStore } from './sync/store'
 import { boot } from './boot'
-import { requestToken, isSignedIn, onTokenChange } from './auth/tokenClient'
 import { logout, currentSession } from './auth/session'
 import { checkDraftRecovery, recommitDraft, discardDraft } from './sync/writer'
 import { runHealthChecks, type HealthIssue } from './diagnostics/health'
@@ -53,7 +52,6 @@ export function App(): ReactNode {
   const bootError = useStore((s) => s.bootError)
   const doc = useStore((s) => s.doc)
   const session = useStore((s) => s.session)
-  const [signedInGoogle, setSignedInGoogle] = useState(isSignedIn())
   const [health, setHealth] = useState<HealthIssue[]>([])
   const [draftRecovery, setDraftRecovery] = useState<string | null>(null)
   const [staleBuild, setStaleBuild] = useState(false)
@@ -64,21 +62,13 @@ export function App(): ReactNode {
         if (d) setDraftRecovery(d.savedAt)
       })
     })
-    return onTokenChange(setSignedInGoogle)
   }, [])
 
-  // GIS tokens expire ~1h with no library-side callback — re-check so the
-  // Connect button re-appears when the token goes stale.
-  useEffect(() => {
-    const t = setInterval(() => setSignedInGoogle(isSignedIn()), 60_000)
-    return () => clearInterval(t)
-  }, [])
-
-  // The moment Google connects: retry any project folders that failed to
-  // create earlier, and flush queued edits (e.g. a project created while
+  // The moment an editor/admin signs in: retry any project folders that failed
+  // to create earlier, and flush queued edits (e.g. a project created while
   // signed out) so they reach Drive instead of waiting for the next save.
   useEffect(() => {
-    if (!signedInGoogle) return
+    if (!session || session.role === 'viewer') return
     void (async () => {
       const { storeGet } = await import('./sync/store')
       const doc = storeGet().doc
@@ -92,7 +82,7 @@ export function App(): ReactNode {
       const { flush } = await import('./sync/writer')
       await flush().catch(() => {})
     })()
-  }, [signedInGoogle])
+  }, [session?.appUserId])
 
   // Stale-build detection: Pages pins the old HTML for up to 10 minutes —
   // announce instead of silently running old code.
@@ -149,7 +139,7 @@ export function App(): ReactNode {
 
   const page = renderPage(route, doc !== null)
   return (
-    <Shell signedInGoogle={signedInGoogle}>
+    <Shell>
       {staleBuild && (
         <div className="banner info">
           <div className="body">
@@ -244,7 +234,7 @@ function renderPage(route: { page: string; arg: string }, hasDoc: boolean): Reac
 
 // ---------------------------------------------------------------------------
 
-function Shell({ children, bare, signedInGoogle }: { children: ReactNode; bare?: boolean; signedInGoogle?: boolean }): ReactNode {
+function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): ReactNode {
   const session = useStore((s) => s.session)
   const route = useRoute()
   if (bare) return <div className="center-screen"><div className="center-card">{children}</div></div>
@@ -310,16 +300,6 @@ function Shell({ children, bare, signedInGoogle }: { children: ReactNode; bare?:
       </aside>
       <main className="content">
         <div className="content-header">
-          <div className="row">
-            {signedInGoogle === false && (session?.role === 'admin' || session?.role === 'editor') && (
-              <button
-                className="btn primary"
-                onClick={() => void requestToken()}
-              >
-                Connect Google (studio account)
-              </button>
-            )}
-          </div>
           <SyncPill />
         </div>
         {children}

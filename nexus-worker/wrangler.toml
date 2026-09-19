@@ -1,0 +1,16 @@
+name = "nexus-drive-proxy"
+main = "src/index.js"
+compatibility_date = "2024-11-01"
+
+[vars]
+# Not secret — the id of nexus.json on Drive (from your .env.local today).
+NEXUS_FILE_ID = "1MtKUI17SGfL5sPVonaBWAi4TS425G8AW"
+# Once your GitHub Pages site is live, lock CORS down to it, e.g.
+# ALLOWED_ORIGIN = "https://yourname.github.io"
+ALLOWED_ORIGIN = "*"
+
+# Secrets — set these with `wrangler secret put NAME`, never commit them:
+#   GOOGLE_CLIENT_ID
+#   GOOGLE_CLIENT_SECRET
+#   GOOGLE_REFRESH_TOKEN
+#   SESSION_SECRET

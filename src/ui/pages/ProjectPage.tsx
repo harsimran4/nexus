@@ -10,7 +10,6 @@ import {
   updateScript,
   uploadToProject,
 } from '../../state/actions'
-import { isSignedIn } from '../../auth/tokenClient'
 import { describeError, downloadToBrowser } from '../../drive/preview'
 import { getMeta, renameFile, thumbnailUrl, webViewLink } from '../../drive/client'
 import { navigate } from '../../App'
@@ -289,7 +288,6 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
           />
         </div>
       )}
-      {!isSignedIn() && writable && banner('warn', 'Not connected to Google', 'Click "Connect Google (studio account)" in the top bar to enable uploads.')}
     </div>
   )
 }

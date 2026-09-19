@@ -56,7 +56,7 @@ function oldestByCreated(files: { id: string; createdTime?: string }[]): { id: s
 }
 
 /** Find-or-create one of the system folders by its fixed name inside the root. */
-async function ensureSystemFolder(rootId: string, name: string, cred: { mode: 'bearer' }): Promise<string> {
+async function ensureSystemFolder(rootId: string, name: string, cred: Credential): Promise<string> {
   const res = await listChildren(rootId, cred, { query: FOLDER_MIME + ` and name = '${name}'` })
   if (res.files.length > 0) return res.files[0].id
   const folder = await createFolder(name, rootId, cred)
@@ -64,7 +64,7 @@ async function ensureSystemFolder(rootId: string, name: string, cred: { mode: 'b
 }
 
 /** Ensure all system folders exist; returns their IDs. */
-export async function ensureSystemFolders(rootId: string, cred: { mode: 'bearer' }): Promise<SystemFolders> {
+export async function ensureSystemFolders(rootId: string, cred: Credential): Promise<SystemFolders> {
   const names: (keyof SystemFolders)[] = ['master', 'snapshots', 'groups', 'scripts']
   const out: SystemFolders = {}
   for (const name of names) {
@@ -75,7 +75,7 @@ export async function ensureSystemFolders(rootId: string, cred: { mode: 'bearer'
 
 /** One-time migration for pre-layout workspaces: create missing system
  *  folders, move nexus.json into master/, record everything. */
-export async function migrateWorkspaceFolders(cred: { mode: 'bearer' }): Promise<{ movedNexus: boolean; created: string[] }> {
+export async function migrateWorkspaceFolders(cred: Credential): Promise<{ movedNexus: boolean; created: string[] }> {
   const { storeGet, useStore } = await import('../sync/store')
   const doc = storeGet().doc
   if (!doc) throw new Error('Workspace not loaded')
@@ -125,7 +125,7 @@ export function workspaceUsesSystemFolders(doc: NexusDoc): boolean {
  *  link-share, system folders, nexus.json in master/. */
 export async function createWorkspace(
   doc: NexusDoc,
-  cred: { mode: 'bearer' },
+  cred: Credential,
   existingRootId?: string | null,
 ): Promise<Workspace> {
   let shared = true
@@ -178,7 +178,7 @@ export async function createWorkspace(
   }
 }
 
-async function rewriteDoc(doc: NexusDoc, nexusId: string, cred: { mode: 'bearer' }): Promise<void> {
+async function rewriteDoc(doc: NexusDoc, nexusId: string, cred: Credential): Promise<void> {
   const { writeFileJson } = await import('./client')
   await writeFileJson(nexusId, JSON.stringify(doc), cred)
 }
@@ -188,25 +188,25 @@ export function initialDoc(): NexusDoc {
 }
 
 /** Resolve the snapshots folder: recorded ID → find-or-create by name. */
-export async function ensureSnapshotsFolder(doc: NexusDoc, cred: { mode: 'bearer' }): Promise<string> {
+export async function ensureSnapshotsFolder(doc: NexusDoc, cred: Credential): Promise<string> {
   if (doc.ids.systemFolders?.snapshots) return doc.ids.systemFolders.snapshots
   return ensureSystemFolder(doc.ids.rootFolderId, 'snapshots', cred)
 }
 
 /** Resolve the scripts folder (milestone copies + script bodies). */
-export async function ensureScriptsFolder(doc: NexusDoc, cred: { mode: 'bearer' }): Promise<string> {
+export async function ensureScriptsFolder(doc: NexusDoc, cred: Credential): Promise<string> {
   if (doc.ids.systemFolders?.scripts) return doc.ids.systemFolders.scripts
   return ensureSystemFolder(doc.ids.rootFolderId, 'scripts', cred)
 }
 
 /** Resolve the groups parent folder (contains one subfolder per group). */
-export async function ensureGroupsFolder(doc: NexusDoc, cred: { mode: 'bearer' }): Promise<string> {
+export async function ensureGroupsFolder(doc: NexusDoc, cred: Credential): Promise<string> {
   if (doc.ids.systemFolders?.groups) return doc.ids.systemFolders.groups
   return ensureSystemFolder(doc.ids.rootFolderId, 'groups', cred)
 }
 
 /** Duplicate nexus.json (bootstrap race) — keep the oldest, trash the rest. */
-export async function quarantineDuplicates(rootFolderId: string, keepId: string, cred: { mode: 'bearer' }): Promise<number> {
+export async function quarantineDuplicates(rootFolderId: string, keepId: string, cred: Credential): Promise<number> {
   const res = await listChildren(rootFolderId, cred, { query: "name = 'nexus.json'" })
   let trashed = 0
   for (const f of oldestByCreatedAll(res.files)) {
