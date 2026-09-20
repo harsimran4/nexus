@@ -6,7 +6,7 @@ import { canWrite } from '../../auth/session'
 import { createScript, deleteScript, readScriptBody, saveScriptBody, setScriptStatus, updateScript } from '../../state/actions'
 import { clearScriptDraft, loadScriptDraft, saveScriptDraft } from '../../sync/drafts'
 import { renderMarkdown } from '../../util/markdown'
-import { webViewLink } from '../../drive/client'
+import { downloadToBrowser } from '../../drive/preview'
 import { Empty, Modal, banner, PageQuote } from '../components'
 
 // Scripts run on their own draft → review → final ladder (not the item
@@ -218,26 +218,31 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
     }
   }, [id])
 
-  const save = () => {
-    if (!canWrite() || !dirty || saveState === 'saving') return
+  /** Persists the body when dirty. Resolves false when the save failed (the
+   *  error is already on screen) — callers must not continue past a failure. */
+  const save = async (): Promise<boolean> => {
+    if (saveState === 'saving') return false
+    if (!dirty) return true // nothing unsaved — the Drive copy is current
+    if (!canWrite()) return false
     setSaveState('saving')
     setSaveError(null)
-    void saveScriptBody(id, body)
-      .then((r) => {
-        if (r.ok) {
-          bodyDrafts.delete(id)
-          void clearScriptDraft(id)
-          setDirty(false)
-          setSaveState('saved')
-        } else {
-          setSaveError(r.error)
-          setSaveState('error')
-        }
-      })
-      .catch((e: unknown) => {
-        setSaveError(e instanceof Error ? e.message : 'Save failed')
-        setSaveState('error')
-      })
+    try {
+      const r = await saveScriptBody(id, body)
+      if (r.ok) {
+        bodyDrafts.delete(id)
+        void clearScriptDraft(id)
+        setDirty(false)
+        setSaveState('saved')
+        return true
+      }
+      setSaveError(r.error)
+      setSaveState('error')
+      return false
+    } catch (e: unknown) {
+      setSaveError(e instanceof Error ? e.message : 'Save failed')
+      setSaveState('error')
+      return false
+    }
   }
 
   // Ctrl+S / Cmd+S saves from anywhere in the editor.
@@ -275,6 +280,10 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
     void (async () => {
       setStatusBusy(true)
       try {
+        // Milestone copies (review/final) snapshot the Drive body — unsaved
+        // in-editor edits must be written first or the copy loses them.
+        const saved = await save()
+        if (!saved) return
         await setScriptStatus(id, next)
       } catch {
         /* actions assert the role; read-only UI never reaches here */
@@ -341,9 +350,6 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
         <div className="field">
           <label>Body — stored as a Drive doc</label>
           <div className="row wrap">
-            <a className="btn small" href={webViewLink(script.storage.fileId)} target="_blank" rel="noreferrer">
-              Open in Drive
-            </a>
             <span className="mono small muted" style={{ wordBreak: 'break-all' }}>
               {script.storage.fileId}
             </span>
@@ -365,7 +371,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
                 Preview
               </button>
               {writable && (
-                <button className="btn primary small" disabled={!dirty || saveState === 'saving'} onClick={save}>
+                <button className="btn primary small" disabled={!dirty || saveState === 'saving'} onClick={() => void save()}>
                   {saveState === 'saving' ? 'Saving…' : 'Save body'}
                 </button>
               )}
@@ -412,9 +418,14 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
           >
             <span className="row">
               <span className={`badge ${c.label === 'final' ? 'done' : 'doing'}`}>{c.label}</span>
-              <a href={webViewLink(c.fileId)} target="_blank" rel="noreferrer">
-                Open copy
-              </a>
+              <button
+                className="btn ghost small"
+                onClick={() =>
+                  void downloadToBrowser(c.fileId, `${script.title || 'script'}-${c.label}.md`).catch(() => {})
+                }
+              >
+                Download copy
+              </button>
             </span>
             <span className="faint">{fmt(c.at)}</span>
           </div>

@@ -50,11 +50,6 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
           )}
         </div>
         <div className="row wrap">
-          {group.folderId && (
-            <a className="btn" href={`https://drive.google.com/drive/folders/${group.folderId}`} target="_blank" rel="noreferrer">
-              Open in Drive
-            </a>
-          )}
           <button className="btn" disabled={!writable} onClick={() => setRenameOpen(true)}>Rename</button>
           <button className="btn danger" disabled={!writable} onClick={() => setDeleteOpen(true)}>Delete</button>
         </div>

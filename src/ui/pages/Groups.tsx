@@ -76,17 +76,6 @@ export function Groups(): React.JSX.Element {
                 >
                   Delete
                 </button>
-                {g.folderId && (
-                  <a
-                    className="btn small ghost"
-                    href={`https://drive.google.com/drive/folders/${g.folderId}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    Drive ↗
-                  </a>
-                )}
               </div>
             </div>
           ))}

@@ -149,6 +149,7 @@ export async function deleteGroupCascade(groupId: string): Promise<{ projects: n
 export async function createProject(fields: {
   groupId: string
   name: string
+  status?: string
   description?: string
   labels?: string[]
   assigneeAppId?: string | null
@@ -166,7 +167,7 @@ export async function createProject(fields: {
       groupId: fields.groupId,
       name: fields.name,
       folderId: null,
-      status: defaultStatus(doc),
+      status: fields.status ?? defaultStatus(doc),
       labels: fields.labels ?? [],
       fileIds: [],
       assigneeAppId: fields.assigneeAppId ?? null,
@@ -405,8 +406,12 @@ export function updateScript(id: string, fields: Partial<Pick<Script, 'title' | 
   commit((doc) => {
     const s = doc.scripts[id]
     if (!s) return
+    const changed = (Object.keys(fields) as (keyof typeof fields)[]).filter(
+      (k) => s[k as keyof Script] !== fields[k],
+    )
     Object.assign(s, fields)
     touch('scripts', s)
+    if (changed.length > 0) appendActivity(doc, 'script.update', id, { fields: changed })
   })
 }
 
@@ -540,6 +545,7 @@ export async function createAppUser(
     raw = secret
   }
   const id = newUserId()
+  const by = sessionModule().getSession()?.appUserId ?? 'pending'
   commit((doc) => {
     doc.users.app = [
       ...doc.users.app,
@@ -550,7 +556,7 @@ export async function createAppUser(
         disabled: false,
         auth,
         createdAt: hlcNow(),
-        createdBy: 'pending',
+        createdBy: by,
         updatedAt: hlcNow(),
         writerId: writerId(),
       },
@@ -662,11 +668,12 @@ export async function mintViewerToken(name: string, note = ''): Promise<{ raw: s
   assertAdmin()
   const { raw, hash } = await mintToken()
   const id = newViewerId()
+  const by = sessionModule().getSession()?.appUserId ?? 'pending'
   commit((doc) => {
     doc.users.viewers = [
       ...doc.users.viewers,
       {
-        id, name, tokenHash: hash, createdAt: hlcNow(), createdBy: 'pending',
+        id, name, tokenHash: hash, createdAt: hlcNow(), createdBy: by,
         revokedAt: null, note, updatedAt: hlcNow(), writerId: writerId(),
       },
     ]

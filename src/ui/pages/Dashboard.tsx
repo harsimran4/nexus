@@ -314,9 +314,8 @@ function QuickAddModal({
     }
     void (async () => {
       try {
-        const id = await createProject({ groupId, name: n })
-        const { setProjectStatus } = await import('../../state/actions')
-        if (presetStatus) setProjectStatus(id, presetStatus)
+        // Status rides the create — one commit/save instead of two.
+        const id = await createProject({ groupId, name: n, status: presetStatus || undefined })
         onCreated(id)
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Could not create the project')
