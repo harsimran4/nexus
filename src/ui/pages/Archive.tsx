@@ -3,13 +3,15 @@ import { useStore } from '../../sync/store'
 import { statusLabel, type Project } from '../../types/schema'
 import { decodeHlc } from '../../util/hlc'
 import { canWrite } from '../../auth/session'
-import { commit, touch, recordTombstone, appendActivity, forgetPending, writerId } from '../../sync/writer'
+import { commit, touch, recordTombstone, appendActivity, flush, forgetPending, writerId } from '../../sync/writer'
 import { unarchiveProject, updateProject } from '../../state/actions'
 import { Empty, banner, PageQuote } from '../components'
 
 /** Permanently remove from the database; tombstone prevents resurrection.
- *  Drive files were already trashed by the cascade delete (30-day recovery). */
-function purgeProject(project: Project): void {
+ *  Drive files were already trashed by the cascade delete (30-day recovery).
+ *  Writes through IMMEDIATELY (no debounce) — a refresh right after purging
+ *  must never bring the old state back. */
+async function purgeProject(project: Project): Promise<void> {
   forgetPending(project.id) // its scratch entry must not resurrect it
   commit((doc) => {
     const next = { ...doc.projects }
@@ -18,6 +20,7 @@ function purgeProject(project: Project): void {
     recordTombstone(doc, 'project', project.id, writerId())
     appendActivity(doc, 'project.purge', project.id, { name: project.name })
   })
+  await flush()
 }
 
 /** Restore a deleted project (clears the deleted marker). */
@@ -34,6 +37,8 @@ function restoreProject(project: Project): void {
 export function Archive(): React.JSX.Element {
   const doc = useStore((s) => s.doc)
   const [confirmPurge, setConfirmPurge] = useState<string | null>(null)
+  const [purgeBusy, setPurgeBusy] = useState(false)
+  const [purgeError, setPurgeError] = useState<string | null>(null)
   const [tab, setTab] = useState<'deleted' | 'archived'>('deleted')
   const writable = canWrite()
 
@@ -104,6 +109,7 @@ export function Archive(): React.JSX.Element {
 
       {tab === 'deleted' && (
         <>
+          {purgeError && banner('error', 'Purge failed', purgeError)}
           {deletedProjects.length === 0 ? (
             <Empty icon="🗄">Nothing deleted — the Archive is empty.</Empty>
           ) : (
@@ -162,13 +168,24 @@ export function Archive(): React.JSX.Element {
               <button className="btn" onClick={() => setConfirmPurge(null)}>Cancel</button>
               <button
                 className="btn danger"
-                onClick={() => {
+                disabled={purgeBusy}
+                onClick={async () => {
                   const p = deletedProjects.find((x) => x.id === confirmPurge)
-                  if (p) purgeProject(p)
+                  if (p) {
+                    setPurgeBusy(true)
+                    try {
+                      await purgeProject(p)
+                    } catch (e) {
+                      setPurgeError(e instanceof Error ? e.message : 'Purge failed')
+                      setPurgeBusy(false)
+                      return
+                    }
+                  }
                   setConfirmPurge(null)
+                  setPurgeBusy(false)
                 }}
               >
-                Purge
+                {purgeBusy ? 'Purging…' : 'Purge'}
               </button>
             </div>
           </div>
