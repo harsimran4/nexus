@@ -125,14 +125,47 @@ code { font-family: var(--mono); font-size: 12.5px; background: var(--panel-2); 
 .content-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
 .content-header .sub { color: var(--muted); font-size: 13px; margin-top: 2px; }
 
+/* mobile top bar + drawer (≤860px): the sidebar becomes a slide-in drawer
+   behind a sticky slim top bar — no more wrapping horizontal nav */
+.mobile-topbar { display: none; }
+.drawer-backdrop { display: none; }
+.drawer-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.drawer-head .drawer-close { display: none; }
+
 @media (max-width: 860px) {
   .shell { grid-template-columns: 1fr; }
-  .sidebar { position: static; height: auto; flex-direction: row; flex-wrap: wrap; align-items: center; padding: 10px; }
-  .brand { padding: 4px 8px; }
-  .nav-item { width: auto; }
-  .nav-spacer { display: none; }
-  .nav-user { border: none; padding: 4px 8px; }
-  .content { padding: 18px 14px 60px; }
+  .desktop-tools { display: none !important; }
+
+  .mobile-topbar {
+    display: flex; align-items: center; gap: 10px;
+    position: sticky; top: 0; z-index: 40;
+    background: var(--paper-raised);
+    border-bottom: 1px solid var(--border);
+    padding: 8px 12px;
+  }
+  .hamburger { display: grid; font-size: 16px; }
+  .mobile-brand {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--serif); font-weight: 600; font-size: 17px;
+  }
+
+  .drawer-backdrop {
+    display: block;
+    position: fixed; inset: 0; z-index: 55;
+    background: rgba(40, 36, 24, 0.45);
+  }
+  .sidebar {
+    position: fixed; top: 0; bottom: 0; left: 0;
+    width: min(78vw, 300px); height: 100vh;
+    transform: translateX(-105%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+  }
+  .sidebar.drawer-open { transform: none; box-shadow: 0 0 44px rgba(30, 27, 18, 0.4); }
+  .drawer-head .drawer-close { display: grid; }
+  .nav-item { min-height: 44px; }
+
+  .content { padding: 16px 12px 60px; }
 }
 
 /* ---- primitives ---- */
@@ -396,17 +429,55 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 [data-theme='dark'] .folder-card:hover::before { background: #3f3a2d; }
 [data-theme='dark'] .code, [data-theme='dark'] code { background: var(--panel-2); }
 
-/* ---- small screens -------------------------------------------------------- */
+/* ---- small screens: vertical board, compact controls, zero horizontal scroll */
 
 @media (max-width: 640px) {
-  h1 { font-size: 22px; }
-  .content { padding: 14px 10px 60px; }
-  .kanban { grid-auto-columns: 82vw; scroll-snap-type: x mandatory; }
-  .kanban-col { scroll-snap-align: start; }
-  .table { display: block; overflow-x: auto; }
-  .modal { padding: 14px; }
-  .modal-backdrop { padding: 4vh 8px 12px; }
-  .item-card { margin: 10px 2px; }
+  body { font-size: 15px; overflow-x: hidden; }
+  h1 { font-size: 21px; }
+  h2 { font-size: 17px; }
+  .small { font-size: 13px; }
+  .badge { font-size: 12px; }
+
+  .content { padding: 12px 10px 60px; }
+  .card { padding: 12px; }
+  .content-header { flex-direction: column; align-items: stretch; gap: 8px; margin-bottom: 10px; }
+  .content-header .row { flex-wrap: wrap; gap: 8px; }
+  .content-header .row .btn { flex: 1 1 auto; }
+  .btn { min-height: 36px; }
+  .input, select.input { min-height: 38px; }
+  /* inline max-widths are desktop hints — on phones every input fills its row */
+  .card .input { max-width: 100% !important; }
+  .content-header select.input { max-width: 100% !important; flex: 1; }
+
+  /* board filters: 2-column grid instead of a tall control stack */
+  .board-filters { padding: 10px; }
+  .board-filters .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .board-filters .row > .input:first-child,
+  .board-filters .chips,
+  .board-filters .row > button.chip { grid-column: 1 / -1; }
+  .board-filters .row > select.input { max-width: 100% !important; }
+
+  /* kanban becomes stacked sections — no sideways scrolling on a phone */
+  .kanban { display: flex; flex-direction: column; gap: 12px; }
+  .kanban-col { min-height: auto; padding: 10px; }
+  .kanban-col-head { transform: none; margin-bottom: 10px; padding: 2px 8px; }
+  .item-card, .photo-frame { rotate: 0deg; }
+  .item-card:hover { rotate: 0deg; transform: none; }
+  .item-card { margin: 8px 2px; }
+
+  /* tables wrap instead of scrolling sideways */
+  .table { table-layout: fixed; word-break: break-word; }
+  .table th, .table td { padding: 7px 6px; }
+  .table td .row { flex-wrap: wrap; }
+
+  .photo-frame { padding: 8px; }
+  .media-grid { grid-template-columns: repeat(2, 1fr) !important; }
+  .project-tab { display: block; }
+  .modal { padding: 14px; max-height: 86vh; overflow-y: auto; }
+  .modal-backdrop { padding: 3vh 8px 12px; }
+  .ticket-grid { grid-template-columns: 1fr; }
+  .page-quote { display: none; }
+  .footer { font-size: 12px; gap: 10px; }
 }
 
 /* ---- Groups page: manila folders ---- */
@@ -567,23 +638,4 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 .stamp-red { color: var(--red); }
 .stamp-ink { color: var(--muted); }
 
-/* Admin: the clipboard holder */
-.clipboard { position: relative; }
-.clipboard::before {
-  content: '';
-  position: absolute; top: -13px; left: 50%; transform: translateX(-50%);
-  width: 96px; height: 25px; z-index: 1;
-  background: linear-gradient(180deg, #dcdcdc, #9c9c9c);
-  border: 1px solid #868686;
-  border-radius: 6px 6px 10px 10px;
-  box-shadow: 0 2px 5px rgba(60, 54, 38, 0.3);
-}
-.clipboard::after {
-  content: '';
-  position: absolute; top: -6px; left: 50%; transform: translateX(-50%);
-  width: 46px; height: 9px; z-index: 1;
-  background: radial-gradient(ellipse at center, #6f6f6f, #3f3f3f);
-  border-radius: 5px;
-}
-[data-theme='dark'] .clipboard::before { background: linear-gradient(180deg, #4c4e57, #32343b); border-color: #232429; }
-[data-theme='dark'] .clipboard::after { background: radial-gradient(ellipse at center, #55575f, #292b30); }
+/* Admin page: intentionally unadorned — the clipboard clip tested poorly. */

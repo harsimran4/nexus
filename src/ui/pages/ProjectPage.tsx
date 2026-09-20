@@ -179,7 +179,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
       {project.fileIds.length === 0 ? (
         <Empty icon="🖼">No media yet — upload below.</Empty>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 14 }}>
+        <div className="media-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 14 }}>
           {project.fileIds.map((f) => {
             const info = meta[f]
             const displayName = renamingId === f ? renameValue : info?.name ?? f

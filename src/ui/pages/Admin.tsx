@@ -82,7 +82,7 @@ export function Admin(): React.JSX.Element {
   }
 
   return (
-    <div className="clipboard">
+    <div>
       <div className="content-header" style={{ marginTop: 10 }}>
         <div>
           <h1>Admin</h1>

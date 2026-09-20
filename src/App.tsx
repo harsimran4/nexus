@@ -238,6 +238,20 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
   const session = useStore((s) => s.session)
   const route = useRoute()
   const [, setThemeTick] = useState(0)
+  const [menuOpen, setMenuOpen] = useState(false)
+
+  // The mobile drawer closes whenever the route changes or Escape is pressed.
+  useEffect(() => {
+    setMenuOpen(false)
+  }, [route.page, route.arg])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMenuOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   if (bare) return <div className="center-screen"><div className="center-card">{children}</div></div>
 
   const icon = (paths: React.JSX.Element): React.JSX.Element => (
@@ -254,15 +268,24 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
   ]
   return (
     <div className="shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="brand-dot" /> Nexus
+      {menuOpen && <div className="drawer-backdrop" onClick={() => setMenuOpen(false)} />}
+      <aside className={`sidebar ${menuOpen ? 'drawer-open' : ''}`}>
+        <div className="drawer-head">
+          <div className="brand">
+            <span className="brand-dot" /> Nexus
+          </div>
+          <button className="icon-btn drawer-close" aria-label="Close menu" onClick={() => setMenuOpen(false)}>
+            ✕
+          </button>
         </div>
         {nav.map((n) => (
           <button
             key={n.id}
             className={`nav-item ${route.page === n.id || (n.id === 'dash' && route.page === 'project') ? 'active' : ''}`}
-            onClick={() => navigate(n.id)}
+            onClick={() => {
+              navigate(n.id)
+              setMenuOpen(false)
+            }}
           >
             <span className="icon">{n.icon}</span> {n.label}
           </button>
@@ -300,8 +323,31 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
         </div>
       </aside>
       <main className="content">
+        <div className="mobile-topbar">
+          <button className="icon-btn hamburger" aria-label="Open menu" onClick={() => setMenuOpen(true)}>
+            ☰
+          </button>
+          <div className="mobile-brand">
+            <span className="brand-dot" /> Nexus
+          </div>
+          <button
+            className="icon-btn"
+            style={{ marginLeft: 'auto' }}
+            title="Toggle light/dark theme"
+            aria-label="Toggle light/dark theme"
+            onClick={() => {
+              const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'
+              document.documentElement.dataset.theme = next
+              localStorage.setItem('nexus.theme', next)
+              document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', next)
+              setThemeTick((t) => t + 1)
+            }}
+          >
+            {document.documentElement.dataset.theme === 'dark' ? '☀️' : '🌙'}
+          </button>
+        </div>
         <div className="content-header">
-          <div className="row" style={{ marginLeft: 'auto' }}>
+          <div className="row desktop-tools" style={{ marginLeft: 'auto' }}>
             <button
               className="icon-btn"
               title="Toggle light/dark theme"

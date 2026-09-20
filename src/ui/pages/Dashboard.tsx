@@ -104,7 +104,7 @@ export function Dashboard(): React.JSX.Element {
       </div>
 
       <PageQuote topic="board" />
-      <div className="card mb8">
+      <div className="card mb8 board-filters">
         <div className="row wrap">
           <input
             className="input"
