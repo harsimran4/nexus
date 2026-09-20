@@ -525,15 +525,17 @@ export async function createAppUser(
   assertAdmin()
   let auth: NexusDoc['users']['app'][number]['auth']
   let raw: string
+  const salt = storeGet().doc?.settings.authStretchSalt
+  if (!salt) throw new Error('Workspace predates stretched logins — ask an admin to re-save this login')
   if (secret === undefined) {
     const minted = await mintToken()
-    auth = { kind: 'token', hash: minted.hash }
+    // Tokens stretch too: loginWithSecret stretches whatever is typed, so the
+    // stored hash must be sha256(stretch(raw)) — same protocol as passwords.
+    auth = await stretchedAuth(minted.raw, salt)
     raw = minted.raw
   } else {
     const policyError = passwordPolicyError(secret)
     if (policyError) throw new Error(policyError)
-    const salt = storeGet().doc?.settings.authStretchSalt
-    if (!salt) throw new Error('Workspace predates stretched logins — ask an admin to re-save this login')
     auth = await stretchedAuth(secret, salt)
     raw = secret
   }
@@ -626,15 +628,15 @@ export async function resetUserPassword(userId: string, secret: string | undefin
   assertAdmin()
   let auth: NexusDoc['users']['app'][number]['auth']
   let raw: string
+  const salt = storeGet().doc?.settings.authStretchSalt
+  if (!salt) throw new Error('Workspace predates stretched logins — ask an admin to re-save this login')
   if (secret === undefined) {
     const minted = await mintToken()
-    auth = { kind: 'token', hash: minted.hash }
+    auth = await stretchedAuth(minted.raw, salt)
     raw = minted.raw
   } else {
     const policyError = passwordPolicyError(secret)
     if (policyError) throw new Error(policyError)
-    const salt = storeGet().doc?.settings.authStretchSalt
-    if (!salt) throw new Error('Workspace predates stretched logins — ask an admin to re-save this login')
     auth = await stretchedAuth(secret, salt)
     raw = secret
   }

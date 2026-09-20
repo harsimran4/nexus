@@ -39,7 +39,7 @@ export function Init(): React.JSX.Element {
     let rawSecret: string
     if (secretMode === 'token') {
       const minted = await mintToken()
-      auth = { kind: 'token', hash: minted.hash }
+      auth = await stretchedAuth(minted.raw, stretchSalt)
       rawSecret = minted.raw
     } else {
       const policy = passwordPolicyError(password)
