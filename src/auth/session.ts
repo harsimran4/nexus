@@ -44,6 +44,22 @@ async function loginWithSecret(secret: string): Promise<{ ok: true; session: Ses
   const trimmed = secret.trim()
   if (!trimmed) return { ok: false, error: 'Enter your access token or password' }
 
+  // Viewer capability tokens log in LOCALLY (localStorage persistence so the
+  // session survives browser restarts, and the poller re-checks revocation) —
+  // exactly as they always have. App users — ANY role — go through the Worker.
+  const tokenHash = 'sha256$' + (await sha256Hex(trimmed))
+  const localViewer = doc.users.viewers.find((v) => !v.revokedAt && v.tokenHash === tokenHash)
+  if (localViewer) {
+    try {
+      localStorage.setItem(VIEWER_KEY, trimmed)
+    } catch {
+      /* ignore */
+    }
+    const session: Session = { appUserId: localViewer.id, name: localViewer.name, role: 'viewer' }
+    useStore.setState({ session })
+    return { ok: true, session }
+  }
+
   // Browser-side key stretching: the Worker only ever sees K (never the
   // secret) and sha256-compares it against stored hashes — no KDF server-side
   // (workerd caps PBKDF2 at 100k iterations / 10ms CPU).
@@ -66,23 +82,20 @@ async function loginWithSecret(secret: string): Promise<{ ok: true; session: Ses
       })
       if (res.ok) {
         const data = (await res.json()) as { token: string; role: Role; name: string; uid?: string }
-        if (data.role !== 'viewer') {
-          setGlobalBearer(data.token)
-          try {
-            sessionStorage.setItem(WORKER_TOKEN_KEY, data.token)
-          } catch {
-            /* ignore */
-          }
-          // uid is the doc's real user id (self-guards + activity attribution
-          // key off it); older workers only sent the name.
-          const session: Session = { appUserId: data.uid ?? `worker:${data.name}`, name: data.name, role: data.role }
-          writeSession(session)
-          useStore.setState({ session })
-          return { ok: true, session }
+        setGlobalBearer(data.token)
+        try {
+          sessionStorage.setItem(WORKER_TOKEN_KEY, data.token)
+        } catch {
+          /* ignore */
         }
-        // Worker also recognizes viewer tokens; fall through to the shared
-        // local viewer path so behaviour (localStorage key, revocation checks
-        // on poll) stays exactly as it was.
+        // uid is the doc's real user id (self-guards + activity attribution
+        // key off it); older workers only sent the name. App users with the
+        // viewer role get real signed sessions too — they are users.app
+        // entries, not Viewers-tab capability tokens.
+        const session: Session = { appUserId: data.uid ?? `worker:${data.name}`, name: data.name, role: data.role }
+        writeSession(session)
+        useStore.setState({ session })
+        return { ok: true, session }
       }
     } catch {
       // Worker unreachable — surface this clearly rather than silently
@@ -91,21 +104,8 @@ async function loginWithSecret(secret: string): Promise<{ ok: true; session: Ses
     }
   }
 
-  // Viewer capability tokens (unchanged local check).
-  const tokenHash = 'sha256$' + (await sha256Hex(trimmed))
-  for (const viewer of doc.users.viewers) {
-    if (viewer.revokedAt) continue
-    if (viewer.tokenHash === tokenHash) {
-      try {
-        localStorage.setItem(VIEWER_KEY, trimmed)
-      } catch {
-        /* ignore */
-      }
-      const session: Session = { appUserId: viewer.id, name: viewer.name, role: 'viewer' }
-      useStore.setState({ session })
-      return { ok: true, session }
-    }
-  }
+  // (Local viewer tokens were handled above — anything reaching this line had
+  // no matching credential.)
 
   return { ok: false, error: 'No matching login — check the token/password, or ask an admin' }
 }
@@ -166,10 +166,15 @@ async function verifyViewer(): Promise<void> {
 }
 
 export function logout(): void {
+  // A viewer signing out means it: clear their persisted token too, or the
+  // poller silently logs them back in within seconds. (An EDITOR signing out
+  // still leaves a viewer token alone — shared-machine courtesy.)
+  const wasViewer = storeGet().session?.role === 'viewer'
   useStore.setState({ session: null })
   try {
     sessionStorage.removeItem(SESSION_KEY)
     sessionStorage.removeItem(WORKER_TOKEN_KEY)
+    if (wasViewer) localStorage.removeItem(VIEWER_KEY)
   } catch {
     /* ignore */
   }
