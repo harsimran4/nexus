@@ -18,7 +18,10 @@
 import { compareHlc, lwwWinner } from '../util/hlc'
 import type { ActivityEvent, NexusDoc, Tombstone } from '../types/schema'
 
-const RING_CAP = 1500
+// Activity ring: the fastest-growing section of the doc (every action logs an
+// event, and each edit re-uploads the whole file). 300 recent events is ample
+// history for the feed while keeping nexus.json lean.
+const RING_CAP = 300
 
 function isRec(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
