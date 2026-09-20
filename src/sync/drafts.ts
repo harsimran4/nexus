@@ -77,6 +77,35 @@ export async function takeRecovery(): Promise<{ doc: NexusDoc; savedAt: string }
   }
 }
 
+// --- unsaved script bodies (survive tab closes, like entity drafts) ---
+
+const SCRIPT_DRAFT_PREFIX = 'scriptDraft:'
+
+export async function loadScriptDraft(id: string): Promise<string | null> {
+  try {
+    const v = await idbRun<{ body: string } | undefined>('readonly', (s) => s.get(SCRIPT_DRAFT_PREFIX + id))
+    return v?.body ?? null
+  } catch {
+    return null
+  }
+}
+
+export async function saveScriptDraft(id: string, body: string): Promise<void> {
+  try {
+    await idbRun('readwrite', (s) => s.put({ body, savedAt: new Date().toISOString() }, SCRIPT_DRAFT_PREFIX + id))
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function clearScriptDraft(id: string): Promise<void> {
+  try {
+    await idbRun('readwrite', (s) => s.delete(SCRIPT_DRAFT_PREFIX + id))
+  } catch {
+    /* ignore */
+  }
+}
+
 // --- workspace-id memory (localStorage, synchronous at boot) ---
 
 export function rememberIds(ids: { rootFolderId: string; nexusFileId: string }): void {

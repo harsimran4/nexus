@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../sync/store'
 import { SCRIPT_STATUSES, type Script, type ScriptStatus } from '../../types/schema'
 import { compareHlc, decodeHlc } from '../../util/hlc'
 import { canWrite } from '../../auth/session'
 import { createScript, deleteScript, readScriptBody, saveScriptBody, setScriptStatus, updateScript } from '../../state/actions'
+import { clearScriptDraft, loadScriptDraft, saveScriptDraft } from '../../sync/drafts'
+import { renderMarkdown } from '../../util/markdown'
 import { webViewLink } from '../../drive/client'
 import { Empty, Modal, banner, PageQuote } from '../components'
 
@@ -168,7 +170,8 @@ function ScriptRow({
   )
 }
 
-// Unsaved drafts survive switching between scripts within this session.
+// Unsaved drafts survive switching between scripts within this session
+// (in-memory map, instant) AND tab closes (IndexedDB mirror, written debounced).
 const bodyDrafts = new Map<string, string>()
 
 function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => void }): React.JSX.Element {
@@ -179,24 +182,37 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
   const [statusBusy, setStatusBusy] = useState(false)
+  const [preview, setPreview] = useState(false)
+  const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const id = script.id
 
-  // Body loads from its Drive file — unless an unsaved draft exists.
+  // Body loads from its Drive file — unless an unsaved draft exists (in-memory
+  // first, then the IndexedDB mirror from a previous session).
   useEffect(() => {
     let alive = true
-    if (bodyDrafts.has(id)) {
-      setBody(bodyDrafts.get(id) ?? '')
+    const mem = bodyDrafts.get(id)
+    if (mem !== undefined) {
+      setBody(mem)
       setLoaded(true)
       return () => {
         alive = false
       }
     }
-    void readScriptBody(id).then((text) => {
+    void (async () => {
+      const stored = await loadScriptDraft(id)
+      if (!alive) return
+      if (stored !== null) {
+        setBody(stored)
+        setDirty(true)
+        setLoaded(true)
+        return
+      }
+      const text = await readScriptBody(id)
       if (alive) {
         setBody(text ?? '')
         setLoaded(true)
       }
-    })
+    })()
     return () => {
       alive = false
     }
@@ -210,6 +226,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
       .then((r) => {
         if (r.ok) {
           bodyDrafts.delete(id)
+          void clearScriptDraft(id)
           setDirty(false)
           setSaveState('saved')
         } else {
@@ -250,6 +267,8 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
     bodyDrafts.set(id, value)
     setDirty(true)
     if (saveState === 'saved') setSaveState('idle')
+    if (draftSaveTimer.current) clearTimeout(draftSaveTimer.current)
+    draftSaveTimer.current = setTimeout(() => void saveScriptDraft(id, value), 500)
   }
 
   const changeStatus = (next: ScriptStatus) => {
@@ -338,23 +357,39 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
               Body{' '}
               {dirty && saveState !== 'saving' ? '· unsaved changes' : saveState === 'saving' ? '· saving…' : saveState === 'saved' ? '· saved ✓' : saveState === 'error' ? '· save failed — press Save again' : ''}
             </label>
-            {writable && (
-              <button className="btn primary small" disabled={!dirty || saveState === 'saving'} onClick={save}>
-                {saveState === 'saving' ? 'Saving…' : 'Save body'}
+            <div className="row" style={{ gap: 6 }}>
+              <button className={`chip ${preview ? '' : 'on'}`} onClick={() => setPreview(false)} title="Edit the markdown">
+                Edit
               </button>
-            )}
+              <button className={`chip ${preview ? 'on' : ''}`} onClick={() => setPreview(true)} title="Rendered preview">
+                Preview
+              </button>
+              {writable && (
+                <button className="btn primary small" disabled={!dirty || saveState === 'saving'} onClick={save}>
+                  {saveState === 'saving' ? 'Saving…' : 'Save body'}
+                </button>
+              )}
+            </div>
           </div>
-          <textarea
-            className="input manuscript"
-            rows={14}
-            value={loaded ? body : 'Loading…'}
-            disabled={!writable || !loaded}
-            onChange={(e) => onBodyChange(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') e.preventDefault()
-            }}
-            placeholder="Write the script…"
-          />
+          {preview ? (
+            <div
+              className="input manuscript md-preview"
+              style={{ minHeight: 120 }}
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(body) }}
+            />
+          ) : (
+            <textarea
+              className="input manuscript"
+              rows={14}
+              value={loaded ? body : ''}
+              placeholder={loaded ? 'Write the script…' : 'Loading…'}
+              disabled={!writable || !loaded}
+              onChange={(e) => onBodyChange(e.target.value)}
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') e.preventDefault()
+              }}
+            />
+          )}
           <span className="faint small">
             Press Save (or Ctrl+S) to write this script to its own markdown file in Drive (scripts/) — Drive keeps a version history for it.
           </span>

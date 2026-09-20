@@ -3,9 +3,36 @@ import { useStore } from '../../sync/store'
 import type { Project } from '../../types/schema'
 import { compareHlc } from '../../util/hlc'
 import { Empty, Modal, banner, PageQuote } from '../components'
+import { ActivityFeed } from '../ActivityFeed'
 import { createProject, setProjectStatus } from '../../state/actions'
 import { canWrite } from '../../auth/session'
 import { navigate } from '../../App'
+import { thumbnailUrl } from '../../drive/client'
+
+/** Humanized due text: "due today", "due in 3d", "2d overdue". */
+export function dueInfo(dueAt: string): { text: string; overdue: boolean } {
+  const due = new Date(dueAt)
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const days = Math.round((due.getTime() - today.getTime()) / 86400000)
+  if (days < 0) return { text: `${-days}d overdue`, overdue: true }
+  if (days === 0) return { text: 'due today', overdue: false }
+  if (days === 1) return { text: 'due tomorrow', overdue: false }
+  if (days <= 7) return { text: `due in ${days}d`, overdue: false }
+  return { text: `due ${due.toLocaleDateString()}`, overdue: false }
+}
+
+/** Wobbly hand-drawn ellipse, like someone circled the date in red pen. */
+function ScribbleCircle(): React.JSX.Element {
+  return (
+    <svg className="scribble" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true">
+      <path
+        d="M10 22 C 20 8, 55 5, 78 11 C 97 16, 99 28, 74 33 C 48 38, 14 37, 6 27 C 1 21, 14 11, 34 8"
+        fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" opacity="0.5"
+      />
+    </svg>
+  )
+}
 
 export function Dashboard(): React.JSX.Element {
   const doc = useStore((s) => s.doc)
@@ -13,8 +40,10 @@ export function Dashboard(): React.JSX.Element {
   const [groupFilter, setGroupFilter] = useState<string>('')
   const [labelFilter, setLabelFilter] = useState<string>('')
   const [assigneeFilter, setAssigneeFilter] = useState<string>('')
+  const [overdueOnly, setOverdueOnly] = useState(false)
   // Quick-add: launched from the header (status = first column) or a column "+".
   const [quickAdd, setQuickAdd] = useState<{ status: string } | null>(null)
+  const [activityOpen, setActivityOpen] = useState(false)
   const [dragId, setDragId] = useState<string | null>(null)
   const [dragOverCol, setDragOverCol] = useState<string | null>(null)
   const writable = canWrite()
@@ -22,14 +51,17 @@ export function Dashboard(): React.JSX.Element {
   const projects = useMemo(() => {
     if (!doc) return []
     const q = search.trim().toLowerCase()
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
     return Object.values(doc.projects)
       .filter((p) => p.deleted === null && p.archivedAt === null)
       .filter((p) => (groupFilter ? p.groupId === groupFilter : true))
       .filter((p) => (labelFilter ? p.labels.includes(labelFilter) : true))
       .filter((p) => (assigneeFilter ? p.assigneeAppId === assigneeFilter : true))
+      .filter((p) => (overdueOnly ? p.dueAt !== null && new Date(p.dueAt) < today : true))
       .filter((p) => (q ? p.name.toLowerCase().includes(q) || p.notes.toLowerCase().includes(q) : true))
       .sort((a, b) => compareHlc(b.updatedAt, a.updatedAt))
-  }, [doc, search, groupFilter, labelFilter, assigneeFilter])
+  }, [doc, search, groupFilter, labelFilter, assigneeFilter, overdueOnly])
 
   if (!doc) return <></>
 
@@ -60,6 +92,9 @@ export function Dashboard(): React.JSX.Element {
           </div>
         </div>
         <div className="row">
+          <button className="btn" onClick={() => setActivityOpen(true)} title="Recent workspace changes">
+            Activity
+          </button>
           {writable && (
             <button className="btn primary" onClick={() => setQuickAdd({ status: doc.settings.pipeline[0]?.id ?? 'pending' })}>
               + New project
@@ -84,7 +119,7 @@ export function Dashboard(): React.JSX.Element {
           </select>
           <select className="input" style={{ maxWidth: 160 }} value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
             <option value="">Anyone</option>
-            {doc.users.app.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            {doc.users.app.filter((u) => !u.disabled).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
           {labels.length > 0 && (
             <div className="chips">
@@ -95,6 +130,9 @@ export function Dashboard(): React.JSX.Element {
               ))}
             </div>
           )}
+          <button className={`chip ${overdueOnly ? 'on' : ''}`} style={overdueOnly ? undefined : { color: 'var(--red)' }} onClick={() => setOverdueOnly(!overdueOnly)}>
+            Overdue
+          </button>
         </div>
       </div>
 
@@ -171,6 +209,12 @@ export function Dashboard(): React.JSX.Element {
           }}
         />
       )}
+
+      {activityOpen && (
+        <Modal title="Recent activity" onClose={() => setActivityOpen(false)} wide>
+          <ActivityFeed collapsedCount={30} />
+        </Modal>
+      )}
     </div>
   )
 }
@@ -195,8 +239,10 @@ function ProjectCard({
   onOpen: () => void
 }): React.JSX.Element {
   const doc = useStore((s) => s.doc)
-  const overdue = project.dueAt !== null && new Date(project.dueAt) < new Date()
+  const due = project.dueAt !== null ? dueInfo(project.dueAt) : null
+  const overdue = due?.overdue ?? false
   const assignee = project.assigneeAppId ? doc?.users.app.find((u) => u.id === project.assigneeAppId)?.name : null
+  const cover = project.fileIds[0]
   return (
     <div
       className={`item-card ${overdue ? 'overdue' : ''}`}
@@ -210,11 +256,25 @@ function ProjectCard({
       onDragEnd={onDragEnd}
       onClick={onOpen}
     >
+      {cover && (
+        <img
+          src={thumbnailUrl(cover, 400)}
+          alt=""
+          loading="lazy"
+          style={{ width: '100%', height: 64, objectFit: 'cover', borderRadius: 2, marginBottom: 7, background: 'rgba(255,255,255,0.4)' }}
+          onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
+        />
+      )}
       <div className="title">{project.name}</div>
       <div className="meta">
         {groupName && <span>{groupName}</span>}
         {assignee && <span>· {assignee}</span>}
-        {project.dueAt && <span style={overdue ? { color: 'var(--red)' } : undefined}>· due {new Date(project.dueAt).toLocaleDateString()}</span>}
+        {due && (
+          <span className="due-wrap" style={overdue ? { color: 'var(--red)', fontWeight: 650 } : undefined}>
+            {overdue && <ScribbleCircle />}
+            · {due.text}
+          </span>
+        )}
         {project.fileIds.length > 0 && <span>· 📎{project.fileIds.length}</span>}
       </div>
       {project.labels.length > 0 && (

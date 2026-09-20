@@ -45,6 +45,30 @@ function err(status, message, env) {
 }
 
 // ---------------------------------------------------------------------------
+// Login throttle — best-effort, per Cloudflare isolate (they are ephemeral and
+// numerous, so a determined distributed attack needs a WAF rule on top). This
+// still makes casual brute-force pointless: 10 FAILED attempts per IP per
+// 5 minutes; a successful login clears the IP's counter.
+// ---------------------------------------------------------------------------
+const LOGIN_WINDOW_MS = 5 * 60 * 1000
+const LOGIN_MAX_FAILURES = 10
+const loginFailures = new Map() // ip -> { count, resetAt }
+
+function loginThrottled(ip) {
+  const now = Date.now()
+  const rec = loginFailures.get(ip)
+  if (!rec || now > rec.resetAt) {
+    loginFailures.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS })
+    return false
+  }
+  rec.count += 1
+  if (loginFailures.size > 5000) {
+    for (const [k, v] of loginFailures) if (now > v.resetAt) loginFailures.delete(k)
+  }
+  return rec.count > LOGIN_MAX_FAILURES
+}
+
+// ---------------------------------------------------------------------------
 // Google access-token cache (best-effort per isolate; cheap to re-fetch)
 // ---------------------------------------------------------------------------
 let cachedAccessToken = null
@@ -180,15 +204,16 @@ async function pbkdf2Bits(password, salt, iterations) {
   return crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, key, 256)
 }
 async function verifyPassword(password, auth) {
+  // pbkdf2 only. Argon2id hashes are legacy and CANNOT be verified here:
+  // hash-wasm compiles WASM at runtime, which Workers forbid ("Wasm code
+  // generation disallowed by embedder"), and a 64 MiB KDF would also exceed
+  // the free plan's 10ms CPU budget. WebCrypto pbkdf2 is native and safe.
   try {
-    if (auth.kind === 'argon2id') {
-      const { argon2Verify } = await import('hash-wasm')
-      return await argon2Verify({ password, hash: auth.hash })
-    }
     const salt = fromB64(auth.salt)
     const key = await pbkdf2Bits(password, salt, auth.iterations)
     return toB64(new Uint8Array(key)) === auth.hash
-  } catch {
+  } catch (e) {
+    console.error('verifyPassword failed:', e && (e.message || String(e)))
     return false
   }
 }
@@ -218,7 +243,9 @@ async function handleSession(request, env) {
         exp: Date.now() + SESSION_TTL_SECONDS * 1000,
       }
       const token = await signSession(env, payload)
-      return json({ token, role: user.role, name: user.name, expiresIn: SESSION_TTL_SECONDS }, 200, env)
+      // uid = the doc's real user id — the app uses it for attribution and
+      // self-guards (e.g. "cannot disable your own account").
+      return json({ token, role: user.role, name: user.name, uid: user.id, expiresIn: SESSION_TTL_SECONDS }, 200, env)
     }
   }
 
@@ -229,7 +256,7 @@ async function handleSession(request, env) {
     if (viewer.tokenHash === tokenHash) {
       const payload = { uid: viewer.id, name: viewer.name, role: 'viewer', exp: Date.now() + SESSION_TTL_SECONDS * 1000 }
       const token = await signSession(env, payload)
-      return json({ token, role: 'viewer', name: viewer.name, expiresIn: SESSION_TTL_SECONDS }, 200, env)
+      return json({ token, role: 'viewer', name: viewer.name, uid: viewer.id, expiresIn: SESSION_TTL_SECONDS }, 200, env)
     }
   }
 
@@ -419,7 +446,13 @@ export default {
 
     try {
       if (url.pathname === '/session' && request.method === 'POST') {
-        return await handleSession(request, env)
+        const ip = request.headers.get('CF-Connecting-IP') || 'unknown'
+        if (loginThrottled(ip)) {
+          return err(429, 'Too many login attempts — wait a few minutes and try again', env)
+        }
+        const res = await handleSession(request, env)
+        if (res.ok) loginFailures.delete(ip) // a successful login forgives the IP
+        return res
       }
 
       // Resumable PUT carries its own signature, not a session bearer, since

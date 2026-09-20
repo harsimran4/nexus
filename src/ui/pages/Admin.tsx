@@ -4,12 +4,15 @@
 
 import { useState } from 'react'
 import { useStore } from '../../sync/store'
-import { banner, CopyButton, Empty, IssueBanner, Modal, TokenReveal, useDebouncedCommit } from '../components'
+import { banner, CopyButton, Empty, IssueBanner, Modal, SecretInput, TokenReveal, useDebouncedCommit } from '../components'
 import { canAdmin } from '../../auth/session'
 import {
+  changeUserRole,
   createAppUser,
+  deleteUser,
   mintViewerToken,
   resetUserPassword,
+  restoreSnapshot,
   revokeViewer,
   setApiKeyOverride,
   setUserDisabled,
@@ -20,6 +23,7 @@ import { runHealthChecks, type HealthIssue } from '../../diagnostics/health'
 import { workspaceUsesSystemFolders } from '../../drive/bootstrap'
 import { writerId } from '../../sync/writer'
 import { hlcNow } from '../../util/hlc'
+import { PageQuote } from '../components'
 
 type Tab = 'users' | 'viewers' | 'settings' | 'maintenance'
 
@@ -31,7 +35,7 @@ const TABS: { id: Tab; label: string }[] = [
 ]
 
 const loginLink = (raw: string, rootFolderId?: string): string =>
-  `https://${location.host}/#/login?vw=${raw}${rootFolderId ? `&t=${rootFolderId}` : ''}`
+  `${location.origin}/#/login?vw=${raw}${rootFolderId ? `&t=${rootFolderId}` : ''}`
 
 const slugify = (label: string): string =>
   label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
@@ -78,8 +82,8 @@ export function Admin(): React.JSX.Element {
   }
 
   return (
-    <div>
-      <div className="content-header">
+    <div className="clipboard">
+      <div className="content-header" style={{ marginTop: 10 }}>
         <div>
           <h1>Admin</h1>
           <div className="sub">
@@ -89,6 +93,8 @@ export function Admin(): React.JSX.Element {
           </div>
         </div>
       </div>
+
+      <PageQuote topic="admin" />
 
       <div className="chips mb8">
         {TABS.map((t) => (
@@ -111,6 +117,7 @@ export function Admin(): React.JSX.Element {
 // ---------------------------------------------------------------------------
 
 function UsersTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
+  const session = useStore((s) => s.session)
   const [adding, setAdding] = useState(false)
   const [resetting, setResetting] = useState<{ id: string; name: string } | null>(null)
 
@@ -126,7 +133,7 @@ function UsersTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
           No users yet — add a teammate and hand them the minted token or password.
         </Empty>
       ) : (
-        <table className="table">
+        <table className="table ledger">
           <thead>
             <tr>
               <th>Name</th>
@@ -137,40 +144,78 @@ function UsersTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
             </tr>
           </thead>
           <tbody>
-            {doc.users.app.map((u) => (
-              <tr key={u.id}>
-                <td>{u.name}</td>
-                <td><span className={`badge ${u.role === 'admin' ? 'label' : ''}`}>{u.role}</span></td>
-                <td className="muted small">{fmtWhen(u.createdAt)}</td>
-                <td>
-                  {u.disabled
-                    ? <span className="badge red">disabled</span>
-                    : <span className="badge done">active</span>}
-                </td>
-                <td>
-                  <span className="row">
-                    <button
-                      className="btn small"
-                      onClick={() => {
-                        const verb = u.disabled ? 'Enable' : 'Disable'
-                        if (confirm(`${verb} ${u.name}'s account?${!u.disabled ? ' Their active sessions sign out within one poll.' : ''}`)) {
-                          try {
-                            setUserDisabled(u.id, !u.disabled)
-                          } catch (e) {
-                            alert(e instanceof Error ? e.message : 'Action failed')
-                          }
+            {doc.users.app.map((u) => {
+              const isSelf = u.id === session?.appUserId
+              return (
+                <tr key={u.id}>
+                  <td>{u.name}{isSelf && <span className="faint small"> (you)</span>}</td>
+                  <td>
+                    <select
+                      className="input"
+                      style={{ maxWidth: 120, padding: '3px 8px', fontSize: 12.5 }}
+                      value={u.role}
+                      disabled={isSelf}
+                      title={isSelf ? 'Ask another admin to change your role' : 'Change role'}
+                      onChange={(e) => {
+                        try {
+                          changeUserRole(u.id, e.target.value as Role)
+                        } catch (err) {
+                          alert(errText(err))
                         }
                       }}
                     >
-                      {u.disabled ? 'Enable' : 'Disable'}
-                    </button>
-                    <button className="btn small" onClick={() => setResetting({ id: u.id, name: u.name })}>
-                      Reset secret…
-                    </button>
-                  </span>
-                </td>
-              </tr>
-            ))}
+                      {(['admin', 'editor', 'viewer'] as Role[]).map((r) => (
+                        <option key={r} value={r}>{r}</option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="muted small">{fmtWhen(u.createdAt)}</td>
+                  <td>
+                    {u.disabled
+                      ? <span className="badge red">disabled</span>
+                      : <span className="badge done">active</span>}
+                  </td>
+                  <td>
+                    <span className="row">
+                      <button
+                        className="btn small"
+                        onClick={() => {
+                          const verb = u.disabled ? 'Enable' : 'Disable'
+                          if (confirm(`${verb} ${u.name}'s account?${!u.disabled ? ' Their active sessions sign out within one poll.' : ''}`)) {
+                            try {
+                              setUserDisabled(u.id, !u.disabled)
+                            } catch (e) {
+                              alert(e instanceof Error ? e.message : 'Action failed')
+                            }
+                          }
+                        }}
+                      >
+                        {u.disabled ? 'Enable' : 'Disable'}
+                      </button>
+                      <button className="btn small" onClick={() => setResetting({ id: u.id, name: u.name })}>
+                        Reset secret…
+                      </button>
+                      {!isSelf && (
+                        <button
+                          className="btn small danger"
+                          onClick={() => {
+                            if (confirm(`Delete ${u.name}'s account entirely? Their login stops working and stale devices can't bring it back.`)) {
+                              try {
+                                deleteUser(u.id)
+                              } catch (e) {
+                                alert(errText(e))
+                              }
+                            }
+                          }}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </span>
+                  </td>
+                </tr>
+              )
+            })}
           </tbody>
         </table>
       )}
@@ -252,7 +297,7 @@ function AddUserModal({ onClose }: { onClose: () => void }): React.JSX.Element {
               </button>
             </div>
             {mode === 'password' && (
-              <input
+              <SecretInput
                 className="input mono"
                 placeholder="password (only its hash is stored)"
                 value={pw}
@@ -324,7 +369,7 @@ function ResetSecretModal(
           <div className="field">
             <label>…or set a password</label>
             <div className="row wrap">
-              <input
+              <SecretInput
                 className="input mono"
                 style={{ maxWidth: 260 }}
                 placeholder="new password"
@@ -366,50 +411,43 @@ function ViewersTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
           No viewer tokens yet — mint one and send the login link to a client.
         </Empty>
       ) : (
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Note</th>
-              <th>Created</th>
-              <th>Status</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {doc.users.viewers.map((v) => (
-              <tr key={v.id}>
-                <td>{v.name}</td>
-                <td className="muted small">{v.note || '—'}</td>
-                <td className="muted small">{fmtWhen(v.createdAt)}</td>
-                <td>
-                  {v.revokedAt
-                    ? <span className="badge red">revoked</span>
-                    : <span className="badge done">active</span>}
-                </td>
-                <td>
-                  {!v.revokedAt && (
-                    <button
-                      className="btn small danger"
-                      onClick={() => {
-                        if (
-                          confirm(
-                            `Revoke "${v.name}"? Revocation takes effect at the viewer's next poll — ` +
-                            'and anyone who already loaded content keeps their local copy; it cannot be clawed back.',
-                          )
-                        ) {
-                          revokeViewer(v.id)
-                        }
-                      }}
-                    >
-                      Revoke
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="ticket-grid">
+          {doc.users.viewers.map((v) => (
+            <div key={v.id} className={`ticket ${v.revokedAt ? 'ticket-revoked' : ''}`}>
+              <div className="ticket-stub">
+                <span className="ticket-caption">Admit one</span>
+                <span className="mono faint" style={{ fontSize: 10 }}>{fmtWhen(v.createdAt)}</span>
+              </div>
+              <div className="ticket-body">
+                <b style={{ fontSize: 14 }}>{v.name}</b>
+                <span className="muted small" style={{ wordBreak: 'break-word' }}>{v.note || '—'}</span>
+                {v.revokedAt ? (
+                  <span className="badge red">revoked</span>
+                ) : (
+                  <span className="badge done">active · read-only</span>
+                )}
+                {!v.revokedAt && (
+                  <button
+                    className="btn small danger"
+                    style={{ marginTop: 2 }}
+                    onClick={() => {
+                      if (
+                        confirm(
+                          `Revoke "${v.name}"? Revocation takes effect at the viewer's next poll — ` +
+                          'and anyone who already loaded content keeps their local copy; it cannot be clawed back.',
+                        )
+                      ) {
+                        revokeViewer(v.id)
+                      }
+                    }}
+                  >
+                    Revoke
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
       {minting && (
@@ -735,12 +773,64 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
   const [running, setRunning] = useState(false)
   const [reorgState, setReorgState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
   const [reorgMsg, setReorgMsg] = useState<string | null>(null)
+  const [snapBusy, setSnapBusy] = useState<string | null>(null)
+  const [snapMsg, setSnapMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
+  const [backupBusy, setBackupBusy] = useState(false)
   const reorganized = workspaceUsesSystemFolders(doc)
+
+  const downloadRaw = async (raw: string, filename: string): Promise<void> => {
+    const blob = new Blob([raw], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  }
+
+  const downloadSnap = async (s: { fileId: string; note: string }): Promise<void> => {
+    setSnapBusy(s.fileId)
+    setSnapMsg(null)
+    try {
+      const { readFile } = await import('../../drive/client')
+      const raw = await readFile(s.fileId, { mode: 'auto' })
+      await downloadRaw(raw, `nexus-snapshot-${(s.note || 'copy').replace(/[^\w-]+/g, '_')}.json`)
+    } catch (e) {
+      setSnapMsg({ kind: 'error', text: errText(e) })
+    }
+    setSnapBusy(null)
+  }
+
+  const doRestore = async (s: { fileId: string; rev: number }): Promise<void> => {
+    setSnapBusy(s.fileId)
+    setSnapMsg(null)
+    try {
+      await restoreSnapshot(s.fileId)
+      setSnapMsg({ kind: 'ok', text: `Restored to rev ${s.rev} — the pre-restore state was saved as its own snapshot.` })
+    } catch (e) {
+      setSnapMsg({ kind: 'error', text: errText(e) })
+    }
+    setSnapBusy(null)
+  }
+
+  const downloadCurrent = async (): Promise<void> => {
+    setBackupBusy(true)
+    try {
+      const { readFile } = await import('../../drive/client')
+      const nexusId = doc.ids.nexusFileId
+      if (!nexusId) throw new Error('Workspace file id unknown')
+      const raw = await readFile(nexusId, { mode: 'auto' })
+      await downloadRaw(raw, `nexus-backup-${new Date().toISOString().slice(0, 10)}.json`)
+    } catch (e) {
+      setSnapMsg({ kind: 'error', text: errText(e) })
+    }
+    setBackupBusy(false)
+  }
 
   const reorganize = async () => {
     if (!confirm(
       'Reorganize the Drive workspace into system folders?\n\n' +
-      'Creates master/, projects/, scripts/ and Unsorted/ inside the workspace folder and moves nexus.json into master/.\n\n' +
+      'Creates master/ (nexus.json), snapshots/, groups/ and scripts/ inside the workspace folder.\n\n' +
       'File IDs never change — the app, links and .env keep working. No content is deleted.',
     )) return
     setReorgState('busy')
@@ -787,8 +877,8 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
           )}
         </div>
         <p className="muted small" style={{ marginTop: 0 }}>
-          Creates <code>master/</code> (nexus.json), <code>projects/</code>, <code>scripts/</code> and{' '}
-          <code>Unsorted/</code> inside the workspace folder. File IDs never change — the app, links and
+          Creates <code>master/</code> (nexus.json), <code>snapshots/</code>, <code>groups/</code> and{' '}
+          <code>scripts/</code> inside the workspace folder. File IDs never change — the app, links and
           .env keep working; nothing is deleted.
         </p>
         {reorgMsg && banner(reorgState === 'error' ? 'error' : 'info', reorgMsg)}
@@ -861,8 +951,11 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
       <div className="card">
         <h2>Snapshots</h2>
         <p className="muted small" style={{ marginTop: 0 }}>
-          Daily copies of nexus.json kept in the Drive “snapshots” folder, newest first.
+          Daily copies of nexus.json kept in the Drive “snapshots” folder, newest first. Restoring
+          replaces the workspace with the snapshot's contents — the current state is saved as a
+          “pre-restore” snapshot first.
         </p>
+        {snapMsg && banner(snapMsg.kind === 'error' ? 'error' : 'info', snapMsg.text)}
         {snapshots.length === 0 ? (
           <Empty icon="🗂">No snapshots yet — the first appears after the first successful sync.</Empty>
         ) : (
@@ -872,10 +965,38 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
                 <span>
                   {s.note || 'snapshot'} · rev {s.rev} · {fmtWhen(s.at, true)}
                 </span>
+                <span className="row" style={{ gap: 6 }}>
+                  <button className="btn small" disabled={snapBusy === s.fileId} onClick={() => void downloadSnap(s)}>
+                    Download
+                  </button>
+                  <button
+                    className="btn small"
+                    disabled={snapBusy === s.fileId}
+                    onClick={() => {
+                      if (confirm(`Restore the workspace to this snapshot (rev ${s.rev})?\n\nThe current contents are replaced — they are saved first as a "pre-restore" snapshot.`)) {
+                        void doRestore(s)
+                      }
+                    }}
+                  >
+                    Restore
+                  </button>
+                </span>
               </div>
             ))}
           </div>
         )}
+      </div>
+
+      <div className="card">
+        <div className="spread mb8">
+          <h2>Local backup</h2>
+          <button className="btn primary" disabled={backupBusy} onClick={() => void downloadCurrent()}>
+            {backupBusy ? 'Preparing…' : 'Download nexus.json backup'}
+          </button>
+        </div>
+        <p className="muted small" style={{ marginTop: 0 }}>
+          A local copy of the whole workspace database, independent of Drive.
+        </p>
       </div>
     </div>
   )

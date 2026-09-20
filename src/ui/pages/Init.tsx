@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { requestToken, isSignedIn, onTokenChange, getBearerToken } from '../../auth/tokenClient'
-import { hashPassword, mintToken, passwordPolicyError } from '../../auth/hashing'
+import { mintToken, newStretchSalt, passwordPolicyError, stretchedAuth } from '../../auth/hashing'
 import { createWorkspace, initialDoc } from '../../drive/bootstrap'
 import { type NexusDoc } from '../../types/schema'
 import { hlcNow } from '../../util/hlc'
@@ -9,7 +9,7 @@ import { useStore } from '../../sync/store'
 import { rememberIds } from '../../sync/drafts'
 import { startPolling } from '../../sync/poller'
 import { navigate } from '../../App'
-import { banner, CopyButton } from '../components'
+import { banner, CopyButton, PageQuote, SecretInput } from '../components'
 import { config } from '../../config'
 
 type Step = 0 | 1 | 2
@@ -34,6 +34,7 @@ export function Init(): React.JSX.Element {
       setError('Enter an admin name')
       return
     }
+    const stretchSalt = newStretchSalt()
     let auth: NexusDoc['users']['app'][number]['auth']
     let rawSecret: string
     if (secretMode === 'token') {
@@ -46,11 +47,7 @@ export function Init(): React.JSX.Element {
         setError(policy)
         return
       }
-      const hashed = await hashPassword(password)
-      auth =
-        hashed.kind === 'pbkdf2'
-          ? { kind: 'pbkdf2', hash: hashed.hash, salt: hashed.salt, iterations: hashed.iterations }
-          : { kind: 'argon2id', hash: hashed.hash }
+      auth = await stretchedAuth(password, stretchSalt)
       rawSecret = password
     }
     setBusy(true)
@@ -96,6 +93,7 @@ export function Init(): React.JSX.Element {
       }
       const doc = initialDoc()
       doc.settings.rootFolderName = rootName.trim() || 'Nexus Root'
+      doc.settings.authStretchSalt = stretchSalt
       doc.users.app = [
         {
           id: newUserId(),
@@ -143,6 +141,7 @@ export function Init(): React.JSX.Element {
     <div className="card">
       <h1>Welcome to Nexus</h1>
       <p className="muted">Set up your content workspace on Google Drive. One-time, admin only.</p>
+      <PageQuote topic="setup" />
 
       {step === 0 && (
         <>
@@ -178,7 +177,7 @@ export function Init(): React.JSX.Element {
           {secretMode === 'password' && (
             <div className="field">
               <label>Admin password (15+ chars, or 12+ with a space)</label>
-              <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
+              <SecretInput className="input" value={password} onChange={(e) => setPassword(e.target.value)} />
             </div>
           )}
           {error && banner('error', error)}

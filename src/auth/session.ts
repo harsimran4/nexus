@@ -7,7 +7,7 @@
 // - Viewers: unchanged — the capability token is still checked locally
 //   against the doc already loaded via the API key.
 
-import { sha256Hex } from './hashing'
+import { sha256Hex, stretchSecret, STRETCH_ITERATIONS } from './hashing'
 import type { NexusDoc, Role } from '../types/schema'
 import { storeGet, useStore } from '../sync/store'
 import { sessionRef } from '../sync/identity'
@@ -44,16 +44,28 @@ async function loginWithSecret(secret: string): Promise<{ ok: true; session: Ses
   const trimmed = secret.trim()
   if (!trimmed) return { ok: false, error: 'Enter your access token or password' }
 
+  // Browser-side key stretching: the Worker only ever sees K (never the
+  // secret) and sha256-compares it against stored hashes — no KDF server-side
+  // (workerd caps PBKDF2 at 100k iterations / 10ms CPU).
+  const stretchSalt = doc.settings.authStretchSalt
+  if (!stretchSalt) return { ok: false, error: 'Workspace predates stretched logins — ask an admin to re-save your login' }
+  let loginSecret: string
+  try {
+    loginSecret = await stretchSecret(trimmed, stretchSalt, STRETCH_ITERATIONS)
+  } catch {
+    return { ok: false, error: 'This browser could not derive your login key' }
+  }
+
   // Editors/admins: ask the Worker (it owns the real verification now).
   if (WORKER) {
     try {
       const res = await fetch(`${WORKER}/session`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ secret: trimmed }),
+        body: JSON.stringify({ secret: loginSecret }),
       })
       if (res.ok) {
-        const data = (await res.json()) as { token: string; role: Role; name: string }
+        const data = (await res.json()) as { token: string; role: Role; name: string; uid?: string }
         if (data.role !== 'viewer') {
           setGlobalBearer(data.token)
           try {
@@ -61,7 +73,9 @@ async function loginWithSecret(secret: string): Promise<{ ok: true; session: Ses
           } catch {
             /* ignore */
           }
-          const session: Session = { appUserId: `worker:${data.name}`, name: data.name, role: data.role }
+          // uid is the doc's real user id (self-guards + activity attribution
+          // key off it); older workers only sent the name.
+          const session: Session = { appUserId: data.uid ?? `worker:${data.name}`, name: data.name, role: data.role }
           writeSession(session)
           useStore.setState({ session })
           return { ok: true, session }

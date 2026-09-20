@@ -29,10 +29,10 @@ export function describeError(e: unknown): { code: string; message: string; fix:
         return {
           code: 'notFound',
           message: 'File not visible to your account',
-          fix: 'The file may not be link-shared, or your Google account can\'t see it. Editors should sign in with the studio account.',
+          fix: 'The file may not be link-shared, or your login can\'t see it. Editors: sign in again from the login page.',
         }
       case 'auth':
-        return { code: 'auth', message: 'Sign-in required', fix: 'Sign in with Google, or ask an admin to check the API key.' }
+        return { code: 'auth', message: 'Sign-in required', fix: 'Your session expired — sign in again. (Viewers: ask an admin to check the API key.)' }
       case 'rateLimit':
         return { code: 'rateLimit', message: 'Drive is busy', fix: 'Wait a moment and retry — quota recovers automatically.' }
       case 'permission':

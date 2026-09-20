@@ -10,7 +10,9 @@ import { Empty } from '../components'
 type Tone = 'good' | 'bad'
 
 const GUARANTEES: readonly ReactNode[] = [
-  <>Writes only happen through a signed-in Google token (scope <code>drive.file</code>).</>,
+  <>Editors and admins never hold Google credentials — all Drive writes go through the Nexus Worker, which keeps the storage credential as a server-side secret.</>,
+  <>Logins are app-issued tokens or passwords. Passwords are stretched in your browser (600,000-round PBKDF2) and only a sha256 of the stretched key is stored.</>,
+  <>Sessions are short-lived signed tokens (12h) carrying your identity and role; the Worker re-checks them against the live user list on every write (~60s staleness).</>,
   <>Viewers read through an API key that Google structurally cannot write with.</>,
   <>Every write is verified against the remote file before commit and merged per-item, so concurrent edits don't clobber each other.</>,
   <>Every deletion is tombstoned so a stale sync can't resurrect it.</>,
@@ -19,18 +21,18 @@ const GUARANTEES: readonly ReactNode[] = [
 ]
 
 const NOT_GUARANTEES: readonly ReactNode[] = [
-  <>Viewer login gates the APP, not the data — the API key reads link-shared content anonymously, so a determined viewer can still extract file bytes.</>,
+  <>The workspace file (<code>nexus.json</code>) is link-shared so anonymous viewers can read — everything in it, including password hashes, is readable by anyone with the link. Mitigation: hashes are 600k-stretched; 256-bit tokens are even safer.</>,
   <>The embedded API key is extractable from the HTML (referrer restriction is advisory; worst case is quota burn — rotate via Admin → Settings).</>,
-  <>Admin-vs-editor separation is procedural, not cryptographic (all writers share the studio Google account).</>,
+  <>Worker login rate limiting is best-effort (per Cloudflare isolate) — a large distributed brute-force is not stopped by the app alone.</>,
+  <>Admin-vs-editor separation is enforced by the signed session token and the Worker's re-checks — strong, but revocation of an active session can take ~60s to land.</>,
   <>Deletes are eventually-safe (a raced newer edit can beat an older tombstone and is surfaced as an undelete event).</>,
   <>Revoking a viewer lands at their next poll and cannot claw back locally saved copies.</>,
-  <>Password hashes live in a link-readable file — use the 256-bit tokens instead.</>,
 ]
 
 const ENFORCEMENT: readonly (readonly [ability: string, enforcedBy: ReactNode])[] = [
-  ['View without a login', <>nothing (by design: data is link-shared so viewers without Google accounts can read)</>],
-  ['Upload / edit / delete', <>app login (<code>admin|editor</code>) AND Google bearer token</>],
-  ['Admin actions', 'app admin login only'],
+  ['View without a login', <>nothing when "require login to view" is off (by design: data is link-shared so viewers without accounts can read)</>],
+  ['Upload / edit / delete', <>app login (<code>admin|editor</code>) — writes are proxied by the Worker using its own storage credential, never yours</>],
+  ['Admin actions', <>app admin login — the role travels inside the HMAC-signed session token and is re-checked server-side</>],
   ['True no-download per person', 'only Google Drive sharing per Google account — not this app'],
 ]
 

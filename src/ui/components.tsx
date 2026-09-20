@@ -171,6 +171,48 @@ export function CopyButton({ text, label = 'Copy' }: { text: string; label?: str
   )
 }
 
+// ---- secret input (masked, with an in-field eye toggle) ---------------------
+
+function EyeIcon({ off }: { off?: boolean }): React.JSX.Element {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {off ? (
+        <>
+          <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" />
+          <path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" />
+          <path d="M6.61 6.61A13.53 13.53 0 0 0 2 12s3.5 7 10 7a9.74 9.74 0 0 0 5.39-1.61" />
+          <path d="m2 2 20 20" />
+        </>
+      ) : (
+        <>
+          <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+          <circle cx="12" cy="12" r="3" />
+        </>
+      )}
+    </svg>
+  )
+}
+
+/** Password/token input masked by default, with an eye button to reveal what's typed. */
+export function SecretInput({ className = 'input', ...rest }: React.InputHTMLAttributes<HTMLInputElement>): React.JSX.Element {
+  const [show, setShow] = useState(false)
+  return (
+    <div className="pw-wrap">
+      <input {...rest} type={show ? 'text' : 'password'} className={className} spellCheck={false} />
+      <button
+        type="button"
+        className="pw-eye"
+        onClick={() => setShow((s) => !s)}
+        title={show ? 'Hide' : 'Show'}
+        aria-label={show ? 'Hide password' : 'Show password'}
+        tabIndex={-1}
+      >
+        <EyeIcon off={show} />
+      </button>
+    </div>
+  )
+}
+
 /** Show-once reveal for minted tokens — the raw secret never appears again. */
 export function TokenReveal({ raw, kind, link }: { raw: string; kind: 'token' | 'password'; link?: string }) {
   return (
@@ -237,6 +279,21 @@ const QUOTES: Record<string, { text: string; by: string }[]> = {
     { text: 'The way to get started is to quit talking and begin doing.', by: 'Walt Disney' },
     { text: 'Every artist was first an amateur.', by: 'Ralph Waldo Emerson' },
     { text: 'Start where you are. Use what you have. Do what you can.', by: 'Arthur Ashe' },
+  ],
+  admin: [
+    { text: 'Authority without wisdom is like a heavy axe without an edge.', by: 'Anne Bradstreet' },
+    { text: 'To be trusted is a greater compliment than to be loved.', by: 'George MacDonald' },
+    { text: 'The price of greatness is responsibility.', by: 'Winston Churchill' },
+  ],
+  activity: [
+    { text: 'History is a set of lies agreed upon.', by: 'Napoleon Bonaparte' },
+    { text: 'Study the past if you would define the future.', by: 'Confucius' },
+    { text: 'The past is a foreign country; they do things differently there.', by: 'L.P. Hartley' },
+  ],
+  setup: [
+    { text: 'The beginning is the most important part of the work.', by: 'Plato' },
+    { text: 'Every new beginning comes from some other beginning’s end.', by: 'Seneca' },
+    { text: 'Well begun is half done.', by: 'Aristotle' },
   ],
 }
 

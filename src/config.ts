@@ -9,7 +9,7 @@ export const config = {
   workerUrl: import.meta.env.VITE_NEXUS_WORKER_URL ?? '',
   rootFolderId: import.meta.env.VITE_NEXUS_ROOT_FOLDER_ID ?? '',
   nexusFileId: import.meta.env.VITE_NEXUS_FILE_ID ?? '',
-  appVersion: '0.1.0',
+  appVersion: __APP_VERSION__,
   maxKnownSchema: 1,
   scopes: ['https://www.googleapis.com/auth/drive.file'],
 } as const

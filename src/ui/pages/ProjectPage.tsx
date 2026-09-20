@@ -83,32 +83,35 @@ export function ProjectPage({ projectId }: { projectId: string }): React.JSX.Ele
   )
 }
 
-/** Inline-editable project name — renames the Drive subfolder to match. */
+/** Inline-editable project name — renames the Drive subfolder to match. The
+ *  name sits in a manila folder tab: a project IS a folder on Drive. */
 function NameEditor({ projectId, name }: { projectId: string; name: string }): React.JSX.Element {
   const writable = canWrite()
   return (
-    <input
-      className="input"
-      style={{ fontSize: 20, fontWeight: 650, background: 'none', border: 'none', padding: '2px 0', maxWidth: 640 }}
-      defaultValue={name}
-      disabled={!writable}
-      onBlur={(e) => {
-        const v = e.target.value.trim()
-        if (!v || v === name) {
-          e.target.value = name
-          return
-        }
-        updateProject(projectId, { name: v })
-        void (async () => {
-          const { storeGet } = await import('../../sync/store')
-          const folderId = storeGet().doc?.projects[projectId]?.folderId
-          if (folderId) await renameFile(folderId, v, { mode: 'bearer' }).catch(() => {})
-        })()
-      }}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-      }}
-    />
+    <div className="project-tab">
+      <input
+        className="input"
+        style={{ fontSize: 20, fontWeight: 650, background: 'none', border: 'none', padding: '2px 0', maxWidth: 620 }}
+        defaultValue={name}
+        disabled={!writable}
+        onBlur={(e) => {
+          const v = e.target.value.trim()
+          if (!v || v === name) {
+            e.target.value = name
+            return
+          }
+          updateProject(projectId, { name: v })
+          void (async () => {
+            const { storeGet } = await import('../../sync/store')
+            const folderId = storeGet().doc?.projects[projectId]?.folderId
+            if (folderId) await renameFile(folderId, v, { mode: 'bearer' }).catch(() => {})
+          })()
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+        }}
+      />
+    </div>
   )
 }
 
@@ -181,7 +184,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
             const info = meta[f]
             const displayName = renamingId === f ? renameValue : info?.name ?? f
             return (
-              <div key={f} className="card" style={{ padding: 10 }}>
+              <div key={f} className="photo-frame">
                 <div
                   style={{
                     aspectRatio: '16/9',
@@ -413,7 +416,7 @@ function SettingsTab({ projectId }: { projectId: string }): React.JSX.Element {
           onChange={(e) => updateProject(projectId, { assigneeAppId: e.target.value || null })}
         >
           <option value="">Unassigned</option>
-          {doc.users.app.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+          {doc.users.app.filter((u) => !u.disabled).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
         </select>
       </div>
 
@@ -490,7 +493,7 @@ function SettingsTab({ projectId }: { projectId: string }): React.JSX.Element {
       <div className="field">
         <label>Notes</label>
         <textarea
-          className="input"
+          className="input legal-pad"
           value={notesDraft}
           disabled={!writable}
           onChange={(e) => {

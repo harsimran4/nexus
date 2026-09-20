@@ -12,6 +12,7 @@ import {
 import { hlcNow } from '../util/hlc'
 import {
   defaultStatus,
+  statusBucket,
   type NexusDoc,
   type Project,
   type Group,
@@ -20,7 +21,9 @@ import {
 } from '../types/schema'
 import { canWrite, canAdmin } from '../auth/session'
 import { commit, touch, recordTombstone, appendActivity, flush, writerId } from '../sync/writer'
-import { hashPassword, mintToken, passwordPolicyError } from '../auth/hashing'
+import { mintToken, passwordPolicyError, stretchedAuth } from '../auth/hashing'
+import { storeGet } from '../sync/store'
+import { decodeHlc } from '../util/hlc'
 import { DriveError, createFolder, uploadFile, renameFile } from '../drive/client'
 import { ensureGroupsFolder, ensureScriptsFolder } from '../drive/bootstrap'
 import { sessionRef } from '../sync/identity'
@@ -242,7 +245,18 @@ export async function moveProjectToGroup(
   const to = await ensureGroupFolder(toGroupId)
   if (!to) return
   const { moveFile } = await import('../drive/client')
-  await moveFile(project.folderId, to, fromFolderId, { mode: 'bearer' }).catch(() => {})
+  try {
+    await moveFile(project.folderId, to, fromFolderId, { mode: 'bearer' })
+  } catch (e) {
+    // Metadata already says the new group; the Drive folder didn't follow.
+    // Record the divergence instead of swallowing it.
+    commit((d) => {
+      appendActivity(d, 'project.moveFailed', projectId, {
+        to: toGroupId,
+        reason: e instanceof Error ? e.message : 'Drive move failed',
+      })
+    })
+  }
 }
 
 export function setProjectStatus(projectId: string, status: string): void {
@@ -288,7 +302,7 @@ export async function uploadToProject(
     return { ok: true, fileId: meta.id }
   } catch (e) {
     if (e instanceof DriveError && e.kind === 'auth')
-      return { ok: false, error: 'Sign in with Google to upload (top bar → Connect Google)' }
+      return { ok: false, error: 'Your session expired — sign in again to upload' }
     if (e instanceof DriveError) return { ok: false, error: `${e.message} — ${e.kind}` }
     return { ok: false, error: e instanceof Error ? e.message : 'Upload failed' }
   }
@@ -424,7 +438,7 @@ export async function saveScriptBody(id: string, body: string): Promise<{ ok: tr
     return { ok: true }
   } catch (e) {
     if (e instanceof DriveError && e.kind === 'auth')
-      return { ok: false, error: 'Sign in with Google to save scripts (top bar → Connect Google)' }
+      return { ok: false, error: 'Your session expired — sign in again to save scripts' }
     if (e instanceof DriveError) return { ok: false, error: `${e.message} — ${e.kind}` }
     return { ok: false, error: e instanceof Error ? e.message : 'Save failed' }
   }
@@ -518,11 +532,9 @@ export async function createAppUser(
   } else {
     const policyError = passwordPolicyError(secret)
     if (policyError) throw new Error(policyError)
-    const hashed = await hashPassword(secret)
-    auth =
-      hashed.kind === 'pbkdf2'
-        ? { kind: 'pbkdf2', hash: hashed.hash, salt: hashed.salt, iterations: hashed.iterations }
-        : { kind: 'argon2id', hash: hashed.hash }
+    const salt = storeGet().doc?.settings.authStretchSalt
+    if (!salt) throw new Error('Workspace predates stretched logins — ask an admin to re-save this login')
+    auth = await stretchedAuth(secret, salt)
     raw = secret
   }
   const id = newUserId()
@@ -568,6 +580,48 @@ export function setUserDisabled(userId: string, disabled: boolean): void {
   })
 }
 
+/** Change a user's role after creation. Demoting the last active admin is refused. */
+export function changeUserRole(userId: string, role: 'admin' | 'editor' | 'viewer'): void {
+  assertAdmin()
+  const me = sessionModule().getSession()
+  if (me?.appUserId === userId) {
+    throw new Error('You cannot change your own role — ask another admin')
+  }
+  commit((doc) => {
+    const user = doc.users.app.find((u) => u.id === userId)
+    if (!user) return
+    if (user.role === role) return
+    if (user.role === 'admin' && role !== 'admin') {
+      const otherAdmins = doc.users.app.filter((u) => u.role === 'admin' && !u.disabled && u.id !== userId)
+      if (otherAdmins.length === 0) throw new Error('Cannot demote the last active admin')
+    }
+    user.role = role
+    user.updatedAt = hlcNow()
+    user.writerId = writerId()
+    appendActivity(doc, 'user.role', userId, { name: user.name, role })
+  })
+}
+
+/** Remove a user entirely. Tombstoned so stale peers don't resurrect them. */
+export function deleteUser(userId: string): void {
+  assertAdmin()
+  const me = sessionModule().getSession()
+  if (me?.appUserId === userId) {
+    throw new Error('You cannot delete your own account — ask another admin')
+  }
+  commit((doc) => {
+    const user = doc.users.app.find((u) => u.id === userId)
+    if (!user) return
+    if (user.role === 'admin') {
+      const otherAdmins = doc.users.app.filter((u) => u.role === 'admin' && !u.disabled && u.id !== userId)
+      if (otherAdmins.length === 0) throw new Error('Cannot delete the last active admin')
+    }
+    doc.users.app = doc.users.app.filter((u) => u.id !== userId)
+    recordTombstone(doc, 'user', userId, writerId())
+    appendActivity(doc, 'user.delete', userId, { name: user.name })
+  })
+}
+
 export async function resetUserPassword(userId: string, secret: string | undefined): Promise<{ raw: string }> {
   assertAdmin()
   let auth: NexusDoc['users']['app'][number]['auth']
@@ -579,11 +633,9 @@ export async function resetUserPassword(userId: string, secret: string | undefin
   } else {
     const policyError = passwordPolicyError(secret)
     if (policyError) throw new Error(policyError)
-    const hashed = await hashPassword(secret)
-    auth =
-      hashed.kind === 'pbkdf2'
-        ? { kind: 'pbkdf2', hash: hashed.hash, salt: hashed.salt, iterations: hashed.iterations }
-        : { kind: 'argon2id', hash: hashed.hash }
+    const salt = storeGet().doc?.settings.authStretchSalt
+    if (!salt) throw new Error('Workspace predates stretched logins — ask an admin to re-save this login')
+    auth = await stretchedAuth(secret, salt)
     raw = secret
   }
   commit((doc) => {
@@ -649,6 +701,103 @@ export function setApiKeyOverride(key: string | null): void {
 }
 
 /**
+ * Adopt a snapshot as the current doc. Keeps our write identity and a bumped
+ * rev, then primes `base` with the remote's current tokens so the next flush
+ * takes the unchanged fast path and overwrites Drive with exactly this
+ * content. The snapshot itself stays on Drive as the pre-restore backup.
+ */
+export async function restoreSnapshot(fileId: string): Promise<void> {
+  assertAdmin()
+  const { readFile, getMeta } = await import('../drive/client')
+  const { parseDoc } = await import('../types/schema')
+  const store = storeGet()
+  const nexusId = store.doc?.ids.nexusFileId
+  if (!nexusId) throw new Error('Workspace file id unknown')
+  const raw = await readFile(fileId, { mode: 'auto' })
+  const parsed = parseDoc(raw)
+  if (!parsed.ok) throw new Error('That snapshot is not a readable nexus.json')
+  const restored: NexusDoc = {
+    ...parsed.doc,
+    rev: (store.doc?.rev ?? 0) + 1,
+    writerId: writerId(),
+    updatedAt: hlcNow(),
+  }
+  // Safety net: the pre-restore state becomes its own snapshot copy first, so
+  // a restore is itself reversible.
+  try {
+    const currentRaw = await readFile(nexusId, { mode: 'auto' })
+    if (currentRaw !== raw) {
+      const { ensureSnapshotsFolder } = await import('../drive/bootstrap')
+      const { copyFile } = await import('../drive/client')
+      const snapshotsFolderId = store.doc ? await ensureSnapshotsFolder(store.doc, { mode: 'bearer' }) : null
+      if (snapshotsFolderId) {
+        const backup = await copyFile(
+          nexusId,
+          `pre-restore-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`,
+          snapshotsFolderId,
+          { mode: 'bearer' },
+        )
+        restored.snapshots = [
+          ...restored.snapshots,
+          { fileId: backup.id, rev: store.doc?.rev ?? 0, at: new Date().toISOString(), by: writerId(), note: 'pre-restore' },
+        ]
+      }
+    }
+  } catch {
+    /* best-effort — restore proceeds without the extra copy */
+  }
+  const meta = await getMeta(nexusId, { mode: 'auto' })
+  store.setDoc(restored)
+  store.setBase({ headRevisionId: meta.headRevisionId, md5Checksum: meta.md5Checksum, version: meta.version })
+  const ok = await flush()
+  if (!ok) throw new Error('Restore could not be written — your changes are staged; try again in a moment')
+}
+
+export function unarchiveProject(projectId: string): void {
+  assertWrite()
+  commit((doc) => {
+    const p = doc.projects[projectId]
+    if (!p) return
+    p.archivedAt = null
+    touch('projects', p)
+    appendActivity(doc, 'project.unarchive', projectId, { name: p.name })
+  })
+}
+
+let lastArchiveSweep = 0
+/**
+ * Move projects sitting in a done-bucket stage untouched past
+ * settings.workflow.archiveDoneAfterDays into the Archive. The schema fields
+ * existed with no writer before this. Runs at most once per ~20h per tab.
+ */
+export function sweepAutoArchive(): void {
+  const doc = storeGet().doc
+  if (!doc) return
+  const days = doc.settings.workflow.archiveDoneAfterDays
+  const now = Date.now()
+  if (!days || now - lastArchiveSweep < 20 * 3600 * 1000) return
+  lastArchiveSweep = now
+  const cutoffMs = now - days * 86400000
+  const stale = Object.values(doc.projects).filter(
+    (p) =>
+      p.deleted === null &&
+      p.archivedAt === null &&
+      statusBucket(doc, p.status) === 'done' &&
+      decodeHlc(p.updatedAt).ms < cutoffMs,
+  )
+  if (stale.length === 0) return
+  commit((d) => {
+    for (const p of stale) {
+      const e = d.projects[p.id]
+      if (!e || e.deleted !== null || e.archivedAt !== null) continue
+      e.archivedAt = new Date().toISOString()
+      touch('projects', e)
+      appendActivity(d, 'project.archive', p.id, { name: e.name })
+    }
+  })
+}
+
+/**
  * Wipe all content data (groups, projects, scripts, activity, tombstones) and
  * trash their Drive files. Users, settings and workspace ids are KEPT so the
  * admin login still works. Intended for starting over while testing.
@@ -681,6 +830,8 @@ export async function resetWorkspaceData(): Promise<{ groups: number; projects: 
     d.snapshots = []
     d.rev = d.rev + 1
   })
+  const { clearAllPending } = await import('../sync/writer')
+  clearAllPending() // wiped entities must not re-assert from the scratch set
   await flush()
   return { groups: groups.length, projects: Object.keys(doc.projects).length, scripts: scripts.length }
 }

@@ -190,6 +190,37 @@ describe('mergeRemote', () => {
     expect(merged.users.app.find((x) => x.id === 'u1')?.name).toBe('New')
   })
 
+  it('a newer user tombstone deletes the user on both sides', () => {
+    const a = baseDoc()
+    const b = baseDoc()
+    const u = {
+      id: 'u2', name: 'Dilpreet', role: 'editor' as const, disabled: false,
+      auth: { kind: 'token' as const, hash: 'sha256$x' },
+      createdAt: '', createdBy: 't', updatedAt: encodeHlc(1_000, 0), writerId: 'w-aaa',
+    }
+    a.users.app = [{ ...u }] // admin deleted the user locally (absent) + tombstoned
+    a.tombstones.push({ type: 'user', id: 'u2', at: encodeHlc(9_000, 0), by: 'w-aaa' })
+    b.users.app = [{ ...u }] // a stale peer still has them
+
+    const { merged } = mergeRemote({ local: a, remote: b })
+    expect(merged.users.app.find((x) => x.id === 'u2')).toBeUndefined()
+  })
+
+  it('a user edited after the tombstone survives (re-created / re-added)', () => {
+    const a = baseDoc()
+    const b = baseDoc()
+    const u = {
+      id: 'u3', name: 'Re-added', role: 'editor' as const, disabled: false,
+      auth: { kind: 'token' as const, hash: 'sha256$x' },
+      createdAt: '', createdBy: 't', updatedAt: encodeHlc(9_000, 0), writerId: 'w-aaa',
+    }
+    a.users.app = [{ ...u }]
+    b.tombstones.push({ type: 'user', id: 'u3', at: encodeHlc(5_000, 0), by: 'w-bbb' })
+
+    const { merged } = mergeRemote({ local: a, remote: b })
+    expect(merged.users.app.find((x) => x.id === 'u3')?.name).toBe('Re-added')
+  })
+
   it('fast-check: merge converges regardless of direction', () => {
     const titleArb = fc.string({ minLength: 1, maxLength: 8 }).filter((s) => !s.includes('.'))
     const msArb = fc.integer({ min: 2_000, max: 50_000 })

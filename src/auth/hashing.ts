@@ -1,9 +1,16 @@
 // Credential hashing for app-managed logins.
 // Preferred: capability tokens — 256-bit random, ONLY sha256(token) stored.
 //   256 bits of entropy need no slow KDF; the token IS the secret.
-// Optional: typed passwords — Argon2id via hash-wasm (wasm ships base64-inlined
-// inside the JS, so the single-file artifact stays single-file), with a
-// PBKDF2-SHA256 600k fallback if wasm allocation fails on low-end devices.
+// Passwords: STRETCHED IN THE BROWSER. loginWithSecret derives
+//   K = PBKDF2-SHA256(secret, settings.authStretchSalt, 600k) locally and
+//   sends K; the doc stores sha256(K) and the Worker only byte-compares
+//   hashes (the existing verifyToken path). Rationale: Cloudflare Workers
+//   forbid runtime WASM (which killed hash-wasm's argon2id) and cap WebCrypto
+//   PBKDF2 at 100k iterations / 10ms CPU — so the OWASP-strength KDF runs
+//   client-side, where no cap exists. The salt is public by design (it defeats
+//   precomputation, not readers); 600k per guess is what makes attacking the
+//   link-readable doc's hashes expensive. Argon2id stays legal in the schema
+//   as a legacy kind only — never create new ones.
 // No pepper is possible in this architecture: everything is link-readable.
 
 import { randomBytes } from '../util/random'
@@ -30,75 +37,29 @@ export async function verifyToken(raw: string, hash: string): Promise<boolean> {
   return hash === 'sha256$' + (await sha256Hex(raw))
 }
 
-const PBKDF2_ITERATIONS = 600_000 // OWASP floor for PBKDF2-SHA256
-const PBKDF2_ALGO = 'pbkdf2'
+// Cloudflare's workerd caps PBKDF2 at 100k — but this runs in the BROWSER,
+// which has no such cap, so we use the full OWASP floor for PBKDF2-SHA256.
+export const STRETCH_ITERATIONS = 600_000
 
-export type PasswordHash =
-  | { kind: 'argon2id'; hash: string }
-  | { kind: 'pbkdf2'; hash: string; salt: string; iterations: number }
-
-function toBase64(bytes: Uint8Array): string {
-  let bin = ''
-  for (const b of bytes) bin += String.fromCharCode(b)
-  return btoa(bin)
+/** Fresh doc-wide login salt (settings.authStretchSalt). Public by design. */
+export function newStretchSalt(): string {
+  return toBase64Url(randomBytes(16))
 }
 
-function fromBase64(b64: string): Uint8Array {
-  const bin = atob(b64)
-  const out = new Uint8Array(bin.length)
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
-  return out
-}
-
-export async function hashPassword(password: string): Promise<PasswordHash> {
-  const salt = randomBytes(16)
-  try {
-    const { argon2id } = await import('hash-wasm')
-    const phc = await argon2id({
-      password,
-      salt, // hash-wasm accepts Uint8Array
-      parallelism: 1,
-      iterations: 3,
-      memorySize: 65_536, // KiB = 64 MiB
-      hashLength: 32,
-      outputType: 'encoded',
-    })
-    return { kind: 'argon2id', hash: phc }
-  } catch {
-    // wasm alloc failure (old/low-end devices) → OWASP-floor PBKDF2
-    const key = await pbkdf2Bits(password, salt, PBKDF2_ITERATIONS)
-    return {
-      kind: 'pbkdf2',
-      hash: toBase64(new Uint8Array(key)),
-      salt: toBase64(salt),
-      iterations: PBKDF2_ITERATIONS,
-    }
-  }
-}
-
-async function pbkdf2Bits(password: string, salt: Uint8Array, iterations: number): Promise<ArrayBuffer> {
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), { name: PBKDF2_ALGO }, false, [
+/** K = PBKDF2-SHA256(secret, salt, iterations), base64url — sent INSTEAD of the secret. */
+export async function stretchSecret(secret: string, saltB64: string, iterations: number): Promise<string> {
+  const salt = Uint8Array.from(atob(saltB64.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0))
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'PBKDF2' }, false, [
     'deriveBits',
   ])
-  return crypto.subtle.deriveBits(
-    { name: PBKDF2_ALGO, salt: salt as BufferSource, iterations, hash: 'SHA-256' },
-    key,
-    256,
-  )
+  const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, key, 256)
+  return toBase64Url(new Uint8Array(bits))
 }
 
-export async function verifyPassword(password: string, auth: PasswordHash): Promise<boolean> {
-  try {
-    if (auth.kind === 'argon2id') {
-      const { argon2Verify } = await import('hash-wasm')
-      return await argon2Verify({ password, hash: auth.hash })
-    }
-    const salt = fromBase64(auth.salt)
-    const key = await pbkdf2Bits(password, salt, auth.iterations)
-    return toBase64(new Uint8Array(key)) === auth.hash
-  } catch {
-    return false
-  }
+/** Stored auth for a password user: sha256 of the browser-stretched secret. */
+export async function stretchedAuth(secret: string, saltB64: string): Promise<{ kind: 'token'; hash: string }> {
+  const stretched = await stretchSecret(secret, saltB64, STRETCH_ITERATIONS)
+  return { kind: 'token', hash: 'sha256$' + (await sha256Hex(stretched)) }
 }
 
 /** Length/composition policy: ≥15 chars, or ≥12 with a space (passphrase-style). */

@@ -115,7 +115,7 @@ export function App(): ReactNode {
   if (status === 'blocked' && bootError && !doc) {
     return (
       <Shell bare>
-        <Setup title="Nexus can't start" message={bootError} />
+        <Setup title="Nexus can't start" message={bootError} stamp="Blocked" tone="red" />
       </Shell>
     )
   }
@@ -237,6 +237,7 @@ function renderPage(route: { page: string; arg: string }, hasDoc: boolean): Reac
 function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): ReactNode {
   const session = useStore((s) => s.session)
   const route = useRoute()
+  const [, setThemeTick] = useState(0)
   if (bare) return <div className="center-screen"><div className="center-card">{children}</div></div>
 
   const icon = (paths: React.JSX.Element): React.JSX.Element => (
@@ -300,7 +301,23 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
       </aside>
       <main className="content">
         <div className="content-header">
-          <SyncPill />
+          <div className="row" style={{ marginLeft: 'auto' }}>
+            <button
+              className="icon-btn"
+              title="Toggle light/dark theme"
+              aria-label="Toggle light/dark theme"
+              onClick={() => {
+                const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'
+                document.documentElement.dataset.theme = next
+                localStorage.setItem('nexus.theme', next)
+                document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', next)
+                setThemeTick((t) => t + 1)
+              }}
+            >
+              {document.documentElement.dataset.theme === 'dark' ? '☀️' : '🌙'}
+            </button>
+            <SyncPill />
+          </div>
         </div>
         {children}
       </main>

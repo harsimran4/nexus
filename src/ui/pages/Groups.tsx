@@ -48,10 +48,7 @@ export function Groups(): React.JSX.Element {
             <div
               key={g.id}
               className="card folder-card"
-              style={{ cursor: 'pointer', transition: 'border-color .12s' }}
               onClick={() => navigate('group/' + g.id)}
-              onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'var(--accent)')}
-              onMouseLeave={(e) => (e.currentTarget.style.borderColor = '#d9ccaa')}
             >
               <div className="spread">
                 <h3 style={{ margin: 0 }}>{g.name}</h3>

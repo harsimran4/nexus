@@ -99,7 +99,7 @@ function mergeEntityMaps<T>(
   return out
 }
 
-function mergeUsers<T extends { id: string }>(local: T[], remote: T[]): T[] {
+function mergeUsers<T extends { id: string }>(local: T[], remote: T[], tombstones: Tombstone[]): T[] {
   const out = new Map<string, T>()
   for (const u of remote) out.set(u.id, u)
   for (const u of local) {
@@ -111,6 +111,15 @@ function mergeUsers<T extends { id: string }>(local: T[], remote: T[]): T[] {
     const sA = stampOf(u)
     const sB = stampOf(other)
     out.set(u.id, lwwWinner(sA.updatedAt, sA.writerId, sB.updatedAt, sB.writerId) === 'a' ? passthrough(u, other) : passthrough(other, u))
+  }
+  // A user tombstone newer than the entry's stamp deletes the user on both
+  // sides — without this a stale peer would resurrect deleted users on the
+  // next merge (users are absent-on-one-side in plain arrays otherwise).
+  for (const [id, u] of [...out]) {
+    const tomb = tombstones
+      .filter((t) => t.type === 'user' && t.id === id)
+      .sort((a, b) => compareHlc(b.at, a.at))[0]
+    if (tomb && compareHlc(stampOf(u).updatedAt, tomb.at) <= 0) out.delete(id)
   }
   return [...out.values()]
 }
@@ -139,10 +148,10 @@ export function mergeRemote(input: MergeInput): { merged: NexusDoc; undeletes: A
   const settingsWinner =
     lwwWinner(sL.updatedAt, sL.writerId, sR.updatedAt, sR.writerId) === 'a' ? local.settings : remote.settings
 
-  // users: viewLog LWW for scalars, per-entry for lists
+  // users: per-entry LWW + user-tombstone support; viewers per-entry LWW
   const users = {
-    app: mergeUsers(local.users.app, remote.users.app),
-    viewers: mergeUsers(local.users.viewers, remote.users.viewers),
+    app: mergeUsers(local.users.app, remote.users.app, [...local.tombstones, ...remote.tombstones]),
+    viewers: mergeUsers(local.users.viewers, remote.users.viewers, []),
     studioSub: lwwWinner(
       local.updatedAt,
       local.writerId,
@@ -205,7 +214,7 @@ export function gcTombstones(doc: NexusDoc, gcDays: number, nowMs: number): Nexu
   if (expiredIds.size === 0) return doc
   const out: NexusDoc = { ...doc, tombstones: kept }
   for (const key of expiredIds) {
-    const [type, id] = key.split('|') as ['group' | 'project' | 'script', string]
+    const [type, id] = key.split('|') as ['group' | 'project' | 'script' | 'user', string]
     if (type === 'group') {
       const e = out.groups[id]
       if (e && e.deleted) {

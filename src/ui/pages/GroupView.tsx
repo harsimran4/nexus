@@ -6,11 +6,14 @@ import { Empty, Modal, StatusBadge, banner } from '../components'
 import { canWrite } from '../../auth/session'
 import { createProject, deleteGroupCascade, renameGroup } from '../../state/actions'
 import { navigate } from '../../App'
+import { thumbnailUrl } from '../../drive/client'
 
 export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
   const doc = useStore((s) => s.doc)
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [newOpen, setNewOpen] = useState(false)
   const writable = canWrite()
 
@@ -76,7 +79,20 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
             <tbody>
               {projects.map((p) => (
                 <tr key={p.id} className="clickable" onClick={() => navigate('project/' + p.id)}>
-                  <td style={{ fontWeight: 570 }}>{p.name}</td>
+                  <td style={{ fontWeight: 570 }}>
+                    <span className="row" style={{ gap: 9 }}>
+                      {p.fileIds[0] && (
+                        <img
+                          src={thumbnailUrl(p.fileIds[0], 200)}
+                          alt=""
+                          loading="lazy"
+                          style={{ width: 42, height: 30, objectFit: 'cover', borderRadius: 4, background: 'var(--panel-2)' }}
+                          onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
+                        />
+                      )}
+                      {p.name}
+                    </span>
+                  </td>
                   <td><StatusBadge doc={doc} status={p.status} /></td>
                   <td className="small muted">{p.fileIds.length}</td>
                   <td className="small muted">
@@ -127,21 +143,25 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
             </div>
             <div className="muted small mt8">{projects.length} project{projects.length === 1 ? '' : 's'} will be removed from the board.</div>
           </div>
+          {deleteError && banner('error', 'Delete failed', deleteError)}
           <div className="row" style={{ justifyContent: 'flex-end' }}>
             <button className="btn" onClick={() => setDeleteOpen(false)}>Cancel</button>
             <button
               className="btn danger"
+              disabled={deleting}
               onClick={async () => {
+                setDeleting(true)
                 try {
                   await deleteGroupCascade(groupId)
                   setDeleteOpen(false)
                   navigate('dash')
                 } catch (e) {
-                  alert(e instanceof Error ? e.message : 'Delete failed')
+                  setDeleteError(e instanceof Error ? e.message : 'Delete failed')
+                  setDeleting(false)
                 }
               }}
             >
-              Move everything to trash
+              {deleting ? 'Deleting…' : 'Move everything to trash'}
             </button>
           </div>
         </Modal>

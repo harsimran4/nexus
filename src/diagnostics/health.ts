@@ -62,7 +62,7 @@ export async function probeKeyPath(nexusId: string, apiKey: string): Promise<Hea
       if (e.kind === 'rateLimit')
         return { level: 'warn', code: 'quota', message: 'Drive quota exhausted for now', fix: 'Waits automatically; quota resets each minute.' }
     }
-    return { level: 'warn', code: 'keyUnknown', message: 'Key path unreachable', fix: 'Editors can still work via Google sign-in.' }
+    return { level: 'warn', code: 'keyUnknown', message: 'Key path unreachable', fix: 'Viewers cannot read until the key works; editors can still work via their Nexus login.' }
   }
 }
 
@@ -140,8 +140,8 @@ export function statusToIssue(status: SyncStatus, detail: string | null): Health
       return {
         level: 'error',
         code: 'reconnect',
-        message: detail ?? 'Google session expired',
-        fix: 'Click Reconnect in the top bar — your queued changes are kept.',
+        message: detail ?? 'Session expired',
+        fix: 'Click the Reconnect pill to sign in again — your queued changes are kept.',
       }
     case 'queued':
       return { level: 'warn', code: 'queued', message: detail ?? 'Changes waiting to sync', fix: 'Automatic retry; use Retry now in the top bar to force it.' }

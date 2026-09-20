@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { loginWithSecret } from '../../auth/session'
 import { navigate } from '../../App'
-import { banner } from '../components'
+import { banner, SecretInput } from '../components'
 import { useStore } from '../../sync/store'
 
 export function Login({ viewerTokenFromLink }: { viewerTokenFromLink: string | null }): React.JSX.Element {
@@ -30,14 +30,15 @@ export function Login({ viewerTokenFromLink }: { viewerTokenFromLink: string | n
   }
 
   return (
-    <div className="card">
+    <div className="card letterhead">
+      <span className="eyebrow">Nexus Studio</span>
       <h1 style={{ marginBottom: 2 }}>Nexus</h1>
       <p className="muted" style={{ marginBottom: 16 }}>
         Sign in with the access token or password your admin gave you.
       </p>
       <div className="field">
         <label>Access token or password</label>
-        <input
+        <SecretInput
           className="input mono"
           autoFocus
           value={secret}

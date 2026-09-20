@@ -7,6 +7,7 @@ import { hasBearer } from '../drive/client'
 import { storeGet } from './store'
 import { applyRemoteIfChanged } from './writer'
 import { reverifySessions } from '../auth/session'
+import { sweepAutoArchive } from '../state/actions'
 
 let timer: ReturnType<typeof setInterval> | null = null
 
@@ -31,5 +32,6 @@ async function pollOnce(nexusId: string): Promise<void> {
   const cred = { mode: hasBearer() ? ('auto' as const) : ('key' as const) }
   // applyRemoteIfChanged does the single cheap files.get per tick itself.
   await applyRemoteIfChanged(nexusId, cred)
+  sweepAutoArchive()
   await reverifySessions()
 }

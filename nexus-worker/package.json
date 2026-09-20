@@ -9,8 +9,5 @@
   },
   "devDependencies": {
     "wrangler": "^3.90.0"
-  },
-  "dependencies": {
-    "hash-wasm": "^4.11.0"
   }
 }

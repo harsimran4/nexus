@@ -30,7 +30,7 @@ export function touch(map: EntityMapName, entity: { updatedAt: string; writerId:
 }
 
 /** Append a deletion marker + tombstone (deletes never remove keys). */
-export function recordTombstone(doc: NexusDoc, type: 'group' | 'project' | 'script', id: string, by: string): void {
+export function recordTombstone(doc: NexusDoc, type: 'group' | 'project' | 'script' | 'user', id: string, by: string): void {
   const at = hlcNow()
   doc.tombstones = [...doc.tombstones.filter((t) => !(t.type === type && t.id === id)), { type, id, at, by }]
 }
@@ -58,11 +58,32 @@ export function pendingCount(): number {
   return scratch.size
 }
 
+/** Drop a pending edit (used when an entity is purged outright — its scratch
+ *  entry must not be re-asserted back into existence on the next merge). */
+export function forgetPending(id: string): void {
+  scratch.delete(id)
+}
+
+/** Drop ALL pending edits (workspace wipe — nothing may re-assert). */
+export function clearAllPending(): void {
+  scratch.clear()
+  storeGet().setPending(0)
+}
+
 function reassertPending(doc: NexusDoc): void {
   for (const { map, entity } of scratch.values()) {
     const fresh = { ...entity, updatedAt: hlcNow(), writerId: writerId() } as Record<string, unknown>
     if (fresh.deleted) fresh.deleted = { at: fresh.updatedAt as string, by: fresh.writerId as string }
     const target = doc[map] as Record<string, unknown>
+    // A purged key (absent here, covered by a tombstone) stays purged —
+    // re-assertion must not resurrect what the user explicitly removed.
+    if (target[String(fresh.id)] === undefined) {
+      const type = map === 'groups' ? 'group' : map === 'projects' ? 'project' : 'script'
+      const tomb = doc.tombstones
+        .filter((t) => t.type === type && t.id === fresh.id)
+        .sort((a, b) => (a.at > b.at ? -1 : 1))[0]
+      if (tomb) continue
+    }
     target[String(fresh.id)] = fresh
   }
 }

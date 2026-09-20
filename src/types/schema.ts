@@ -35,6 +35,10 @@ export const settingsSchema = z
     updatedAt: z.string().optional(),
     writerId: z.string().optional(),
     rootFolderName: z.string().min(1).default('Nexus Root'),
+    // Browser-stretched-login salt — public by design; defeats precomputed
+    // attacks, not readers. Secrets are stored as sha256(K) where the browser
+    // derives K = PBKDF2(secret, this salt, 600k). See src/auth/hashing.ts.
+    authStretchSalt: z.string().default(''),
     api: z.object({ keyOverride: z.string().nullable().default(null) }).default({ keyOverride: null }),
     privacy: z
       .object({
@@ -146,7 +150,7 @@ export const activityEventSchema = z.object({
 export type ActivityEvent = z.infer<typeof activityEventSchema>
 
 export const tombstoneSchema = z.object({
-  type: z.enum(['group', 'project', 'script']),
+  type: z.enum(['group', 'project', 'script', 'user']),
   id: z.string(),
   at: z.string(),
   by: z.string(),
