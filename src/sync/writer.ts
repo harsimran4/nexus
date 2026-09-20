@@ -100,6 +100,10 @@ function applyMerged(doc: NexusDoc): void {
 
 let mutex: Promise<unknown> = Promise.resolve()
 let saveTimer: ReturnType<typeof setTimeout> | null = null
+// Set by commit(), cleared by a confirmed write. performSave must not treat a
+// commit as a no-op just because the scratch set is empty — user/settings/
+// activity-only commits never touch() but still must reach Drive.
+let contentDirty = false
 
 /** Apply a mutation to the doc, mirror to IndexedDB, schedule a save. */
 export function commit(mut: (doc: NexusDoc) => void): void {
@@ -112,6 +116,7 @@ export function commit(mut: (doc: NexusDoc) => void): void {
   const doc = structuredClone(store.doc)
   mut(doc)
   doc.updatedAt = hlcNow()
+  contentDirty = true
   store.setDoc(doc)
   void saveDraft(doc)
   store.setPending(scratch.size)
@@ -138,7 +143,11 @@ export async function flush(): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 async function performSave(trigger: string): Promise<boolean> {
-  if (scratch.size === 0) return true // nothing pending — the free no-op guard
+  // No-op guard: skip only when nothing changed since the last confirmed
+  // write. (scratch alone is NOT the dirty signal — user/settings/activity
+  // commits never call touch(), and dropping their writes silently was the
+  // "created users vanish on refresh" bug.)
+  if (!contentDirty && scratch.size === 0) return true
   const current = mutex
   let release: (v: unknown) => void = () => {}
   mutex = new Promise((r) => (release = r))
@@ -238,6 +247,7 @@ async function writeWholeDoc(nexusId: string, cred: { mode: 'bearer' }): Promise
   const resp = await backoffRetry(() => writeFileJson(nexusId, body, cred), { retries: 2 })
   // Our entities are now confirmed remote — drop them from the scratch set.
   scratch.clear()
+  contentDirty = false
   store.setPending(0)
   store.setBase({
     headRevisionId: resp.headRevisionId,
@@ -407,6 +417,7 @@ export function discardPendingForLogout(): void {
     saveTimer = null
   }
   scratch.clear()
+  contentDirty = false // dropped edits must not be written under the next login
   storeGet().setPending(0)
 }
 
