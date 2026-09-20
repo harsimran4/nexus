@@ -455,6 +455,14 @@ export default {
         return res
       }
 
+      // Public read of nexus.json ONLY (it is link-shared/public by design).
+      // Exists so the app can boot when Google throttles the visitor's IP for
+      // unsigned key traffic — the Worker reads from Cloudflare's IPs instead.
+      // Locked to the exact configured file id: no open Drive proxy here.
+      if (url.pathname === `/drive/public/content/${env.NEXUS_FILE_ID}` && request.method === 'GET') {
+        return await passthroughJson(await opContentGet(env, env.NEXUS_FILE_ID), env)
+      }
+
       // Resumable PUT carries its own signature, not a session bearer, since
       // large-file chunk requests come from the browser's XHR directly.
       if (url.pathname === '/drive/upload/resumable' && request.method === 'PUT') {

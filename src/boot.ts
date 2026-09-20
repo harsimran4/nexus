@@ -108,17 +108,26 @@ async function initialRead(nexusId: string): Promise<'ok' | 'corrupt' | 'none'> 
     let raw: string
     try {
       raw = await readFile(nexusId, cred)
-    } catch (e) {
-      // A network/CORS TypeError on the key path almost always means the API
-      // key's HTTP-referrer restriction doesn't include this origin (Google
-      // answers such rejections without CORS headers, so fetch can't see them).
-      if (e instanceof DriveError && e.kind === 'network') {
-        throw new Error(
-          'The API key rejected this origin. In Google Cloud Console → Credentials → API key → Website restrictions, add: ' +
-            location.origin + '/* — then reload.',
-        )
+    } catch (keyErr) {
+      // A network/CORS TypeError on the key path means Google refused this
+      // request without CORS headers — either the key's referrer list or
+      // (indistinguishable from here) Google's abuse filter throttling the
+      // visitor's IP for unsigned traffic. The Worker reads nexus.json with
+      // its own credential from a different IP, so fall back to it for boot.
+      if (keyErr instanceof DriveError && keyErr.kind === 'network' && config.workerUrl) {
+        try {
+          const res = await fetch(`${config.workerUrl}/drive/public/content/${nexusId}`)
+          if (!res.ok) throw new Error(`worker read failed (HTTP ${res.status})`)
+          raw = await res.text()
+        } catch {
+          throw new Error(
+            'The API key rejected this origin, and the Worker fallback also failed. In Google Cloud Console → Credentials → API key → Website restrictions, add: ' +
+              location.origin + '/* — then reload.',
+          )
+        }
+      } else {
+        throw keyErr
       }
-      throw e
     }
     const parsed = parseDoc(raw)
     if (!parsed.ok) {
