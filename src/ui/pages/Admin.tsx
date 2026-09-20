@@ -231,7 +231,7 @@ function AddUserModal({ onClose }: { onClose: () => void }): React.JSX.Element {
   const [role, setRole] = useState<Role>('editor')
   const [mode, setMode] = useState<'token' | 'password'>('token')
   const [pw, setPw] = useState('')
-  const [reveal, setReveal] = useState<{ raw: string; kind: 'token' | 'password' } | null>(null)
+  const [reveal, setReveal] = useState<{ raw: string; kind: 'token' | 'password'; synced: boolean } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -239,9 +239,9 @@ function AddUserModal({ onClose }: { onClose: () => void }): React.JSX.Element {
     setBusy(true)
     setError(null)
     try {
-      const { raw } =
+      const { raw, synced } =
         mode === 'token' ? await createAppUser(name.trim(), role) : await createAppUser(name.trim(), role, pw)
-      setReveal({ raw, kind: mode })
+      setReveal({ raw, kind: mode, synced })
     } catch (e) {
       setError(errText(e))
     }
@@ -252,6 +252,7 @@ function AddUserModal({ onClose }: { onClose: () => void }): React.JSX.Element {
     <Modal title="Add user" onClose={onClose}>
       {reveal ? (
         <>
+          {!reveal.synced && banner('warn', 'Not synced yet', 'The account will retry automatically — the secret below works once it syncs.')}
           <p className="muted small">
             {name.trim()} can sign in now. Hand over the secret through a safe channel.
           </p>
@@ -324,7 +325,7 @@ function AddUserModal({ onClose }: { onClose: () => void }): React.JSX.Element {
 function ResetSecretModal(
   { user, onClose }: { user: { id: string; name: string }; onClose: () => void },
 ): React.JSX.Element {
-  const [reveal, setReveal] = useState<{ raw: string; kind: 'token' | 'password' } | null>(null)
+  const [reveal, setReveal] = useState<{ raw: string; kind: 'token' | 'password'; synced: boolean } | null>(null)
   const [pw, setPw] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -333,8 +334,8 @@ function ResetSecretModal(
     setBusy(true)
     setError(null)
     try {
-      const { raw } = await resetUserPassword(user.id, secret)
-      setReveal({ raw, kind: secret === undefined ? 'token' : 'password' })
+      const { raw, synced } = await resetUserPassword(user.id, secret)
+      setReveal({ raw, kind: secret === undefined ? 'token' : 'password', synced })
       setPw('')
     } catch (e) {
       setError(errText(e))
@@ -346,6 +347,7 @@ function ResetSecretModal(
     <Modal title={`Reset secret — ${user.name}`} onClose={onClose}>
       {reveal ? (
         <>
+          {!reveal.synced && banner('warn', 'Not synced yet', 'The new secret works once it syncs — it retries automatically.')}
           <TokenReveal
             raw={reveal.raw}
             kind={reveal.kind}

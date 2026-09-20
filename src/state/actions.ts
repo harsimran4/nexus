@@ -521,7 +521,7 @@ export async function createAppUser(
   name: string,
   role: 'admin' | 'editor' | 'viewer',
   secret?: string,
-): Promise<{ raw: string }> {
+): Promise<{ raw: string; synced: boolean }> {
   assertAdmin()
   let auth: NexusDoc['users']['app'][number]['auth']
   let raw: string
@@ -557,7 +557,10 @@ export async function createAppUser(
     ]
     appendActivity(doc, 'user.create', id, { name, role })
   })
-  return { raw }
+  // User creation must not sit in the debounce window — a refresh there loses
+  // the account (and its secret). Write through now.
+  const synced = await flush()
+  return { raw, synced }
 }
 
 export function setUserDisabled(userId: string, disabled: boolean): void {
@@ -624,7 +627,7 @@ export function deleteUser(userId: string): void {
   })
 }
 
-export async function resetUserPassword(userId: string, secret: string | undefined): Promise<{ raw: string }> {
+export async function resetUserPassword(userId: string, secret: string | undefined): Promise<{ raw: string; synced: boolean }> {
   assertAdmin()
   let auth: NexusDoc['users']['app'][number]['auth']
   let raw: string
@@ -650,7 +653,9 @@ export async function resetUserPassword(userId: string, secret: string | undefin
     user.writerId = writerId()
     appendActivity(doc, 'user.reset', userId, { name: user.name })
   })
-  return { raw }
+  // Same as creation: the new secret must reach Drive before it's shown.
+  const synced = await flush()
+  return { raw, synced }
 }
 
 export async function mintViewerToken(name: string, note = ''): Promise<{ raw: string; id: string }> {
