@@ -20,6 +20,7 @@ export const newGroupId = () => uid('grp')
 export const newScriptId = () => uid('scr')
 export const newUserId = () => uid('usr')
 export const newViewerId = () => uid('vw')
+export const newMediaSectionId = () => uid('sec')
 
 export function newDeviceId(): string {
   const existing = localStorage.getItem('nexus.deviceId')

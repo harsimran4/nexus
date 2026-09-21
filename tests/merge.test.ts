@@ -45,6 +45,8 @@ function makeProject(
     status: 'pending',
     labels: [],
     fileIds: [],
+    mediaSections: [],
+    mediaSectionOf: {},
     assigneeAppId: null,
     dueAt: null,
     notes: '',

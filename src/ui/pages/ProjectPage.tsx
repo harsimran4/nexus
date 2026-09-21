@@ -1,17 +1,34 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore } from '../../sync/store'
-import { Empty, StatusBadge, banner, useDebouncedCommit, PageQuote } from '../components'
+import { Empty, Modal, StatusBadge, banner, useDebouncedCommit, PageQuote } from '../components'
 import { canWrite } from '../../auth/session'
 import {
+  addMediaSection,
+  moveMediaToSection,
   readScriptBody,
+  removeMediaSection,
   removeProjectFile,
+  renameMediaSection,
   setProjectStatus,
   updateProject,
   updateScript,
   uploadToProject,
 } from '../../state/actions'
 import { describeError, downloadToBrowser } from '../../drive/preview'
-import { getMeta, renameFile, thumbnailUrl, webViewLink } from '../../drive/client'
+import { getMeta, listChildren, renameFile, thumbnailUrl, webViewLink, type FileMeta } from '../../drive/client'
+import {
+  KIND_GLYPH,
+  KIND_LABEL,
+  UNSORTED,
+  buildItems,
+  filterAndSort,
+  formatBytes,
+  fileSizeBytes,
+  kindFromMime,
+  totalSize,
+  type MediaKind,
+  type MediaSort,
+} from '../../util/media'
 import { navigate } from '../../App'
 import { touch } from '../../sync/writer'
 
@@ -22,11 +39,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'scripts', label: 'Scripts' },
   { id: 'settings', label: 'Settings' },
 ]
-
-interface FileInfo {
-  name: string
-  mimeType?: string
-}
 
 export function ProjectPage({ projectId }: { projectId: string }): React.JSX.Element {
   const doc = useStore((s) => s.doc)
@@ -121,11 +133,28 @@ function NameEditor({ projectId, name }: { projectId: string; name: string }): R
 
 function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
   const doc = useStore((s) => s.doc)
-  const [uploadPct, setUploadPct] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [note, setNote] = useState<string | null>(null)
+  const [meta, setMeta] = useState<Record<string, FileMeta>>({})
+  // media view state: section (all / unsorted / section id), kind filter, sort, search
+  const [section, setSection] = useState<string>('all')
+  const [kind, setKind] = useState<MediaKind | 'all'>('all')
+  const [sort, setSort] = useState<MediaSort>('added-desc')
+  const [search, setSearch] = useState('')
+  // selection + bulk
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [bulkBusy, setBulkBusy] = useState(false)
+  // section CRUD drafts
+  const [newSectionName, setNewSectionName] = useState<string | null>(null)
+  const [renamingSection, setRenamingSection] = useState<string | null>(null)
+  const [sectionName, setSectionName] = useState('')
+  // file rename (per card)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
-  const [meta, setMeta] = useState<Record<string, FileInfo>>({})
+  // upload
+  const [uploadSection, setUploadSection] = useState('')
+  const [uploadQueue, setUploadQueue] = useState<{ name: string; pct: number }[] | null>(null)
+  const [dragOver, setDragOver] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const writable = canWrite()
 
@@ -133,31 +162,197 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
   if (!doc || !project) return <></>
 
   const fileKey = project.fileIds.join(',')
+  const folderId = project.folderId
+  const sectionOf = project.mediaSectionOf
 
+  // One files.list per visit replaces the old N× getMeta calls; per-file
+  // getMeta fills only ids the listing missed (file moved manually on Drive,
+  // or no folder linked yet). Wholesale list merge also refreshes sizes.
   useEffect(() => {
     let alive = true
-    for (const f of project.fileIds) {
-      if (meta[f]) continue
-      void getMeta(f, { mode: 'auto' })
+    const ids = fileKey ? fileKey.split(',') : []
+    const fetchOne = (f: string) =>
+      getMeta(f, { mode: 'auto' })
         .then((m) => {
-          if (alive) setMeta((prev) => ({ ...prev, [f]: { name: m.name, mimeType: m.mimeType } }))
+          if (alive) setMeta((prev) => ({ ...prev, [f]: m }))
         })
         .catch(() => {
-          if (alive) setMeta((prev) => ({ ...prev, [f]: { name: f } }))
+          if (alive) setMeta((prev) => ({ ...prev, [f]: { id: f, name: f } }))
         })
+    const run = async () => {
+      if (folderId) {
+        try {
+          const files: FileMeta[] = []
+          let pageToken: string | undefined
+          for (let page = 0; page < 10 && (page === 0 || pageToken); page++) {
+            const res = await listChildren(folderId, { mode: 'auto' }, { pageToken })
+            files.push(...res.files)
+            pageToken = res.nextPageToken
+          }
+          if (!alive) return
+          const byId = new Map(files.map((f) => [f.id, f]))
+          setMeta((prev) => {
+            const next = { ...prev }
+            for (const f of ids) {
+              const m = byId.get(f)
+              if (m) next[f] = m
+            }
+            return next
+          })
+          for (const f of ids) if (!byId.has(f)) void fetchOne(f)
+          return
+        } catch {
+          // listing failed (e.g. key path can't see the folder) — per-file below
+        }
+      }
+      for (const f of ids) void fetchOne(f)
     }
+    void run()
     return () => {
       alive = false
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fileKey, folderId])
+
+  const items = useMemo(() => buildItems(project.fileIds, meta), [fileKey, meta])
+
+  // A deleted section id falls back to All (e.g. a peer removed it mid-view).
+  const activeSection =
+    section === 'all' || section === UNSORTED || project.mediaSections.some((s) => s.id === section)
+      ? section
+      : 'all'
+
+  const shown = useMemo(
+    () => filterAndSort(items, { search, kind, section: activeSection, sectionOf, sort }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [items, search, kind, activeSection, sectionOf, sort],
+  )
+  const totals = totalSize(shown)
+
+  const countFor = (sec: string) =>
+    items.filter((it) =>
+      sec === 'all' ? true : sec === UNSORTED ? !sectionOf[it.fileId] : sectionOf[it.fileId] === sec,
+    ).length
+
+  const sectionNameOf = (id: string | undefined) =>
+    id ? project.mediaSections.find((s) => s.id === id)?.name ?? UNSORTED : UNSORTED
+
+  // Drop selection entries whose files are gone (bulk delete / peer delete).
+  useEffect(() => {
+    const ids = new Set(project.fileIds)
+    setSelected((prev) => {
+      const pruned = new Set([...prev].filter((f) => ids.has(f)))
+      return pruned.size === prev.size ? prev : pruned
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileKey])
 
-  const startUpload = async (file: File) => {
+  // Uploads default into the section you're looking at.
+  useEffect(() => {
+    if (activeSection !== 'all' && activeSection !== UNSORTED) setUploadSection(activeSection)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection])
+
+  const toggleSel = (f: string) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(f)) next.delete(f)
+      else next.add(f)
+      return next
+    })
+  const allShownSelected = shown.length > 0 && shown.every((it) => selected.has(it.fileId))
+
+  const flash = (msg: string) => setNote(msg)
+
+  const runBulk = async (fn: () => Promise<void>) => {
+    if (bulkBusy) return
+    setBulkBusy(true)
     setError(null)
-    setUploadPct(0)
-    const r = await uploadToProject(projectId, file, setUploadPct)
-    setUploadPct(null)
-    if (!r.ok) setError(r.error)
+    setNote(null)
+    try {
+      await fn()
+    } catch (e) {
+      setError(describeError(e).message)
+    } finally {
+      setBulkBusy(false)
+    }
+  }
+
+  const bulkDelete = () => {
+    const ids = [...selected]
+    if (ids.length === 0) return
+    if (!confirm(`Delete ${ids.length} file${ids.length === 1 ? '' : 's'}? They move to Drive trash (recoverable for 30 days).`)) return
+    void runBulk(async () => {
+      const failed: string[] = []
+      for (const f of ids) {
+        const r = await removeProjectFile(projectId, f, { trashInDrive: true })
+        if (!r.ok) failed.push(`${meta[f]?.name ?? f}: ${r.error}`)
+      }
+      setSelected(new Set())
+      if (failed.length) setError(`Some files could not be deleted — ${failed.join(' · ')}`)
+      else flash(`${ids.length} file${ids.length === 1 ? '' : 's'} moved to Drive trash.`)
+    })
+  }
+
+  const bulkDownload = () => {
+    const ids = [...selected]
+    if (ids.length === 0) return
+    void runBulk(async () => {
+      let i = 0
+      for (const f of ids) {
+        await downloadToBrowser(f, meta[f]?.name ?? f)
+        i++
+        if (i < ids.length) await new Promise((r) => setTimeout(r, 300))
+      }
+      flash(`Downloaded ${i} file${i === 1 ? '' : 's'}.`)
+    })
+  }
+
+  const bulkMove = (target: string) => {
+    const ids = [...selected]
+    if (ids.length === 0 || !target) return
+    const to = target === UNSORTED ? null : target
+    const label = to === null ? 'Unsorted' : sectionNameOf(to)
+    void runBulk(async () => {
+      moveMediaToSection(projectId, ids, to)
+      setSelected(new Set())
+      flash(`Moved ${ids.length} file${ids.length === 1 ? '' : 's'} to ${label}.`)
+    })
+  }
+
+  const createSection = () => {
+    const v = (newSectionName ?? '').trim()
+    setNewSectionName(null)
+    if (!v) return
+    try {
+      addMediaSection(projectId, v)
+    } catch (e) {
+      setError(describeError(e).message)
+    }
+  }
+
+  const doRenameSection = () => {
+    const id = renamingSection
+    setRenamingSection(null)
+    if (!id) return
+    try {
+      renameMediaSection(projectId, id, sectionName)
+    } catch (e) {
+      setError(describeError(e).message)
+    }
+  }
+
+  const deleteSection = (id: string) => {
+    const s = project.mediaSections.find((x) => x.id === id)
+    if (!s) return
+    const n = countFor(id)
+    if (!confirm(`Delete section "${s.name}"? Its ${n} file${n === 1 ? '' : 's'} move to Unsorted.`)) return
+    try {
+      removeMediaSection(projectId, id)
+      if (section === id) setSection('all')
+    } catch (e) {
+      setError(describeError(e).message)
+    }
   }
 
   const doRename = async (fileId: string) => {
@@ -166,130 +361,371 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
     if (!v) return
     try {
       await renameFile(fileId, v, { mode: 'bearer' })
-      setMeta((prev) => ({ ...prev, [fileId]: { name: v, mimeType: prev[fileId]?.mimeType } }))
+      setMeta((prev) => ({ ...prev, [fileId]: { ...prev[fileId], id: fileId, name: v } }))
     } catch (e) {
       setError(describeError(e).message)
     }
   }
 
+  const startUploads = async (files: File[]) => {
+    if (files.length === 0) return
+    setError(null)
+    setNote(null)
+    const target = uploadSection || null
+    // Entries stay in place (indices must not shift); a finished file just
+    // sits at pct 100 until the whole batch is done.
+    setUploadQueue(files.map((f) => ({ name: f.name, pct: 0 })))
+    const failed: string[] = []
+    let okCount = 0
+    for (let i = 0; i < files.length; i++) {
+      const r = await uploadToProject(
+        projectId,
+        files[i],
+        (pct) => setUploadQueue((q) => (q ? q.map((u, j) => (j === i ? { ...u, pct } : u)) : q)),
+        { sectionId: target },
+      )
+      if (r.ok) okCount++
+      else failed.push(`${files[i].name}: ${r.error}`)
+      setUploadQueue((q) => (q ? q.map((u, j) => (j === i ? { ...u, pct: 100 } : u)) : q))
+    }
+    setUploadQueue(null)
+    if (failed.length) setError(`Some uploads failed — ${failed.join(' · ')}`)
+    else if (files.length > 1) flash(`Uploaded ${okCount} file${okCount === 1 ? '' : 's'}.`)
+  }
+
+  const uploadTotal = uploadQueue?.length ?? 0
+  const uploadDone = uploadQueue ? uploadQueue.filter((u) => u.pct >= 100).length : 0
+  const uploadCurrent = uploadQueue?.find((u) => u.pct < 100)
+
   return (
     <div>
       {error && banner('error', 'Media problem', error)}
+      {note && banner('info', note)}
 
       {project.fileIds.length === 0 ? (
         <Empty icon="🖼">No media yet — upload below.</Empty>
       ) : (
-        <div className="media-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 14 }}>
-          {project.fileIds.map((f) => {
-            const info = meta[f]
-            const displayName = renamingId === f ? renameValue : info?.name ?? f
-            return (
-              <div key={f} className="photo-frame">
-                <div
-                  style={{
-                    aspectRatio: '16/9',
-                    background: 'var(--bg)',
-                    borderRadius: 8,
-                    overflow: 'hidden',
-                    display: 'grid',
-                    placeItems: 'center',
-                    marginBottom: 8,
+        <>
+          {/* Sections row */}
+          <div className="row wrap" style={{ gap: 6, alignItems: 'center', marginBottom: 10 }}>
+            <div className="chips">
+              <button className={`chip ${activeSection === 'all' ? 'on' : ''}`} onClick={() => setSection('all')}>
+                All ({countFor('all')})
+              </button>
+              <button className={`chip ${activeSection === UNSORTED ? 'on' : ''}`} onClick={() => setSection(UNSORTED)}>
+                Unsorted ({countFor(UNSORTED)})
+              </button>
+              {project.mediaSections.map((s) => (
+                <button
+                  key={s.id}
+                  className={`chip ${activeSection === s.id ? 'on' : ''}`}
+                  onClick={() => setSection(s.id)}
+                >
+                  {s.name} ({countFor(s.id)})
+                </button>
+              ))}
+            </div>
+            {writable && activeSection !== 'all' && activeSection !== UNSORTED && (
+              <span className="row" style={{ gap: 4 }}>
+                <button
+                  className="btn small ghost"
+                  title="Rename section"
+                  onClick={() => {
+                    setSectionName(project.mediaSections.find((s) => s.id === activeSection)?.name ?? '')
+                    setRenamingSection(activeSection)
                   }}
                 >
-                  <img
-                    src={thumbnailUrl(f, 400)}
-                    alt={displayName}
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                    onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
-                  />
-                </div>
-                {renamingId === f ? (
-                  <input
-                    className="input"
-                    value={renameValue}
-                    autoFocus
-                    onChange={(e) => setRenameValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') void doRename(f)
-                      if (e.key === 'Escape') setRenamingId(null)
-                    }}
-                    onBlur={() => void doRename(f)}
-                  />
-                ) : (
-                  <div className="small" style={{ fontWeight: 570, wordBreak: 'break-word' }} title={displayName}>
-                    {displayName}
-                  </div>
-                )}
-                <div className="row wrap mt8">
-                  <a className="btn small" href={webViewLink(f)} target="_blank" rel="noreferrer">Open</a>
-                  <button
-                    className="btn small"
-                    onClick={async () => {
-                      try {
-                        await downloadToBrowser(f, info?.name ?? displayName)
-                      } catch (err) {
-                        setError(describeError(err).message)
-                      }
-                    }}
-                  >
-                    Download
+                  ✎
+                </button>
+                <button className="btn small ghost" title="Delete section" onClick={() => deleteSection(activeSection)}>
+                  ✕
+                </button>
+              </span>
+            )}
+            {writable &&
+              (newSectionName === null ? (
+                <button className="chip" title="New section" onClick={() => setNewSectionName('')}>
+                  ＋ section
+                </button>
+              ) : (
+                <input
+                  className="input"
+                  style={{ width: 150, padding: '2px 9px', fontSize: 13 }}
+                  placeholder="Section name…"
+                  value={newSectionName}
+                  autoFocus
+                  onChange={(e) => setNewSectionName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') createSection()
+                    if (e.key === 'Escape') setNewSectionName(null)
+                  }}
+                  onBlur={createSection}
+                />
+              ))}
+          </div>
+
+          {/* Filter / sort bar */}
+          <div className="card mb8" style={{ padding: '10px 12px' }}>
+            <div className="row wrap" style={{ gap: 8 }}>
+              <input
+                className="input"
+                style={{ maxWidth: 220, padding: '4px 9px', fontSize: 13 }}
+                placeholder="Search by name…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+              <div className="chips">
+                {(['all', 'image', 'video', 'audio', 'other'] as const).map((k) => (
+                  <button key={k} className={`chip ${kind === k ? 'on' : ''}`} onClick={() => setKind(k)}>
+                    {k === 'all' ? 'All types' : `${KIND_GLYPH[k]} ${KIND_LABEL[k]}`}
                   </button>
-                  {writable && renamingId !== f && (
-                    <button
-                      className="btn small ghost"
-                      onClick={() => {
-                        setRenameValue(info?.name ?? f)
-                        setRenamingId(f)
-                      }}
-                    >
-                      Rename
-                    </button>
-                  )}
-                  {writable && (
-                    <button
-                      className="btn small danger"
-                      onClick={async () => {
-                        if (!confirm(`Delete "${displayName}"? It moves to Drive trash (recoverable for 30 days).`)) return
-                        const r = await removeProjectFile(projectId, f, { trashInDrive: true })
-                        if (!r.ok) setError(r.error)
-                      }}
-                    >
-                      Delete
-                    </button>
-                  )}
-                </div>
+                ))}
               </div>
-            )
-          })}
-        </div>
+              <select
+                className="input"
+                style={{ maxWidth: 190, padding: '4px 9px', fontSize: 13 }}
+                value={sort}
+                onChange={(e) => setSort(e.target.value as MediaSort)}
+              >
+                <option value="added-desc">Newest first</option>
+                <option value="added-asc">Oldest first</option>
+                <option value="name-asc">Name A→Z</option>
+                <option value="name-desc">Name Z→A</option>
+                <option value="size-desc">Size: large → small</option>
+                <option value="size-asc">Size: small → large</option>
+              </select>
+            </div>
+            <div className="muted small" style={{ marginTop: 6 }}>
+              {shown.length} of {project.fileIds.length} file{project.fileIds.length === 1 ? '' : 's'} ·{' '}
+              {formatBytes(totals.known)}
+              {totals.unknownCount > 0 ? ` + ${totals.unknownCount} unknown` : ''}
+            </div>
+          </div>
+
+          {/* Bulk bar */}
+          {selected.size > 0 && (
+            <div className="card mb8" style={{ padding: '10px 12px', borderColor: 'var(--accent)' }}>
+              <div className="row wrap" style={{ gap: 8 }}>
+                <b>{selected.size} selected</b>
+                <button
+                  className="btn small"
+                  disabled={bulkBusy}
+                  onClick={() =>
+                    setSelected(allShownSelected ? new Set() : new Set(shown.map((it) => it.fileId)))
+                  }
+                >
+                  {allShownSelected ? 'Unselect shown' : 'Select shown'}
+                </button>
+                <button className="btn small ghost" disabled={bulkBusy} onClick={() => setSelected(new Set())}>
+                  Clear
+                </button>
+                {writable && (
+                  <select className="input" style={{ maxWidth: 180, padding: '4px 9px', fontSize: 13 }} value="" disabled={bulkBusy} onChange={(e) => bulkMove(e.target.value)}>
+                    <option value="">Move to…</option>
+                    <option value={UNSORTED}>Unsorted</option>
+                    {project.mediaSections.map((s) => (
+                      <option key={s.id} value={s.id}>{s.name}</option>
+                    ))}
+                  </select>
+                )}
+                <button className="btn small" disabled={bulkBusy} onClick={bulkDownload}>
+                  Download
+                </button>
+                {writable && (
+                  <button className="btn small danger" disabled={bulkBusy} onClick={bulkDelete}>
+                    Delete
+                  </button>
+                )}
+                {bulkBusy && <span className="muted small">Working…</span>}
+              </div>
+            </div>
+          )}
+
+          {shown.length === 0 ? (
+            <Empty icon="🔍">No files match this filter.</Empty>
+          ) : (
+            <div className="media-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 14 }}>
+              {shown.map((it) => {
+                const f = it.fileId
+                const info = meta[f]
+                const fileKind = kindFromMime(info?.mimeType)
+                const displayName = renamingId === f ? renameValue : info?.name ?? f
+                const isSel = selected.has(f)
+                return (
+                  <div key={f} className={`photo-frame${isSel ? ' sel' : ''}`}>
+                    <input
+                      type="checkbox"
+                      className="media-check"
+                      checked={isSel}
+                      onChange={() => toggleSel(f)}
+                      aria-label={`Select ${displayName}`}
+                      title="Select"
+                    />
+                    <div
+                      style={{
+                        aspectRatio: '16/9',
+                        background: 'var(--bg)',
+                        borderRadius: 8,
+                        overflow: 'hidden',
+                        display: 'grid',
+                        placeItems: 'center',
+                        marginBottom: 8,
+                        position: 'relative',
+                      }}
+                    >
+                      <img
+                        src={thumbnailUrl(f, 400)}
+                        alt={displayName}
+                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                        onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
+                      />
+                      {fileKind !== 'image' && (
+                        <span className="media-kind-badge">
+                          {KIND_GLYPH[fileKind]} {KIND_LABEL[fileKind]}
+                        </span>
+                      )}
+                    </div>
+                    {renamingId === f ? (
+                      <input
+                        className="input"
+                        value={renameValue}
+                        autoFocus
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void doRename(f)
+                          if (e.key === 'Escape') setRenamingId(null)
+                        }}
+                        onBlur={() => void doRename(f)}
+                      />
+                    ) : (
+                      <div className="small" style={{ fontWeight: 570, wordBreak: 'break-word' }} title={displayName}>
+                        {displayName}
+                      </div>
+                    )}
+                    <div className="media-meta">
+                      {formatBytes(fileSizeBytes(info?.size))}
+                      {activeSection === 'all' && sectionOf[f] ? ` · ${sectionNameOf(sectionOf[f])}` : ''}
+                    </div>
+                    <div className="row wrap mt8">
+                      <a className="btn small" href={webViewLink(f)} target="_blank" rel="noreferrer">Open</a>
+                      <button
+                        className="btn small"
+                        onClick={async () => {
+                          try {
+                            await downloadToBrowser(f, info?.name ?? displayName)
+                          } catch (err) {
+                            setError(describeError(err).message)
+                          }
+                        }}
+                      >
+                        Download
+                      </button>
+                      {writable && renamingId !== f && (
+                        <button
+                          className="btn small ghost"
+                          onClick={() => {
+                            setRenameValue(info?.name ?? f)
+                            setRenamingId(f)
+                          }}
+                        >
+                          Rename
+                        </button>
+                      )}
+                      {writable && (
+                        <button
+                          className="btn small danger"
+                          onClick={async () => {
+                            if (!confirm(`Delete "${displayName}"? It moves to Drive trash (recoverable for 30 days).`)) return
+                            const r = await removeProjectFile(projectId, f, { trashInDrive: true })
+                            if (!r.ok) setError(r.error)
+                          }}
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </>
       )}
 
       {writable && (
         <div className="mt16">
+          {project.fileIds.length > 0 || project.mediaSections.length > 0 ? (
+            <div className="row wrap" style={{ gap: 8, marginBottom: 8 }}>
+              <span className="muted small">Upload to</span>
+              <select
+                className="input"
+                style={{ maxWidth: 200, padding: '4px 9px', fontSize: 13 }}
+                value={uploadSection}
+                onChange={(e) => setUploadSection(e.target.value)}
+              >
+                <option value="">Unsorted</option>
+                {project.mediaSections.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+          ) : null}
           <div
-            className="dropzone"
+            className={`dropzone${dragOver ? ' drag' : ''}`}
             onClick={() => fileInput.current?.click()}
-            onDragOver={(e) => e.preventDefault()}
+            onDragOver={(e) => {
+              e.preventDefault()
+              setDragOver(true)
+            }}
+            onDragLeave={() => setDragOver(false)}
             onDrop={(e) => {
               e.preventDefault()
-              const file = e.dataTransfer.files[0]
-              if (file) void startUpload(file)
+              setDragOver(false)
+              void startUploads(Array.from(e.dataTransfer.files))
             }}
           >
-            Drop media here or click to upload → this project's folder on Drive
-            {uploadPct !== null && <div className="progress"><div style={{ width: `${uploadPct}%` }} /></div>}
+            {uploadQueue ? (
+              <div>
+                <div className="small muted">
+                  {uploadDone}/{uploadTotal} uploaded · {uploadCurrent ? uploadCurrent.name : 'finishing…'}
+                </div>
+                <div className="progress"><div style={{ width: `${uploadCurrent?.pct ?? 100}%` }} /></div>
+              </div>
+            ) : (
+              'Drop media here or click to upload → this project\'s folder on Drive'
+            )}
           </div>
           <input
             ref={fileInput}
             type="file"
+            multiple
             hidden
             onChange={(e) => {
-              const file = e.target.files?.[0]
-              if (file) void startUpload(file)
+              void startUploads(Array.from(e.target.files ?? []))
               e.target.value = ''
             }}
           />
         </div>
+      )}
+
+      {renamingSection && (
+        <Modal title="Rename section" onClose={() => setRenamingSection(null)}>
+          <div className="field">
+            <label>Section name</label>
+            <input
+              className="input"
+              value={sectionName}
+              autoFocus
+              onChange={(e) => setSectionName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') doRenameSection()
+              }}
+            />
+          </div>
+          <div className="row">
+            <button className="btn" onClick={doRenameSection}>Rename</button>
+          </div>
+        </Modal>
       )}
     </div>
   )

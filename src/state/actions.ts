@@ -8,6 +8,7 @@ import {
   newScriptId,
   newUserId,
   newViewerId,
+  newMediaSectionId,
 } from '../util/id'
 import { hlcNow } from '../util/hlc'
 import {
@@ -170,6 +171,8 @@ export async function createProject(fields: {
       status: fields.status ?? defaultStatus(doc),
       labels: fields.labels ?? [],
       fileIds: [],
+      mediaSections: [],
+      mediaSectionOf: {},
       assigneeAppId: fields.assigneeAppId ?? null,
       dueAt: fields.dueAt ?? null,
       notes: fields.notes ?? fields.description ?? '',
@@ -279,11 +282,90 @@ export function updateProjectMeta(
   updateProject(projectId, fields)
 }
 
+// ---------------------------------------------------------------------------
+// Media sections — app-only groupings over the project's flat Drive folder.
+// A fileId with no mediaSectionOf entry is "Unsorted".
+// ---------------------------------------------------------------------------
+
+export function addMediaSection(projectId: string, name: string): string | null {
+  assertWrite()
+  const clean = name.trim()
+  if (!clean) return null
+  const id = newMediaSectionId()
+  commit((doc) => {
+    const p = doc.projects[projectId]
+    if (!p) return
+    p.mediaSections = [...p.mediaSections, { id, name: clean }]
+    touch('projects', p)
+    appendActivity(doc, 'project.section.create', projectId, { name: clean })
+  })
+  return id
+}
+
+export function renameMediaSection(projectId: string, sectionId: string, name: string): void {
+  assertWrite()
+  const clean = name.trim()
+  if (!clean) return
+  commit((doc) => {
+    const p = doc.projects[projectId]
+    const section = p?.mediaSections.find((s) => s.id === sectionId)
+    if (!p || !section) return
+    section.name = clean
+    touch('projects', p)
+    appendActivity(doc, 'project.section.rename', projectId, { section: sectionId, name: clean })
+  })
+}
+
+/** Delete a section; its files become Unsorted (assignments cleared in the
+ *  same commit, so a peer can never see a dangling section reference). */
+export function removeMediaSection(projectId: string, sectionId: string): void {
+  assertWrite()
+  commit((doc) => {
+    const p = doc.projects[projectId]
+    const section = p?.mediaSections.find((s) => s.id === sectionId)
+    if (!p || !section) return
+    p.mediaSections = p.mediaSections.filter((s) => s.id !== sectionId)
+    let filesUnsorted = 0
+    for (const f of Object.keys(p.mediaSectionOf)) {
+      if (p.mediaSectionOf[f] === sectionId) {
+        delete p.mediaSectionOf[f]
+        filesUnsorted++
+      }
+    }
+    touch('projects', p)
+    appendActivity(doc, 'project.section.delete', projectId, { name: section.name, filesUnsorted })
+  })
+}
+
+/** Bulk (re-)assign files to a section; null moves them to Unsorted. Inputs
+ *  are filtered to files the project still holds, so a stale selection from
+ *  another view can never resurrect entries. */
+export function moveMediaToSection(projectId: string, fileIds: string[], sectionId: string | null): void {
+  assertWrite()
+  commit((doc) => {
+    const p = doc.projects[projectId]
+    if (!p) return
+    const known = new Set(p.fileIds)
+    const sectionExists = sectionId !== null && p.mediaSections.some((s) => s.id === sectionId)
+    let moved = 0
+    for (const f of fileIds) {
+      if (!known.has(f)) continue
+      if (sectionId === null || !sectionExists) delete p.mediaSectionOf[f]
+      else p.mediaSectionOf[f] = sectionId
+      moved++
+    }
+    if (moved === 0) return
+    touch('projects', p)
+    appendActivity(doc, 'project.media.move', projectId, { files: moved, to: sectionExists ? sectionId : null })
+  })
+}
+
 /** Upload a file into the project's own Drive subfolder, then link it. */
 export async function uploadToProject(
   projectId: string,
   file: File,
   onProgress?: (pct: number) => void,
+  opts: { sectionId?: string | null } = {},
 ): Promise<{ ok: true; fileId: string } | { ok: false; error: string }> {
   const { storeGet } = await import('../sync/store')
   const doc = storeGet().doc
@@ -297,8 +379,13 @@ export async function uploadToProject(
       const p = d.projects[projectId]
       if (!p) return
       p.fileIds = [...new Set([...p.fileIds, meta.id])]
+      // Assign the upload's section in the same commit as the link — atomic,
+      // and skipped if that section was deleted while the upload was in flight.
+      if (opts.sectionId && p.mediaSections.some((s) => s.id === opts.sectionId)) {
+        p.mediaSectionOf[meta.id] = opts.sectionId
+      }
       touch('projects', p)
-      appendActivity(d, 'project.attach', projectId, { fileId: meta.id, fileName: file.name })
+      appendActivity(d, 'project.attach', projectId, { fileId: meta.id, fileName: file.name, sectionId: opts.sectionId ?? null })
     })
     return { ok: true, fileId: meta.id }
   } catch (e) {
@@ -335,6 +422,7 @@ export async function removeProjectFile(
     const p = doc.projects[projectId]
     if (!p) return
     p.fileIds = p.fileIds.filter((f) => f !== fileId)
+    delete p.mediaSectionOf[fileId]
     touch('projects', p)
     appendActivity(doc, opts.trashInDrive ? 'project.file.delete' : 'project.detach', projectId, { fileId })
   })

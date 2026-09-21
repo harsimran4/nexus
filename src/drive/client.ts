@@ -165,9 +165,12 @@ export interface FileMeta {
   mimeType?: string
   trashed?: boolean
   createdTime?: string
+  // Drive v3 returns int64 fields as strings (and omits size entirely for
+  // Google-Docs-type files). Coerce via fileSizeBytes() in util/media.ts.
+  size?: string | number
 }
 
-const META_FIELDS = 'id,name,headRevisionId,md5Checksum,version,modifiedTime,mimeType,trashed,createdTime'
+const META_FIELDS = 'id,name,headRevisionId,md5Checksum,version,modifiedTime,mimeType,trashed,createdTime,size'
 
 export interface ListResult {
   files: FileMeta[]

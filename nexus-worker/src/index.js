@@ -266,7 +266,7 @@ async function handleSession(request, env) {
 // ---------------------------------------------------------------------------
 // Drive operations (only the ones the app's bearer-credential path needs)
 // ---------------------------------------------------------------------------
-const META_FIELDS = 'id,name,headRevisionId,md5Checksum,version,modifiedTime,mimeType,trashed,createdTime'
+const META_FIELDS = 'id,name,headRevisionId,md5Checksum,version,modifiedTime,mimeType,trashed,createdTime,size'
 
 async function passthroughJson(res, env) {
   const text = await res.text()

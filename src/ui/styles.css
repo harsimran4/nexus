@@ -589,6 +589,29 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 [data-theme='dark'] .photo-frame { background: var(--panel); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45); }
 [data-theme='dark'] .photo-frame::before { background: rgba(74, 69, 48, 0.75); border-left-color: rgba(255, 255, 255, 0.14); border-right-color: rgba(255, 255, 255, 0.14); }
 
+/* Media tab: selection, kind badges, meta line */
+.media-check {
+  position: absolute; top: 8px; left: 8px; z-index: 2;
+  width: 17px; height: 17px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.photo-frame.sel {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent), 0 1px 4px rgba(60, 54, 38, 0.15);
+  rotate: 0deg;
+}
+.media-kind-badge {
+  position: absolute; left: 8px; bottom: 8px;
+  background: rgba(30, 27, 18, 0.72);
+  color: #fff;
+  border-radius: 6px;
+  padding: 2px 7px;
+  font-size: 11px; font-weight: 650; letter-spacing: 0.04em;
+  pointer-events: none;
+}
+.media-meta { font-size: 12px; color: var(--faint); margin-top: 2px; }
+
 /* Viewers: ticket stubs */
 .ticket-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
 .ticket {

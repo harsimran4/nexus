@@ -84,6 +84,14 @@ export const groupSchema = stampsSchema.extend({
 })
 export type Group = z.infer<typeof groupSchema>
 
+/** App-only media sections (Finished, Raw, Reference…) — labels living in the
+ *  doc; files themselves stay in the project's one flat Drive folder. */
+export const mediaSectionSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1),
+})
+export type MediaSection = z.infer<typeof mediaSectionSchema>
+
 /** Project = one piece of content being tracked (a video, a clip…). Lives in
  *  Nexus/groups/<Group>/<name>/ and moves across the status pipeline. */
 export const projectSchema = stampsSchema.extend({
@@ -94,6 +102,10 @@ export const projectSchema = stampsSchema.extend({
   status: z.string().default('pending'),
   labels: z.array(z.string()).default([]),
   fileIds: z.array(z.string()).default([]),
+  // A fileId missing from mediaSectionOf is "Unsorted" — the implicit
+  // pseudo-section; sections themselves are per-project and user-created.
+  mediaSections: z.array(mediaSectionSchema).default([]),
+  mediaSectionOf: z.record(z.string(), z.string()).default({}),
   assigneeAppId: z.string().nullable().default(null),
   dueAt: z.string().nullable().default(null),
   notes: z.string().default(''),
