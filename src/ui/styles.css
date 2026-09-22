@@ -339,8 +339,10 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 
 /* ---- modal ---- */
 
-.modal-backdrop { position: fixed; inset: 0; background: rgba(46, 42, 30, 0.4); display: flex; align-items: flex-start; justify-content: center; padding: 8vh 16px 16px; z-index: 50; overflow-y: auto; }
-.modal { background: var(--card); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: var(--shadow); width: 100%; max-width: 560px; padding: 20px; }
+/* Auto margins center short dialogs on both axes; tall ones still top-anchor
+   and scroll inside the padded backdrop. The backdrop blurs the page behind. */
+.modal-backdrop { position: fixed; inset: 0; background: rgba(46, 42, 30, 0.4); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); display: flex; align-items: flex-start; justify-content: center; padding: 24px 16px; z-index: 50; overflow-y: auto; }
+.modal { background: var(--card); border: 1px solid var(--border-strong); border-radius: var(--radius); box-shadow: var(--shadow); width: 100%; max-width: 560px; padding: 20px 22px; margin: auto; }
 .modal h2 { margin-bottom: 14px; }
 
 /* ---- misc ---- */
@@ -362,6 +364,32 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 .dropzone:hover, .dropzone.drag { border-color: var(--accent); background: var(--accent-dim); }
 .progress { height: 5px; background: var(--panel-2); border-radius: 99px; overflow: hidden; margin-top: 8px; }
 .progress > div { height: 100%; background: var(--accent); transition: width 0.2s; }
+
+/* Media: floating selection tray — a taped note pinned to the desk */
+.media-tray {
+  position: fixed; bottom: 18px; left: 50%;
+  transform: translateX(-50%) rotate(-0.35deg);
+  z-index: 45;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  background: var(--card);
+  border: 1px solid var(--border-strong); border-radius: 4px;
+  padding: 12px 18px 11px;
+  box-shadow: var(--shadow);
+  max-width: min(92vw, 720px);
+}
+.media-tray > b { font-size: 13px; font-weight: 650; margin-right: 2px; }
+.media-tray::before {
+  content: '';
+  position: absolute; top: -8px; left: 50%;
+  width: 64px; height: 15px;
+  translate: -50% 0;
+  background: rgba(226, 213, 168, 0.75);
+  border-left: 1px dashed rgba(255, 255, 255, 0.55);
+  border-right: 1px dashed rgba(255, 255, 255, 0.55);
+  transform: rotate(-2deg);
+}
+[data-theme='dark'] .media-tray { background: var(--panel); }
+[data-theme='dark'] .media-tray::before { background: rgba(74, 69, 48, 0.75); border-left-color: rgba(255, 255, 255, 0.14); border-right-color: rgba(255, 255, 255, 0.14); }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
@@ -456,6 +484,17 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
   .board-filters .chips,
   .board-filters .row > button.chip { grid-column: 1 / -1; }
   .board-filters .row > select.input { max-width: 100% !important; }
+  .board-filters .row > .media-count { grid-column: 1 / -1; margin-left: 0; }
+
+  /* media folder tabs become a horizontal scroll strip; the tray goes
+     full-width and drops its tilt + tape */
+  .media-tabs { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
+  .media-tab { flex: none; padding: 5px 10px; }
+  .media-tray {
+    left: 12px; right: 12px; transform: none;
+    border-radius: var(--radius); bottom: 12px;
+  }
+  .media-tray::before { display: none; }
 
   /* kanban becomes stacked sections — no sideways scrolling on a phone */
   .kanban { display: flex; flex-direction: column; gap: 12px; }
@@ -474,7 +513,7 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
   .media-grid { grid-template-columns: repeat(2, 1fr) !important; }
   .project-tab { display: block; }
   .modal { padding: 14px; max-height: 86vh; overflow-y: auto; }
-  .modal-backdrop { padding: 3vh 8px 12px; }
+  .modal-backdrop { padding: 12px 10px; }
   .ticket-grid { grid-template-columns: 1fr; }
   .page-quote { display: none; }
   .footer { font-size: 12px; gap: 10px; }
@@ -551,6 +590,41 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 .project-tab .input { background: transparent; border: none; box-shadow: none !important; padding: 2px 4px; }
 [data-theme='dark'] .project-tab { background: linear-gradient(180deg, #2a2721, #252219); border-color: #4a4535; }
 
+/* Media tab: sections as manila folder tabs — folders inside the folder */
+.media-tabs {
+  display: flex; align-items: flex-end; gap: 4px;
+  border-bottom: 1px solid var(--border-strong);
+  margin: 2px 0 14px;
+}
+.media-tab {
+  border: 1px solid transparent; border-bottom: none;
+  border-radius: 8px 10px 0 0;
+  padding: 6px 14px 5px; margin-bottom: -1px;
+  background: none; font: inherit; font-size: 13px;
+  color: var(--faint); cursor: pointer;
+}
+.media-tab:hover { background: var(--paper-raised); color: var(--muted); }
+.media-tab.on {
+  background: linear-gradient(180deg, #f7efd9, #f4e9cf);
+  border-color: #d9ccaa;
+  color: var(--text); font-weight: 600;
+  box-shadow: 0 -1px 3px rgba(60, 54, 38, 0.08);
+}
+.media-tab .count { color: var(--faint); font-weight: 500; font-size: 12px; margin-left: 5px; }
+.media-tab.on .count { color: var(--muted); }
+.media-tab-new {
+  border: 1px dashed var(--accent); color: var(--accent-strong);
+  border-radius: var(--radius-sm); margin-bottom: 0; align-self: center;
+}
+.media-tab-manage {
+  margin-left: auto; align-self: center;
+  background: none; border: none; cursor: pointer;
+  color: var(--muted); font-family: var(--serif); font-style: italic; font-size: 12.5px;
+}
+.media-tab-manage:hover { color: var(--accent-strong); }
+[data-theme='dark'] .media-tab.on { background: linear-gradient(180deg, #2a2721, #252219); border-color: #4a4535; }
+[data-theme='dark'] .media-tab:hover { background: var(--panel-2); }
+
 /* Project notes: a yellow legal pad with a red margin rule */
 .legal-pad {
   background:
@@ -589,15 +663,21 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 [data-theme='dark'] .photo-frame { background: var(--panel); box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45); }
 [data-theme='dark'] .photo-frame::before { background: rgba(74, 69, 48, 0.75); border-left-color: rgba(255, 255, 255, 0.14); border-right-color: rgba(255, 255, 255, 0.14); }
 
-/* Media tab: selection, kind badges, meta line */
+/* Media tab: selection, kind badges, meta line.
+   Checkboxes exist only in select mode (.selectable on the grid card);
+   the selected ring wobbles slightly — circled in grease pencil, not UI. */
 .media-check {
+  display: none;
   position: absolute; top: 8px; left: 8px; z-index: 2;
   width: 17px; height: 17px;
   accent-color: var(--accent);
   cursor: pointer;
 }
+.photo-frame.selectable { cursor: pointer; }
+.photo-frame.selectable .media-check { display: block; }
 .photo-frame.sel {
   border-color: var(--accent);
+  border-radius: 10px 7px 11px 8px;
   box-shadow: 0 0 0 2px var(--accent), 0 1px 4px rgba(60, 54, 38, 0.15);
   rotate: 0deg;
 }
@@ -611,6 +691,13 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
   pointer-events: none;
 }
 .media-meta { font-size: 12px; color: var(--faint); margin-top: 2px; }
+
+/* toolbar count — a pencil annotation in the margin */
+.media-count {
+  margin-left: auto; align-self: center;
+  font-family: var(--serif); font-style: italic;
+  color: var(--faint); font-size: 12.5px;
+}
 
 /* Media card download bar — sits where the thumbnail meets the caption */
 .dl-progress { height: 4px; margin-top: 6px; }

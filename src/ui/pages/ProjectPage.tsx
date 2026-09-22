@@ -143,19 +143,24 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
   const [search, setSearch] = useState('')
   // selection + bulk
   const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [selectMode, setSelectMode] = useState(false)
   const [bulkBusy, setBulkBusy] = useState(false)
   const [bulkLabel, setBulkLabel] = useState<string | null>(null)
   const [downloading, setDownloading] = useState<Record<string, number | null>>({})
   // section CRUD drafts
   const [newSectionName, setNewSectionName] = useState<string | null>(null)
-  const [renamingSection, setRenamingSection] = useState<string | null>(null)
-  const [sectionName, setSectionName] = useState('')
+  const [manageSections, setManageSections] = useState(false)
+  const [editingSectionId, setEditingSectionId] = useState<string | null>(null)
+  const [editingName, setEditingName] = useState('')
   // file rename (per card)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
-  // upload
+  // upload — lives in its own modal
+  const [uploadOpen, setUploadOpen] = useState(false)
   const [uploadSection, setUploadSection] = useState('')
-  const [uploadQueue, setUploadQueue] = useState<{ name: string; pct: number }[] | null>(null)
+  const [uploadQueue, setUploadQueue] = useState<
+    { name: string; pct: number; done?: boolean; ok?: boolean; err?: string }[] | null
+  >(null)
   const [dragOver, setDragOver] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const writable = canWrite()
@@ -224,6 +229,9 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
       ? section
       : 'all'
 
+  // The upload modal's target — never holds a section that no longer exists.
+  const uploadTarget = project.mediaSections.some((s) => s.id === uploadSection) ? uploadSection : ''
+
   const shown = useMemo(
     () => filterAndSort(items, { search, kind, section: activeSection, sectionOf, sort }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -249,11 +257,24 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fileKey])
 
-  // Uploads default into the section you're looking at.
+  // Uploads default into the section you're looking at (Unsorted elsewhere).
   useEffect(() => {
-    if (activeSection !== 'all' && activeSection !== UNSORTED) setUploadSection(activeSection)
+    setUploadSection(activeSection !== 'all' && activeSection !== UNSORTED ? activeSection : '')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSection])
+
+  // Escape exits select mode — but only when no modal / inline editor is open
+  // (those have their own Escape handling; both listeners get the same event).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (manageSections || uploadOpen || renamingId !== null || newSectionName !== null) return
+      if (selectMode) exitSelectMode()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectMode, manageSections, uploadOpen, renamingId, newSectionName])
 
   const toggleSel = (f: string) =>
     setSelected((prev) => {
@@ -365,12 +386,20 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
     }
   }
 
-  const doRenameSection = () => {
-    const id = renamingSection
-    setRenamingSection(null)
-    if (!id) return
+  const exitSelectMode = () => {
+    setSelectMode(false)
+    setSelected(new Set())
+  }
+
+  /** Manage-modal inline rename. The id guard makes Enter-then-blur a no-op
+   *  the second time (the unmounting input fires blur after Enter). */
+  const commitSectionRename = (id: string) => {
+    if (editingSectionId !== id) return
+    const v = editingName.trim()
+    setEditingSectionId(null)
+    if (!v || v === project.mediaSections.find((s) => s.id === id)?.name) return
     try {
-      renameMediaSection(projectId, id, sectionName)
+      renameMediaSection(projectId, id, v)
     } catch (e) {
       setError(describeError(e).message)
     }
@@ -404,13 +433,10 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
   const startUploads = async (files: File[]) => {
     if (files.length === 0) return
     setError(null)
-    setNote(null)
-    const target = uploadSection || null
-    // Entries stay in place (indices must not shift); a finished file just
-    // sits at pct 100 until the whole batch is done.
+    const target = uploadTarget || null
+    // Entries stay in place (indices must not shift); a finished file keeps
+    // its outcome (done/ok/err) so the modal can list ✓/✗ after the batch.
     setUploadQueue(files.map((f) => ({ name: f.name, pct: 0 })))
-    const failed: string[] = []
-    let okCount = 0
     for (let i = 0; i < files.length; i++) {
       const r = await uploadToProject(
         projectId,
@@ -418,293 +444,286 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
         (pct) => setUploadQueue((q) => (q ? q.map((u, j) => (j === i ? { ...u, pct } : u)) : q)),
         { sectionId: target },
       )
-      if (r.ok) okCount++
-      else failed.push(`${files[i].name}: ${r.error}`)
-      setUploadQueue((q) => (q ? q.map((u, j) => (j === i ? { ...u, pct: 100 } : u)) : q))
+      setUploadQueue((q) =>
+        q ? q.map((u, j) => (j === i ? { ...u, pct: 100, done: true, ok: r.ok, err: r.ok ? undefined : r.error } : u)) : q,
+      )
     }
+  }
+
+  const closeUpload = () => {
     setUploadQueue(null)
-    if (failed.length) setError(`Some uploads failed — ${failed.join(' · ')}`)
-    else if (files.length > 1) flash(`Uploaded ${okCount} file${okCount === 1 ? '' : 's'}.`)
+    setUploadOpen(false)
   }
 
   const uploadTotal = uploadQueue?.length ?? 0
-  const uploadDone = uploadQueue ? uploadQueue.filter((u) => u.pct >= 100).length : 0
-  const uploadCurrent = uploadQueue?.find((u) => u.pct < 100)
+  const uploadFinishedCount = uploadQueue ? uploadQueue.filter((u) => u.done).length : 0
+  const uploadCurrent = uploadQueue?.find((u) => !u.done)
+  const uploadBusy = uploadQueue !== null && uploadQueue.some((u) => !u.done)
 
   return (
-    <div>
+    <div style={selectMode && selected.size > 0 ? { paddingBottom: 72 } : undefined}>
       {error && banner('error', 'Media problem', error)}
       {note && banner('info', note)}
 
-      {project.fileIds.length === 0 ? (
-        <Empty icon="🖼">No media yet — upload below.</Empty>
-      ) : (
-        <>
-          {/* Sections row */}
-          <div className="row wrap" style={{ gap: 6, alignItems: 'center', marginBottom: 10 }}>
-            <div className="chips">
-              <button className={`chip ${activeSection === 'all' ? 'on' : ''}`} onClick={() => setSection('all')}>
-                All ({countFor('all')})
-              </button>
-              <button className={`chip ${activeSection === UNSORTED ? 'on' : ''}`} onClick={() => setSection(UNSORTED)}>
-                Unsorted ({countFor(UNSORTED)})
-              </button>
-              {project.mediaSections.map((s) => (
-                <button
-                  key={s.id}
-                  className={`chip ${activeSection === s.id ? 'on' : ''}`}
-                  onClick={() => setSection(s.id)}
-                >
-                  {s.name} ({countFor(s.id)})
-                </button>
-              ))}
-            </div>
-            {writable && activeSection !== 'all' && activeSection !== UNSORTED && (
-              <span className="row" style={{ gap: 4 }}>
-                <button
-                  className="btn small ghost"
-                  title="Rename section"
-                  onClick={() => {
-                    setSectionName(project.mediaSections.find((s) => s.id === activeSection)?.name ?? '')
-                    setRenamingSection(activeSection)
-                  }}
-                >
-                  ✎
-                </button>
-                <button className="btn small ghost" title="Delete section" onClick={() => deleteSection(activeSection)}>
-                  ✕
-                </button>
-              </span>
-            )}
-            {writable &&
-              (newSectionName === null ? (
-                <button className="chip" title="New section" onClick={() => setNewSectionName('')}>
-                  ＋ section
-                </button>
-              ) : (
-                <input
-                  className="input"
-                  style={{ width: 150, padding: '2px 9px', fontSize: 13 }}
-                  placeholder="Section name…"
-                  value={newSectionName}
-                  autoFocus
-                  onChange={(e) => setNewSectionName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') createSection()
-                    if (e.key === 'Escape') setNewSectionName(null)
-                  }}
-                  onBlur={createSection}
-                />
-              ))}
-          </div>
-
-          {/* Filter / sort bar */}
-          <div className="card mb8" style={{ padding: '10px 12px' }}>
-            <div className="row wrap" style={{ gap: 8 }}>
-              <input
-                className="input"
-                style={{ maxWidth: 220, padding: '4px 9px', fontSize: 13 }}
-                placeholder="Search by name…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-              />
-              <div className="chips">
-                {(['all', 'image', 'video', 'audio', 'other'] as const).map((k) => (
-                  <button key={k} className={`chip ${kind === k ? 'on' : ''}`} onClick={() => setKind(k)}>
-                    {k === 'all' ? 'All types' : `${KIND_GLYPH[k]} ${KIND_LABEL[k]}`}
-                  </button>
-                ))}
-              </div>
-              <select
-                className="input"
-                style={{ maxWidth: 190, padding: '4px 9px', fontSize: 13 }}
-                value={sort}
-                onChange={(e) => setSort(e.target.value as MediaSort)}
-              >
-                <option value="added-desc">Newest first</option>
-                <option value="added-asc">Oldest first</option>
-                <option value="name-asc">Name A→Z</option>
-                <option value="name-desc">Name Z→A</option>
-                <option value="size-desc">Size: large → small</option>
-                <option value="size-asc">Size: small → large</option>
-              </select>
-            </div>
-            <div className="muted small" style={{ marginTop: 6 }}>
-              {shown.length} of {project.fileIds.length} file{project.fileIds.length === 1 ? '' : 's'} ·{' '}
-              {formatBytes(totals.known)}
-              {totals.unknownCount > 0 ? ` + ${totals.unknownCount} unknown` : ''}
-            </div>
-          </div>
-
-          {/* Bulk bar */}
-          {selected.size > 0 && (
-            <div className="card mb8" style={{ padding: '10px 12px', borderColor: 'var(--accent)' }}>
-              <div className="row wrap" style={{ gap: 8 }}>
-                <b>{selected.size} selected</b>
-                <button
-                  className="btn small"
-                  disabled={bulkBusy}
-                  onClick={() =>
-                    setSelected(allShownSelected ? new Set() : new Set(shown.map((it) => it.fileId)))
-                  }
-                >
-                  {allShownSelected ? 'Unselect shown' : 'Select shown'}
-                </button>
-                <button className="btn small ghost" disabled={bulkBusy} onClick={() => setSelected(new Set())}>
-                  Clear
-                </button>
-                {writable && (
-                  <select className="input" style={{ maxWidth: 180, padding: '4px 9px', fontSize: 13 }} value="" disabled={bulkBusy} onChange={(e) => bulkMove(e.target.value)}>
-                    <option value="">Move to…</option>
-                    <option value={UNSORTED}>Unsorted</option>
-                    {project.mediaSections.map((s) => (
-                      <option key={s.id} value={s.id}>{s.name}</option>
-                    ))}
-                  </select>
-                )}
-                <button className="btn small" disabled={bulkBusy} onClick={bulkDownload}>
-                  Download
-                </button>
-                {writable && (
-                  <button className="btn small danger" disabled={bulkBusy} onClick={bulkDelete}>
-                    Delete
-                  </button>
-                )}
-                {bulkBusy && <span className="muted small">{bulkLabel ?? 'Working…'}</span>}
-              </div>
-            </div>
-          )}
-
-          {shown.length === 0 ? (
-            <Empty icon="🔍">No files match this filter.</Empty>
+      {/* Sections as manila folder tabs */}
+      <div className="media-tabs">
+        <button className={`media-tab${activeSection === 'all' ? ' on' : ''}`} onClick={() => setSection('all')}>
+          All<span className="count">{countFor('all')}</span>
+        </button>
+        <button className={`media-tab${activeSection === UNSORTED ? ' on' : ''}`} onClick={() => setSection(UNSORTED)}>
+          Unsorted<span className="count">{countFor(UNSORTED)}</span>
+        </button>
+        {project.mediaSections.map((s) => (
+          <button key={s.id} className={`media-tab${activeSection === s.id ? ' on' : ''}`} onClick={() => setSection(s.id)}>
+            {s.name}
+            <span className="count">{countFor(s.id)}</span>
+          </button>
+        ))}
+        {writable &&
+          (newSectionName === null ? (
+            <button className="media-tab media-tab-new" title="New section" onClick={() => setNewSectionName('')}>
+              ＋ New
+            </button>
           ) : (
-            <div className="media-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 14 }}>
-              {shown.map((it) => {
-                const f = it.fileId
-                const info = meta[f]
-                const fileKind = kindFromMime(info?.mimeType)
-                const displayName = renamingId === f ? renameValue : info?.name ?? f
-                const isSel = selected.has(f)
-                const dlPct = downloading[f]
-                return (
-                  <div key={f} className={`photo-frame${isSel ? ' sel' : ''}`}>
-                    <input
-                      type="checkbox"
-                      className="media-check"
-                      checked={isSel}
-                      onChange={() => toggleSel(f)}
-                      aria-label={`Select ${displayName}`}
-                      title="Select"
-                    />
-                    <div
-                      style={{
-                        aspectRatio: '16/9',
-                        background: 'var(--bg)',
-                        borderRadius: 8,
-                        overflow: 'hidden',
-                        display: 'grid',
-                        placeItems: 'center',
-                        marginBottom: 8,
-                        position: 'relative',
+            <input
+              className="input"
+              style={{ width: 150, padding: '2px 9px', fontSize: 13, alignSelf: 'center' }}
+              placeholder="Section name…"
+              value={newSectionName}
+              autoFocus
+              onChange={(e) => setNewSectionName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') createSection()
+                if (e.key === 'Escape') setNewSectionName(null)
+              }}
+              onBlur={createSection}
+            />
+          ))}
+        {writable && (
+          <button className="media-tab-manage" title="Rename or delete sections" onClick={() => setManageSections(true)}>
+            Manage sections
+          </button>
+        )}
+      </div>
+
+      {/* Toolbar */}
+      <div className="card mb8 board-filters">
+        <div className="row wrap" style={{ gap: 8 }}>
+          <input
+            className="input"
+            style={{ maxWidth: 240, padding: '4px 9px', fontSize: 13 }}
+            placeholder="Search by name…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          <div className="chips">
+            {(['all', 'image', 'video', 'audio', 'other'] as const).map((k) => (
+              <button key={k} className={`chip ${kind === k ? 'on' : ''}`} onClick={() => setKind(k)}>
+                {k === 'all' ? 'All types' : `${KIND_GLYPH[k]} ${KIND_LABEL[k]}`}
+              </button>
+            ))}
+          </div>
+          <select
+            className="input"
+            style={{ maxWidth: 190, padding: '4px 9px', fontSize: 13 }}
+            value={sort}
+            onChange={(e) => setSort(e.target.value as MediaSort)}
+          >
+            <option value="added-desc">Newest first</option>
+            <option value="added-asc">Oldest first</option>
+            <option value="name-asc">Name A→Z</option>
+            <option value="name-desc">Name Z→A</option>
+            <option value="size-desc">Size: large → small</option>
+            <option value="size-asc">Size: small → large</option>
+          </select>
+          <span className="media-count">
+            {shown.length} of {project.fileIds.length} file{project.fileIds.length === 1 ? '' : 's'} ·{' '}
+            {formatBytes(totals.known)}
+            {totals.unknownCount > 0 ? ` + ${totals.unknownCount} unknown` : ''}
+          </span>
+          {writable && (
+            <button className="btn primary" onClick={() => setUploadOpen(true)}>
+              Upload
+            </button>
+          )}
+          <button className="btn" onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}>
+            {selectMode ? 'Done' : 'Select'}
+          </button>
+        </div>
+      </div>
+
+      {/* Grid */}
+      {project.fileIds.length === 0 ? (
+        <Empty icon="🖼">No media yet — use Upload above.</Empty>
+      ) : shown.length === 0 ? (
+        <Empty icon="🔍">No files match this filter.</Empty>
+      ) : (
+        <div className="media-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 14 }}>
+          {shown.map((it) => {
+            const f = it.fileId
+            const info = meta[f]
+            const fileKind = kindFromMime(info?.mimeType)
+            const displayName = renamingId === f ? renameValue : info?.name ?? f
+            const isSel = selected.has(f)
+            const dlPct = downloading[f]
+            return (
+              <div key={f} className={`photo-frame${isSel ? ' sel' : ''}${selectMode ? ' selectable' : ''}`}>
+                <input
+                  type="checkbox"
+                  className="media-check"
+                  checked={isSel}
+                  onChange={() => toggleSel(f)}
+                  aria-label={`Select ${displayName}`}
+                  title="Select"
+                />
+                <div
+                  style={{
+                    aspectRatio: '16/9',
+                    background: 'var(--bg)',
+                    borderRadius: 8,
+                    overflow: 'hidden',
+                    display: 'grid',
+                    placeItems: 'center',
+                    marginBottom: 8,
+                    position: 'relative',
+                  }}
+                  onClick={() => selectMode && toggleSel(f)}
+                >
+                  <img
+                    src={thumbnailUrl(f, 400)}
+                    alt={displayName}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
+                  />
+                  {fileKind !== 'image' && (
+                    <span className="media-kind-badge">
+                      {KIND_GLYPH[fileKind]} {KIND_LABEL[fileKind]}
+                    </span>
+                  )}
+                </div>
+                {dlPct !== undefined && (
+                  <div className={`progress dl-progress${dlPct === null ? ' indeterminate' : ''}`}>
+                    <div style={{ width: `${dlPct ?? 0}%` }} />
+                  </div>
+                )}
+                {renamingId === f ? (
+                  <input
+                    className="input"
+                    value={renameValue}
+                    autoFocus
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') void doRename(f)
+                      if (e.key === 'Escape') setRenamingId(null)
+                    }}
+                    onBlur={() => void doRename(f)}
+                  />
+                ) : (
+                  <div
+                    className="small"
+                    style={{ fontWeight: 570, wordBreak: 'break-word' }}
+                    title={displayName}
+                    onClick={() => selectMode && toggleSel(f)}
+                  >
+                    {displayName}
+                  </div>
+                )}
+                <div className="media-meta">
+                  {formatBytes(fileSizeBytes(info?.size))}
+                  {activeSection === 'all' && sectionOf[f] ? ` · ${sectionNameOf(sectionOf[f])}` : ''}
+                </div>
+                <div className="row wrap mt8">
+                  <a className="btn small" href={webViewLink(f)} target="_blank" rel="noreferrer">Open</a>
+                  <button
+                    className="btn small"
+                    disabled={dlPct !== undefined}
+                    onClick={() => void runDownload(f, info?.name ?? displayName)}
+                  >
+                    {dlPct !== undefined ? 'Downloading…' : 'Download'}
+                  </button>
+                  {writable && renamingId !== f && (
+                    <button
+                      className="btn small ghost"
+                      onClick={() => {
+                        setRenameValue(info?.name ?? f)
+                        setRenamingId(f)
                       }}
                     >
-                      <img
-                        src={thumbnailUrl(f, 400)}
-                        alt={displayName}
-                        style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                        onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
-                      />
-                      {fileKind !== 'image' && (
-                        <span className="media-kind-badge">
-                          {KIND_GLYPH[fileKind]} {KIND_LABEL[fileKind]}
-                        </span>
-                      )}
-                    </div>
-                    {dlPct !== undefined && (
-                      <div className={`progress dl-progress${dlPct === null ? ' indeterminate' : ''}`}>
-                        <div style={{ width: `${dlPct ?? 0}%` }} />
-                      </div>
-                    )}
-                    {renamingId === f ? (
-                      <input
-                        className="input"
-                        value={renameValue}
-                        autoFocus
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') void doRename(f)
-                          if (e.key === 'Escape') setRenamingId(null)
-                        }}
-                        onBlur={() => void doRename(f)}
-                      />
-                    ) : (
-                      <div className="small" style={{ fontWeight: 570, wordBreak: 'break-word' }} title={displayName}>
-                        {displayName}
-                      </div>
-                    )}
-                    <div className="media-meta">
-                      {formatBytes(fileSizeBytes(info?.size))}
-                      {activeSection === 'all' && sectionOf[f] ? ` · ${sectionNameOf(sectionOf[f])}` : ''}
-                    </div>
-                    <div className="row wrap mt8">
-                      <a className="btn small" href={webViewLink(f)} target="_blank" rel="noreferrer">Open</a>
-                      <button
-                        className="btn small"
-                        disabled={dlPct !== undefined}
-                        onClick={() => void runDownload(f, info?.name ?? displayName)}
-                      >
-                        {dlPct !== undefined ? 'Downloading…' : 'Download'}
-                      </button>
-                      {writable && renamingId !== f && (
-                        <button
-                          className="btn small ghost"
-                          onClick={() => {
-                            setRenameValue(info?.name ?? f)
-                            setRenamingId(f)
-                          }}
-                        >
-                          Rename
-                        </button>
-                      )}
-                      {writable && (
-                        <button
-                          className="btn small danger"
-                          onClick={async () => {
-                            if (!confirm(`Delete "${displayName}"? It moves to Drive trash (recoverable for 30 days).`)) return
-                            const r = await removeProjectFile(projectId, f, { trashInDrive: true })
-                            if (!r.ok) setError(r.error)
-                          }}
-                        >
-                          Delete
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
-        </>
+                      Rename
+                    </button>
+                  )}
+                  {writable && (
+                    <button
+                      className="btn small danger"
+                      onClick={async () => {
+                        if (!confirm(`Delete "${displayName}"? It moves to Drive trash (recoverable for 30 days).`)) return
+                        const r = await removeProjectFile(projectId, f, { trashInDrive: true })
+                        if (!r.ok) setError(r.error)
+                      }}
+                    >
+                      Delete
+                    </button>
+                  )}
+                </div>
+              </div>
+            )
+          })}
+        </div>
       )}
 
-      {writable && (
-        <div className="mt16">
-          {project.fileIds.length > 0 || project.mediaSections.length > 0 ? (
-            <div className="row wrap" style={{ gap: 8, marginBottom: 8 }}>
-              <span className="muted small">Upload to</span>
-              <select
-                className="input"
-                style={{ maxWidth: 200, padding: '4px 9px', fontSize: 13 }}
-                value={uploadSection}
-                onChange={(e) => setUploadSection(e.target.value)}
-              >
-                <option value="">Unsorted</option>
-                {project.mediaSections.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-            </div>
-          ) : null}
+      {/* Floating selection tray — a taped note pinned to the desk */}
+      {selectMode && selected.size > 0 && (
+        <div className="media-tray">
+          <b>{selected.size} selected</b>
+          <button
+            className="btn small"
+            disabled={bulkBusy}
+            onClick={() => setSelected(allShownSelected ? new Set() : new Set(shown.map((it) => it.fileId)))}
+          >
+            {allShownSelected ? 'Unselect shown' : 'Select shown'}
+          </button>
+          {writable && (
+            <select className="input" style={{ maxWidth: 180, padding: '4px 9px', fontSize: 13 }} value="" disabled={bulkBusy} onChange={(e) => bulkMove(e.target.value)}>
+              <option value="">Move to…</option>
+              <option value={UNSORTED}>Unsorted</option>
+              {project.mediaSections.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          )}
+          <button className="btn small" disabled={bulkBusy} onClick={bulkDownload}>
+            Download
+          </button>
+          {writable && (
+            <button className="btn small danger" disabled={bulkBusy} onClick={bulkDelete}>
+              Delete
+            </button>
+          )}
+          {bulkBusy && <span className="muted small">{bulkLabel ?? 'Working…'}</span>}
+          <button className="btn small ghost" disabled={bulkBusy} onClick={exitSelectMode}>
+            Done
+          </button>
+        </div>
+      )}
+
+      {/* Upload modal */}
+      {uploadOpen && (
+        <Modal title="Upload media" onClose={() => { if (!uploadBusy) closeUpload() }}>
+          <div className="field">
+            <label>Upload to</label>
+            <select
+              className="input"
+              style={{ maxWidth: 260 }}
+              value={uploadTarget}
+              disabled={uploadBusy}
+              onChange={(e) => setUploadSection(e.target.value)}
+            >
+              <option value="">Unsorted</option>
+              {project.mediaSections.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
           <div
             className={`dropzone${dragOver ? ' drag' : ''}`}
             onClick={() => fileInput.current?.click()}
@@ -720,14 +739,19 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
             }}
           >
             {uploadQueue ? (
-              <div>
+              <div style={{ textAlign: 'left' }}>
                 <div className="small muted">
-                  {uploadDone}/{uploadTotal} uploaded · {uploadCurrent ? uploadCurrent.name : 'finishing…'}
+                  {uploadFinishedCount}/{uploadTotal} uploaded · {uploadCurrent ? uploadCurrent.name : 'finishing…'}
                 </div>
                 <div className="progress"><div style={{ width: `${uploadCurrent?.pct ?? 100}%` }} /></div>
               </div>
             ) : (
-              'Drop media here or click to upload → this project\'s folder on Drive'
+              <div>
+                Drop media here or click to upload
+                <div className="faint" style={{ fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: 12.5, marginTop: 4 }}>
+                  they land in this project&apos;s folder on Drive
+                </div>
+              </div>
             )}
           </div>
           <input
@@ -740,26 +764,72 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
               e.target.value = ''
             }}
           />
-        </div>
+          {uploadQueue && !uploadBusy && (
+            <>
+              <div className="mt8">
+                {uploadQueue.map((u, i) => (
+                  <div key={i} className="small" style={{ color: u.ok ? undefined : 'var(--red)' }}>
+                    {u.ok ? '✓' : '✗'} {u.name}
+                    {u.err ? ` — ${u.err}` : ''}
+                  </div>
+                ))}
+              </div>
+              <div className="row mt8">
+                <button className="btn primary" onClick={closeUpload}>Close</button>
+              </div>
+            </>
+          )}
+        </Modal>
       )}
 
-      {renamingSection && (
-        <Modal title="Rename section" onClose={() => setRenamingSection(null)}>
-          <div className="field">
-            <label>Section name</label>
-            <input
-              className="input"
-              value={sectionName}
-              autoFocus
-              onChange={(e) => setSectionName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') doRenameSection()
-              }}
-            />
-          </div>
-          <div className="row">
-            <button className="btn" onClick={doRenameSection}>Rename</button>
-          </div>
+      {/* Manage sections modal */}
+      {manageSections && (
+        <Modal title="Manage sections" onClose={() => { setManageSections(false); setEditingSectionId(null) }}>
+          {project.mediaSections.length === 0 ? (
+            <p className="muted small">No sections yet — create one with “＋ New” in the tab strip above.</p>
+          ) : (
+            project.mediaSections.map((s) => (
+              <div
+                key={s.id}
+                className="row"
+                style={{ justifyContent: 'space-between', alignItems: 'center', padding: '7px 0', borderBottom: '1px solid var(--border)' }}
+              >
+                {editingSectionId === s.id ? (
+                  <input
+                    className="input"
+                    value={editingName}
+                    autoFocus
+                    style={{ maxWidth: 280 }}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') commitSectionRename(s.id)
+                      if (e.key === 'Escape') setEditingSectionId(null)
+                    }}
+                    onBlur={() => commitSectionRename(s.id)}
+                  />
+                ) : (
+                  <span style={{ fontWeight: 570 }}>
+                    {s.name} <span className="faint small">({countFor(s.id)})</span>
+                  </span>
+                )}
+                <span className="row" style={{ gap: 4 }}>
+                  <button
+                    className="btn small ghost"
+                    title="Rename section"
+                    onClick={() => {
+                      setEditingSectionId(s.id)
+                      setEditingName(s.name)
+                    }}
+                  >
+                    ✎
+                  </button>
+                  <button className="btn small ghost" title="Delete section" onClick={() => deleteSection(s.id)}>
+                    ✕
+                  </button>
+                </span>
+              </div>
+            ))
+          )}
         </Modal>
       )}
     </div>
