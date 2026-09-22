@@ -14,7 +14,7 @@ import {
   updateScript,
   uploadToProject,
 } from '../../state/actions'
-import { describeError, downloadToBrowser } from '../../drive/preview'
+import { describeError, downloadToBrowserProgress } from '../../drive/preview'
 import { getMeta, listChildren, renameFile, thumbnailUrl, webViewLink, type FileMeta } from '../../drive/client'
 import {
   KIND_GLYPH,
@@ -144,6 +144,8 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
   // selection + bulk
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
+  const [bulkLabel, setBulkLabel] = useState<string | null>(null)
+  const [downloading, setDownloading] = useState<Record<string, number | null>>({})
   // section CRUD drafts
   const [newSectionName, setNewSectionName] = useState<string | null>(null)
   const [renamingSection, setRenamingSection] = useState<string | null>(null)
@@ -269,12 +271,34 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
     setBulkBusy(true)
     setError(null)
     setNote(null)
+    setBulkLabel(null)
     try {
       await fn()
     } catch (e) {
       setError(describeError(e).message)
     } finally {
       setBulkBusy(false)
+      setBulkLabel(null)
+    }
+  }
+
+  /** One file download with a live progress bar on its card. Percent may be
+   *  null (no Content-Length) — the bar then runs indeterminate. */
+  const runDownload = async (fileId: string, name: string) => {
+    setDownloading((prev) => ({ ...prev, [fileId]: 0 }))
+    try {
+      await downloadToBrowserProgress(fileId, name, (pct) =>
+        setDownloading((prev) => (prev[fileId] === pct ? prev : { ...prev, [fileId]: pct })),
+      )
+    } catch (err) {
+      setError(describeError(err).message)
+    } finally {
+      setDownloading((prev) => {
+        if (!(fileId in prev)) return prev
+        const next = { ...prev }
+        delete next[fileId]
+        return next
+      })
     }
   }
 
@@ -284,9 +308,10 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
     if (!confirm(`Delete ${ids.length} file${ids.length === 1 ? '' : 's'}? They move to Drive trash (recoverable for 30 days).`)) return
     void runBulk(async () => {
       const failed: string[] = []
-      for (const f of ids) {
-        const r = await removeProjectFile(projectId, f, { trashInDrive: true })
-        if (!r.ok) failed.push(`${meta[f]?.name ?? f}: ${r.error}`)
+      for (let i = 0; i < ids.length; i++) {
+        setBulkLabel(`Deleting ${i + 1}/${ids.length}…`)
+        const r = await removeProjectFile(projectId, ids[i], { trashInDrive: true })
+        if (!r.ok) failed.push(`${meta[ids[i]]?.name ?? ids[i]}: ${r.error}`)
       }
       setSelected(new Set())
       if (failed.length) setError(`Some files could not be deleted — ${failed.join(' · ')}`)
@@ -300,7 +325,16 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
     void runBulk(async () => {
       let i = 0
       for (const f of ids) {
-        await downloadToBrowser(f, meta[f]?.name ?? f)
+        setBulkLabel(`Downloading ${i + 1}/${ids.length}…`)
+        await downloadToBrowserProgress(f, meta[f]?.name ?? f, (pct) =>
+          setDownloading((prev) => (prev[f] === pct ? prev : { ...prev, [f]: pct })),
+        )
+        setDownloading((prev) => {
+          if (!(f in prev)) return prev
+          const next = { ...prev }
+          delete next[f]
+          return next
+        })
         i++
         if (i < ids.length) await new Promise((r) => setTimeout(r, 300))
       }
@@ -536,7 +570,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
                     Delete
                   </button>
                 )}
-                {bulkBusy && <span className="muted small">Working…</span>}
+                {bulkBusy && <span className="muted small">{bulkLabel ?? 'Working…'}</span>}
               </div>
             </div>
           )}
@@ -551,6 +585,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
                 const fileKind = kindFromMime(info?.mimeType)
                 const displayName = renamingId === f ? renameValue : info?.name ?? f
                 const isSel = selected.has(f)
+                const dlPct = downloading[f]
                 return (
                   <div key={f} className={`photo-frame${isSel ? ' sel' : ''}`}>
                     <input
@@ -585,6 +620,11 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
                         </span>
                       )}
                     </div>
+                    {dlPct !== undefined && (
+                      <div className={`progress dl-progress${dlPct === null ? ' indeterminate' : ''}`}>
+                        <div style={{ width: `${dlPct ?? 0}%` }} />
+                      </div>
+                    )}
                     {renamingId === f ? (
                       <input
                         className="input"
@@ -610,15 +650,10 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
                       <a className="btn small" href={webViewLink(f)} target="_blank" rel="noreferrer">Open</a>
                       <button
                         className="btn small"
-                        onClick={async () => {
-                          try {
-                            await downloadToBrowser(f, info?.name ?? displayName)
-                          } catch (err) {
-                            setError(describeError(err).message)
-                          }
-                        }}
+                        disabled={dlPct !== undefined}
+                        onClick={() => void runDownload(f, info?.name ?? displayName)}
                       >
-                        Download
+                        {dlPct !== undefined ? 'Downloading…' : 'Download'}
                       </button>
                       {writable && renamingId !== f && (
                         <button

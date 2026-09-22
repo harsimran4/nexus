@@ -2,12 +2,32 @@
 // as a continuous key-path probe), bearer fallback (editors keep working when
 // the key is broken).
 
-import { downloadFile, DriveError, hasBearer, type Credential } from './client'
+import { downloadFile, downloadFileProgress, DriveError, hasBearer, type Credential } from './client'
 
 /** Trigger a browser download of a Drive file (respects key/bearer path). */
 export async function downloadToBrowser(fileId: string, filename: string, cred?: Credential): Promise<void> {
   const effective: Credential = cred ?? { mode: hasBearer() ? 'auto' : 'key' }
   const blob = await downloadFile(fileId, effective)
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
+/** Same, but reports transfer progress as a 0–100 percent (null when the
+ *  response carries no Content-Length to compute against). */
+export async function downloadToBrowserProgress(
+  fileId: string,
+  filename: string,
+  onProgress: (pct: number | null) => void,
+  cred?: Credential,
+): Promise<void> {
+  const effective: Credential = cred ?? { mode: hasBearer() ? 'auto' : 'key' }
+  const blob = await downloadFileProgress(fileId, effective, (received, total) =>
+    onProgress(total ? Math.min(100, Math.round((received / total) * 100)) : null),
+  )
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url

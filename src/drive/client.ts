@@ -199,13 +199,46 @@ export async function readFile(fileId: string, cred: Credential): Promise<string
   return res.text()
 }
 
-export async function downloadFile(fileId: string, cred: Credential): Promise<Blob> {
+/** Response for one file's content, on whichever credential path applies. */
+async function contentResponse(fileId: string, cred: Credential): Promise<Response> {
   if (cred.mode === 'bearer' || (cred.mode === 'auto' && globalBearer)) {
-    const res = await workerFetch(`/drive/content/${fileId}`, { method: 'GET' }, { ...cred, mode: 'bearer' })
-    return res.blob()
+    return workerFetch(`/drive/content/${fileId}`, { method: 'GET' }, { ...cred, mode: 'bearer' })
   }
-  const res = await googleFetch(withKey(`${API}/files/${fileId}?alt=media`, cred), { method: 'GET' }, cred)
-  return res.blob()
+  return googleFetch(withKey(`${API}/files/${fileId}?alt=media`, cred), { method: 'GET' }, cred)
+}
+
+export async function downloadFile(fileId: string, cred: Credential): Promise<Blob> {
+  return (await contentResponse(fileId, cred)).blob()
+}
+
+/** Download while streaming the body — reports byte progress as it lands.
+ *  `total` is null when the response has no usable Content-Length. */
+export async function downloadFileProgress(
+  fileId: string,
+  cred: Credential,
+  onProgress?: (received: number, total: number | null) => void,
+): Promise<Blob> {
+  const res = await contentResponse(fileId, cred)
+  const len = res.headers.get('content-length')
+  const total = len && /^\d+$/.test(len) ? Number(len) : null
+  if (!res.body) {
+    const blob = await res.blob()
+    onProgress?.(blob.size, blob.size)
+    return blob
+  }
+  const reader = res.body.getReader()
+  const chunks: BlobPart[] = []
+  let received = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    chunks.push(value)
+    received += value.byteLength
+    onProgress?.(received, total)
+  }
+  const blob = new Blob(chunks)
+  onProgress?.(blob.size, blob.size)
+  return blob
 }
 
 export async function listChildren(
