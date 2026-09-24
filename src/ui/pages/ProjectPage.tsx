@@ -440,6 +440,20 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
   const uploadCurrent = uploadBatchHere?.files.find((u) => !u.done)
   const uploadBusy = uploadBatchHere !== null && uploadBatchHere.files.some((u) => !u.done)
 
+  // Uploads always run in the background — the modal shows progress while
+  // it's open and closes itself once the batch finishes. All-good batches
+  // are dismissed outright; failures linger in the corner tile until seen.
+  const uploadAllDone = uploadBatchHere !== null && !uploadBusy
+  useEffect(() => {
+    if (!uploadOpen || !uploadAllDone) return
+    const t = setTimeout(() => {
+      setUploadOpen(false)
+      if (uploadBatchHere?.files.every((f) => f.ok)) dismissUploads()
+    }, 1200)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadOpen, uploadAllDone])
+
   return (
     <div style={selectMode && selected.size > 0 ? { paddingBottom: 72 } : undefined}>
       {error && banner('error', 'Media problem', error)}
@@ -718,7 +732,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
             {uploadBatchHere ? (
               <div style={{ textAlign: 'left' }}>
                 <div className="small muted">
-                  {uploadFinishedCount}/{uploadTotal} uploaded · {uploadCurrent ? uploadCurrent.name : 'finishing…'}
+                  {uploadFinishedCount}/{uploadTotal} uploaded · {uploadCurrent ? uploadCurrent.name : 'done'}
                 </div>
                 <div className="progress"><div style={{ width: `${uploadCurrent?.pct ?? 100}%` }} /></div>
               </div>
@@ -726,7 +740,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
               <div>
                 Drop media here or click to upload
                 <div className="faint" style={{ fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: 12.5, marginTop: 4 }}>
-                  they land in this project&apos;s folder on Drive
+                  they land in this project&apos;s folder on Drive — and upload in the background
                 </div>
               </div>
             )}
@@ -741,38 +755,15 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
               e.target.value = ''
             }}
           />
-          {uploadBatchHere && uploadBusy && (
-            <div className="row mt8">
-              <button className="btn" onClick={() => setUploadOpen(false)}>
-                Continue in background
-              </button>
-              <span className="faint small" style={{ alignSelf: 'center' }}>
-                a small tile will track progress
-              </span>
-            </div>
-          )}
           {uploadBatchHere && !uploadBusy && (
-            <>
-              <div className="mt8">
-                {uploadBatchHere.files.map((u, i) => (
-                  <div key={i} className="small" style={{ color: u.ok ? undefined : 'var(--red)' }}>
-                    {u.ok ? '✓' : '✗'} {u.name}
-                    {u.err ? ` — ${u.err}` : ''}
-                  </div>
-                ))}
-              </div>
-              <div className="row mt8">
-                <button
-                  className="btn primary"
-                  onClick={() => {
-                    dismissUploads()
-                    setUploadOpen(false)
-                  }}
-                >
-                  Close
-                </button>
-              </div>
-            </>
+            <div className="mt8">
+              {uploadBatchHere.files.map((u, i) => (
+                <div key={i} className="small" style={{ color: u.ok ? undefined : 'var(--red)' }}>
+                  {u.ok ? '✓' : '✗'} {u.name}
+                  {u.err ? ` — ${u.err}` : ''}
+                </div>
+              ))}
+            </div>
           )}
         </Modal>
       )}

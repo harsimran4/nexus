@@ -20,6 +20,7 @@ export interface UploadBatch {
 }
 
 let batch: UploadBatch | null = null
+let autoDismissTimer: ReturnType<typeof setTimeout> | null = null
 const subs = new Set<() => void>()
 
 function emit(): void {
@@ -49,6 +50,10 @@ export function uploadsBusy(): boolean {
  *  while another batch is running; replaces a finished one. */
 export function startUploadBatch(projectId: string, files: File[], sectionId: string | null): boolean {
   if (uploadsBusy() || files.length === 0) return false
+  if (autoDismissTimer !== null) {
+    clearTimeout(autoDismissTimer)
+    autoDismissTimer = null
+  }
   batch = { projectId, files: files.map((f) => ({ name: f.name, pct: 0 })) }
   emit()
   void (async () => {
@@ -63,6 +68,17 @@ export function startUploadBatch(projectId: string, files: File[], sectionId: st
         j === i ? { ...u, pct: 100, done: true, ok: r.ok, err: r.ok ? undefined : r.error } : u,
       )
       emit()
+    }
+    // All-good batches linger briefly as a receipt, then close themselves.
+    // Failures stay until dismissed so they can't scroll by unseen.
+    const finished = batch
+    if (finished && finished.files.every((f) => f.ok)) {
+      autoDismissTimer = setTimeout(() => {
+        if (batch === finished) {
+          batch = null
+          emit()
+        }
+      }, 4000)
     }
     emit()
   })()
