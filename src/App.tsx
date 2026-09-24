@@ -17,6 +17,7 @@ import { Scripts } from './ui/pages/Scripts'
 import { Archive } from './ui/pages/Archive'
 import { Admin } from './ui/pages/Admin'
 import { Security } from './ui/pages/Security'
+import { UploadTile } from './ui/UploadTile'
 
 // ---------------------------------------------------------------------------
 // Hash router: #/dash #/project/<id> #/scripts #/archive #/admin #/security
@@ -366,6 +367,7 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
           </div>
         </div>
         {children}
+        <UploadTile />
       </main>
     </div>
   )

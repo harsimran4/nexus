@@ -391,6 +391,21 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 [data-theme='dark'] .media-tray { background: var(--panel); }
 [data-theme='dark'] .media-tray::before { background: rgba(74, 69, 48, 0.75); border-left-color: rgba(255, 255, 255, 0.14); border-right-color: rgba(255, 255, 255, 0.14); }
 
+/* Uploads: bottom-right tile tracking a background batch */
+.upload-tile {
+  position: fixed; right: 16px; bottom: 16px; z-index: 45;
+  width: 264px;
+  background: var(--card);
+  border: 1px solid var(--border-strong); border-radius: var(--radius);
+  padding: 10px 12px 12px;
+  box-shadow: var(--shadow);
+}
+.upload-tile .progress { margin-top: 8px; }
+.upload-tile-file {
+  margin-top: 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {
   border: 1px solid var(--border-strong); border-radius: 999px; background: var(--card);
@@ -495,6 +510,7 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
     border-radius: var(--radius); bottom: 12px;
   }
   .media-tray::before { display: none; }
+  .upload-tile { left: 12px; right: 12px; width: auto; bottom: 12px; }
 
   /* kanban becomes stacked sections — no sideways scrolling on a phone */
   .kanban { display: flex; flex-direction: column; gap: 12px; }

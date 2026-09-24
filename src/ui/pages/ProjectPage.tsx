@@ -12,9 +12,9 @@ import {
   setProjectStatus,
   updateProject,
   updateScript,
-  uploadToProject,
 } from '../../state/actions'
 import { describeError, downloadToBrowserProgress } from '../../drive/preview'
+import { dismissUploads, startUploadBatch, useUploadBatch } from '../../state/uploads'
 import { getMeta, listChildren, renameFile, thumbnailUrl, webViewLink, type FileMeta } from '../../drive/client'
 import {
   KIND_GLYPH,
@@ -155,12 +155,10 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
   // file rename (per card)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
-  // upload — lives in its own modal
+  // upload — lives in its own modal; the running batch lives in the global
+  // uploads store (state/uploads.ts) so "continue in background" just works.
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploadSection, setUploadSection] = useState('')
-  const [uploadQueue, setUploadQueue] = useState<
-    { name: string; pct: number; done?: boolean; ok?: boolean; err?: string }[] | null
-  >(null)
   const [dragOver, setDragOver] = useState(false)
   const fileInput = useRef<HTMLInputElement>(null)
   const writable = canWrite()
@@ -171,6 +169,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
   const fileKey = project.fileIds.join(',')
   const folderId = project.folderId
   const sectionOf = project.mediaSectionOf
+  const batch = useUploadBatch()
 
   // One files.list per visit replaces the old N× getMeta calls; per-file
   // getMeta fills only ids the listing missed (file moved manually on Drive,
@@ -430,35 +429,16 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
     }
   }
 
-  const startUploads = async (files: File[]) => {
-    if (files.length === 0) return
-    setError(null)
-    const target = uploadTarget || null
-    // Entries stay in place (indices must not shift); a finished file keeps
-    // its outcome (done/ok/err) so the modal can list ✓/✗ after the batch.
-    setUploadQueue(files.map((f) => ({ name: f.name, pct: 0 })))
-    for (let i = 0; i < files.length; i++) {
-      const r = await uploadToProject(
-        projectId,
-        files[i],
-        (pct) => setUploadQueue((q) => (q ? q.map((u, j) => (j === i ? { ...u, pct } : u)) : q)),
-        { sectionId: target },
-      )
-      setUploadQueue((q) =>
-        q ? q.map((u, j) => (j === i ? { ...u, pct: 100, done: true, ok: r.ok, err: r.ok ? undefined : r.error } : u)) : q,
-      )
-    }
+  const startUploads = (files: File[]) => {
+    startUploadBatch(projectId, files, uploadTarget || null)
   }
 
-  const closeUpload = () => {
-    setUploadQueue(null)
-    setUploadOpen(false)
-  }
-
-  const uploadTotal = uploadQueue?.length ?? 0
-  const uploadFinishedCount = uploadQueue ? uploadQueue.filter((u) => u.done).length : 0
-  const uploadCurrent = uploadQueue?.find((u) => !u.done)
-  const uploadBusy = uploadQueue !== null && uploadQueue.some((u) => !u.done)
+  // This project's batch, if one exists (the global store holds at most one).
+  const uploadBatchHere = batch !== null && batch.projectId === projectId ? batch : null
+  const uploadTotal = uploadBatchHere?.files.length ?? 0
+  const uploadFinishedCount = uploadBatchHere ? uploadBatchHere.files.filter((u) => u.done).length : 0
+  const uploadCurrent = uploadBatchHere?.files.find((u) => !u.done)
+  const uploadBusy = uploadBatchHere !== null && uploadBatchHere.files.some((u) => !u.done)
 
   return (
     <div style={selectMode && selected.size > 0 ? { paddingBottom: 72 } : undefined}>
@@ -469,9 +449,6 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
       <div className="media-tabs">
         <button className={`media-tab${activeSection === 'all' ? ' on' : ''}`} onClick={() => setSection('all')}>
           All<span className="count">{countFor('all')}</span>
-        </button>
-        <button className={`media-tab${activeSection === UNSORTED ? ' on' : ''}`} onClick={() => setSection(UNSORTED)}>
-          Unsorted<span className="count">{countFor(UNSORTED)}</span>
         </button>
         {project.mediaSections.map((s) => (
           <button key={s.id} className={`media-tab${activeSection === s.id ? ' on' : ''}`} onClick={() => setSection(s.id)}>
@@ -708,7 +685,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
 
       {/* Upload modal */}
       {uploadOpen && (
-        <Modal title="Upload media" onClose={() => { if (!uploadBusy) closeUpload() }}>
+        <Modal title="Upload media" onClose={() => setUploadOpen(false)}>
           <div className="field">
             <label>Upload to</label>
             <select
@@ -735,10 +712,10 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
             onDrop={(e) => {
               e.preventDefault()
               setDragOver(false)
-              void startUploads(Array.from(e.dataTransfer.files))
+              startUploads(Array.from(e.dataTransfer.files))
             }}
           >
-            {uploadQueue ? (
+            {uploadBatchHere ? (
               <div style={{ textAlign: 'left' }}>
                 <div className="small muted">
                   {uploadFinishedCount}/{uploadTotal} uploaded · {uploadCurrent ? uploadCurrent.name : 'finishing…'}
@@ -760,14 +737,24 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
             multiple
             hidden
             onChange={(e) => {
-              void startUploads(Array.from(e.target.files ?? []))
+              startUploads(Array.from(e.target.files ?? []))
               e.target.value = ''
             }}
           />
-          {uploadQueue && !uploadBusy && (
+          {uploadBatchHere && uploadBusy && (
+            <div className="row mt8">
+              <button className="btn" onClick={() => setUploadOpen(false)}>
+                Continue in background
+              </button>
+              <span className="faint small" style={{ alignSelf: 'center' }}>
+                a small tile will track progress
+              </span>
+            </div>
+          )}
+          {uploadBatchHere && !uploadBusy && (
             <>
               <div className="mt8">
-                {uploadQueue.map((u, i) => (
+                {uploadBatchHere.files.map((u, i) => (
                   <div key={i} className="small" style={{ color: u.ok ? undefined : 'var(--red)' }}>
                     {u.ok ? '✓' : '✗'} {u.name}
                     {u.err ? ` — ${u.err}` : ''}
@@ -775,7 +762,15 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
                 ))}
               </div>
               <div className="row mt8">
-                <button className="btn primary" onClick={closeUpload}>Close</button>
+                <button
+                  className="btn primary"
+                  onClick={() => {
+                    dismissUploads()
+                    setUploadOpen(false)
+                  }}
+                >
+                  Close
+                </button>
               </div>
             </>
           )}
