@@ -60,13 +60,18 @@ export function startUploadBatch(projectId: string, files: File[], sectionId: st
     for (let i = 0; i < files.length; i++) {
       const r = await uploadToProject(projectId, files[i], (pct) => {
         if (!batch) return
-        batch.files = batch.files.map((u, j) => (j === i ? { ...u, pct } : u))
+        // New object identity on every tick — useSyncExternalStore compares
+        // snapshots by reference, so in-place mutation would never re-render.
+        batch = { ...batch, files: batch.files.map((u, j) => (j === i ? { ...u, pct } : u)) }
         emit()
       }, { sectionId })
       if (!batch) return
-      batch.files = batch.files.map((u, j) =>
-        j === i ? { ...u, pct: 100, done: true, ok: r.ok, err: r.ok ? undefined : r.error } : u,
-      )
+      batch = {
+        ...batch,
+        files: batch.files.map((u, j) =>
+          j === i ? { ...u, pct: 100, done: true, ok: r.ok, err: r.ok ? undefined : r.error } : u,
+        ),
+      }
       emit()
     }
     // All-good batches linger briefly as a receipt, then close themselves.

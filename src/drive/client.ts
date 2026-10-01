@@ -424,7 +424,40 @@ export async function createAnyoneReaderPermission(fileId: string, cred: Credent
   )
 }
 
-/** Resumable upload with progress (XHR — fetch can't report upload progress). */
+/** One XHR PUT that resolves with whatever response came back (any status);
+ *  rejects only on true network failure. Body may be null (status probes). */
+function xhrPut(
+  url: string,
+  body: Blob | null,
+  headers: Record<string, string>,
+  onLoaded?: (loaded: number) => void,
+): Promise<{ status: number; range: string | null; json: FileMeta | null }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('PUT', url)
+    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v)
+    if (onLoaded) xhr.upload.onprogress = (e) => { if (e.lengthComputable) onLoaded(e.loaded) }
+    xhr.onload = () => {
+      let json: FileMeta | null = null
+      try {
+        json = JSON.parse(xhr.responseText) as FileMeta
+      } catch {
+        /* 308 Resume Incomplete responses have no body */
+      }
+      resolve({ status: xhr.status, range: xhr.getResponseHeader('Range'), json })
+    }
+    xhr.onerror = () => reject(new DriveError('network', 'Upload network error'))
+    xhr.send(body)
+  })
+}
+
+const UPLOAD_CHUNK = 16 * 1024 * 1024 // 16MB — a clean multiple of Drive's 256KB granularity
+const UPLOAD_RETRIES = 5 // consecutive network failures before giving up
+
+/** Resumable upload with progress (XHR — fetch can't report upload progress).
+ *  Files over 5MB go up in chunks with Content-Range: a network blip costs
+ *  one chunk, not the whole video — after a failure the loop asks Google how
+ *  many bytes it already holds and resumes from there. */
 export async function uploadFile(
   folderId: string,
   file: File,
@@ -449,27 +482,50 @@ export async function uploadFile(
   )
   const { url: sessionUrl } = (await initRes.json()) as { url: string }
 
-  return new Promise<FileMeta>((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
-    xhr.open('PUT', sessionUrl)
-    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream')
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable) onProgress?.(Math.round((e.loaded / e.total) * 100))
-    }
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          resolve(JSON.parse(xhr.responseText))
-        } catch {
-          reject(new DriveError('api', 'Invalid JSON from resumable upload'))
+  const total = file.size
+  const contentType = file.type || 'application/octet-stream'
+  let offset = 0
+  let failures = 0
+  while (offset < total) {
+    const end = Math.min(offset + UPLOAD_CHUNK, total)
+    try {
+      const res = await xhrPut(
+        sessionUrl,
+        file.slice(offset, end),
+        { 'Content-Type': contentType, 'Content-Range': `bytes ${offset}-${end - 1}/${total}` },
+        (loaded) => onProgress?.(Math.round(((offset + loaded) / total) * 100)),
+      )
+      failures = 0
+      if (res.status === 200 || res.status === 201) {
+        if (res.json) {
+          onProgress?.(100)
+          return res.json
         }
-      } else {
-        reject(new DriveError(mapStatus(xhr.status, undefined), `Upload failed (${xhr.status})`, xhr.status))
+        throw new DriveError('api', 'Upload finished but Drive sent no metadata')
       }
+      if (res.status === 308) {
+        const m = res.range?.match(/bytes=0-(\d+)/)
+        offset = m ? Number(m[1]) + 1 : offset
+        continue
+      }
+      throw new DriveError(mapStatus(res.status, undefined), `Upload failed (${res.status})`, res.status)
+    } catch (e) {
+      if (e instanceof DriveError && e.kind !== 'network') throw e
+      failures++
+      if (failures > UPLOAD_RETRIES) throw e instanceof DriveError ? e : new DriveError('network', 'Upload network error')
+      // Ask Google how much it already holds, then resume from that byte.
+      const status = await xhrPut(sessionUrl, null, { 'Content-Range': `bytes */${total}` }).catch(() => null)
+      if (status && (status.status === 200 || status.status === 201)) {
+        onProgress?.(100)
+        if (status.json) return status.json
+      }
+      const m = status?.range?.match(/bytes=0-(\d+)/)
+      if (m) offset = Number(m[1]) + 1
+      onProgress?.(Math.round((offset / total) * 100))
+      await new Promise((r) => setTimeout(r, Math.min(2 ** failures * 1000, 15_000)))
     }
-    xhr.onerror = () => reject(new DriveError('network', 'Upload network error'))
-    xhr.send(file)
-  })
+  }
+  throw new DriveError('api', 'Upload ended before the file was complete')
 }
 
 export function thumbnailUrl(fileId: string, size = 400): string {
