@@ -1,0 +1,141 @@
+// Resumable uploads — emulates the Drive resumable contract the client's
+// XHR loop already speaks (client.ts uploadFile):
+//   POST  init (bearer session required) → { url, partSize }
+//   PUT   chunk with Content-Range: bytes a-b/total
+//           → 308 + `Range: bytes=0-N` while incomplete (keep going at N+1)
+//           → 200 + FileMeta JSON when the last part lands
+//   PUT   status probe with `Content-Range: bytes */total`
+//           → 308 + Range (how much the server already holds)
+// Chunk PUTs carry an HMAC-signed URL instead of the bearer header, exactly
+// like the old Worker proxy did — the XHR sends no custom headers.
+
+import { createFileRoute } from '@tanstack/react-router'
+
+export const Route = createFileRoute('/api/upload/resumable')({
+  server: {
+    handlers: {
+      POST: async ({ request }) => {
+        const { env } = await import('cloudflare:workers')
+        const auth = await import('../../../server/auth')
+        const session = await auth.requireWriterRequest(request)
+        if (!session) return Response.json({ error: 'Sign in to upload' }, { status: 401 })
+
+        const body = (await request.json().catch(() => null)) as
+          | { name?: string; parentId?: string; mimeType?: string; size?: number }
+          | null
+        if (!body?.name || !body.parentId || !Number.isFinite(body.size) || (body.size ?? 0) <= 0) {
+          return Response.json({ error: 'Missing name/parentId/size' }, { status: 400 })
+        }
+
+        const s3 = await import('../../../server/s3')
+        const { sanitizeNameSegment } = await import('../../../server/mime')
+        const bytes = crypto.getRandomValues(new Uint8Array(5))
+        let rand = ''
+        for (const b of bytes) rand += b.toString(16).padStart(2, '0')
+        const id = 'f_' + Date.now().toString(16) + rand.slice(0, 10)
+        const key = body.parentId + id + '__' + sanitizeNameSegment(body.name)
+        const contentType = body.mimeType || 'application/octet-stream'
+        const partSize = Number(env.PART_SIZE) || 16 * 1024 * 1024
+
+        let uploadId: string
+        try {
+          uploadId = await s3.createMpu(key, contentType)
+        } catch (e) {
+          return Response.json({ error: e instanceof Error ? e.message : 'Storage refused the upload' }, { status: 502 })
+        }
+
+        const payload = JSON.stringify({ key, uploadId, total: body.size, partSize })
+        const token = auth.b64url(new TextEncoder().encode(payload))
+        const key_ = await authSign(env.SESSION_SECRET, token)
+        const url = `/api/upload/resumable?u=${token}&sig=${key_}`
+        return Response.json({ url, partSize })
+      },
+
+      PUT: async ({ request }) => {
+        const { env } = await import('cloudflare:workers')
+        const auth = await import('../../../server/auth')
+        const reqUrl = new URL(request.url)
+        const u = reqUrl.searchParams.get('u')
+        const sig = reqUrl.searchParams.get('sig')
+        if (!u || !sig) return Response.json({ error: 'Missing upload target' }, { status: 400 })
+        const expect = await authSign(env.SESSION_SECRET, u)
+        if (expect !== sig) return Response.json({ error: 'Invalid upload signature' }, { status: 403 })
+        let payload: { key: string; uploadId: string; total: number; partSize: number }
+        try {
+          payload = JSON.parse(new TextDecoder().decode(auth.b64urlToBytes(u)))
+        } catch {
+          return Response.json({ error: 'Corrupt upload target' }, { status: 400 })
+        }
+
+        const s3 = await import('../../../server/s3')
+        const { metaCore } = await import('../../../server/queries')
+        const contentRange = request.headers.get('Content-Range') ?? ''
+
+        // Status probe: `bytes */total` — report how much we already hold.
+        const probe = contentRange.match(/^bytes \*\/(\d+)$/)
+        if (probe) {
+          const parts = await s3.listParts(payload.key, payload.uploadId).catch(() => [])
+          const held = contiguousBytes(parts)
+          const headers: Record<string, string> = { 'X-Total': String(payload.total) }
+          if (held > 0) headers.Range = `bytes=0-${held - 1}`
+          return new Response(null, { status: 308, headers })
+        }
+
+        const m = contentRange.match(/^bytes (\d+)-(\d+)\/(\d+)$/)
+        if (!m) return Response.json({ error: 'Bad Content-Range' }, { status: 400 })
+        const start = Number(m[1])
+        const end = Number(m[2])
+        const total = Number(m[3])
+        if (total !== payload.total || end < start || end >= total) {
+          return Response.json({ error: 'Content-Range mismatch' }, { status: 400 })
+        }
+        if (start % payload.partSize !== 0 || end - start + 1 > payload.partSize) {
+          return Response.json({ error: 'Chunk not aligned with part size' }, { status: 400 })
+        }
+
+        const partNumber = Math.floor(start / payload.partSize) + 1
+        const buf = await request.arrayBuffer()
+        if (buf.byteLength !== end - start + 1) {
+          return Response.json({ error: 'Body length does not match Content-Range' }, { status: 400 })
+        }
+        try {
+          await s3.uploadPart(payload.key, payload.uploadId, partNumber, buf)
+          if (end + 1 < payload.total) {
+            return new Response(null, { status: 308, headers: { Range: `bytes=0-${end}` } })
+          }
+          // Last part — complete the MPU and return the file's meta.
+          const parts = await s3.listParts(payload.key, payload.uploadId)
+          await s3.completeMpu(
+            payload.key,
+            payload.uploadId,
+            parts.map((p) => ({ partNumber: p.partNumber, etag: p.etag })),
+          )
+          const meta = await metaCore(payload.key)
+          return Response.json(meta)
+        } catch (e) {
+          return Response.json({ error: e instanceof Error ? e.message : 'Upload failed' }, { status: 502 })
+        }
+      },
+    },
+  },
+})
+
+function contiguousBytes(parts: { partNumber: number; size: number }[]): number {
+  // Parts arrive in ascending order; count only the contiguous run from 1.
+  let next = 1
+  let bytes = 0
+  for (const p of parts) {
+    if (p.partNumber !== next) break
+    bytes += p.size
+    next++
+  }
+  return bytes
+}
+
+async function authSign(secret: string, value: string): Promise<string> {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  const sigBuf = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value))
+  let bin = ''
+  for (const b of new Uint8Array(sigBuf)) bin += String.fromCharCode(b)
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}

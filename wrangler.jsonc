@@ -1,0 +1,27 @@
+{
+  // Nexus — one Worker: TanStack Start SPA shell (static assets) + server
+  // functions + server routes, backed by an OCI Object Storage bucket over
+  // the S3-compatible API.
+  //
+  // Secrets (never committed — `wrangler secret put NAME`):
+  //   OCI_S3_ACCESS_KEY_ID     — OCI Customer Secret Key "Access Key"
+  //   OCI_S3_SECRET_ACCESS_KEY — OCI Customer Secret Key "Secret Key"
+  //   SESSION_SECRET           — random 32+ bytes, e.g. `openssl rand -base64 32`
+  //   SETUP_TOKEN              — one-time /init gate; delete after first init
+  "name": "nexus",
+  "main": "@tanstack/react-start/server-entry",
+  "compatibility_date": "2026-09-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "vars": {
+    "OCI_S3_ENDPOINT": "https://axryun3awvp1.compat.objectstorage.ap-hyderabad-1.oci.customer-oci.com",
+    "OCI_S3_BUCKET": "nexus",
+    "OCI_S3_REGION": "ap-hyderabad-1",
+    "PART_SIZE": "16777216"
+  },
+  "assets": {
+    // Unknown paths reach the Worker (assets-first only shields real files);
+    // Start's server renders known routes in SPA mode and 404s the rest.
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/_serverFn/*", "/api/*", "/files/*"]
+  }
+}

@@ -1,137 +1,84 @@
-// Thin Drive wrapper — THREE credential modes now:
-//   'bearer' — a Nexus app session (editor/admin, verified by the Worker).
-//              Every call here goes to the Worker, never to Google directly.
-//   'key'    — the embedded API key (anonymous/viewer reads). UNCHANGED —
-//              still hits googleapis.com directly, exactly as before.
-//   'google' — a raw Google OAuth token. ONLY used by the one-time #/init
-//              bootstrap flow (before the Worker/nexus.json exist), and by
-//              nothing else. See src/ui/pages/Init.tsx.
-// 'auto' prefers a live app session when present, else falls back to 'key'.
+// Client data layer. Google Drive is gone — storage is an OCI Object Storage
+// bucket, reached through this app's own server functions (writes) and the
+// public /files/<key> + /api/public/* routes (reads, thumbnails, downloads).
+// The exported names/shapes match the old Drive client so the UI and sync
+// layers stay stable; the `cred` arguments are gone (the server knows who
+// you are from the session token its middleware attaches).
+//
+// Keys are S3 object keys: `projects/<projectId>/<fileId>__<name>`. The id
+// segment is immutable; the name is decorative (rename = copy+delete).
 
-export type AuthMode = 'bearer' | 'key' | 'google' | 'auto'
-export type Credential = { mode: AuthMode; bearer?: string | null; apiKey?: string }
+import type { DriveErrorKind, FileMeta, ListResult, FnResult } from '../types/storage'
+import { DOC_KEY } from '../server/keys'
+import { encodeKeyPath } from '../server/mime'
+import {
+  metaFn,
+  readTextFn,
+  listFn,
+  docPutFn,
+  putTextFn,
+  folderCreateFn,
+  fileCreateFn,
+  fileCopyFn,
+  trashFn,
+  renameFn,
+  uploadSmallFn,
+} from '../server/fns'
 
-export type DriveErrorKind =
-  | 'network'
-  | 'auth'
-  | 'notFound'
-  | 'rateLimit'
-  | 'downloadRestricted'
-  | 'permission'
-  | 'api'
+export type { DriveErrorKind, FileMeta, ListResult }
 
 export class DriveError extends Error {
   kind: DriveErrorKind
   status?: number
-  reason?: string
-  constructor(kind: DriveErrorKind, message: string, status?: number, reason?: string) {
+  constructor(kind: DriveErrorKind, message: string, status?: number) {
     super(message)
     this.name = 'DriveError'
     this.kind = kind
     this.status = status
-    this.reason = reason
   }
 }
 
-const API = 'https://www.googleapis.com/drive/v3'
-const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3'
-// Set at build time — the Worker's deployed URL, e.g.
-// https://nexus-drive-proxy.<you>.workers.dev
-const WORKER = (import.meta.env.VITE_NEXUS_WORKER_URL ?? '').replace(/\/$/, '')
-
-export function mapStatus(status: number, reason: string | undefined): DriveErrorKind {
+/** HTTP status → error kind (used by the direct /files fetches). */
+export function mapStatus(status: number): DriveErrorKind {
   if (status === 401) return 'auth'
   if (status === 404) return 'notFound'
   if (status === 429) return 'rateLimit'
-  if (status === 403) {
-    if (!reason) return 'permission'
-    if (reason === 'cannotDownloadFile') return 'downloadRestricted'
-    if (reason === 'userRateLimitExceeded' || reason === 'rateLimitExceeded' || reason === 'dailyLimitExceeded')
-      return 'rateLimit'
-    return 'permission'
-  }
   if (status >= 500) return 'rateLimit'
+  if (status === 409) return 'conflict'
   return 'api'
 }
 
-async function parseError(res: Response): Promise<DriveError> {
-  let reason: string | undefined
-  let message = `Drive API ${res.status}`
-  try {
-    const body = await res.json()
-    reason = body?.error?.errors?.[0]?.reason ?? body?.error
-    if (body?.error?.message) message = body.error.message
-    else if (typeof body?.error === 'string') message = body.error
-  } catch {
-    /* non-JSON error body */
-  }
-  return new DriveError(mapStatus(res.status, reason), message, res.status, reason)
-}
+// ---------------------------------------------------------------------------
+// Session token — sessionStorage mirror (same key the old Worker flow used).
+// ---------------------------------------------------------------------------
 
-function withKey(url: string, cred: Credential): string {
-  const key = cred.apiKey ?? getGlobalApiKey()
-  if (!key) throw new DriveError('auth', 'No API key configured')
-  return url + (url.includes('?') ? '&' : '?') + 'key=' + encodeURIComponent(key)
-}
-
-// globalBearer: the app-session (Worker) token used for mode 'bearer'.
-// globalGoogleBearer: a raw Google token, only ever set during #/init.
-let globalBearer: string | null = null
-let globalGoogleBearer: string | null = null
-let globalApiKey: string | null = null
+const WORKER_TOKEN_KEY = 'nexus.workerToken'
 
 export function setGlobalBearer(token: string | null): void {
-  globalBearer = token
+  try {
+    if (token) sessionStorage.setItem(WORKER_TOKEN_KEY, token)
+    else sessionStorage.removeItem(WORKER_TOKEN_KEY)
+  } catch {
+    /* ignore */
+  }
 }
-export function setGlobalGoogleBearer(token: string | null): void {
-  globalGoogleBearer = token
-}
-export function setGlobalApiKey(key: string): void {
-  globalApiKey = key
-}
-function getGlobalApiKey(): string | null {
-  return globalApiKey
-}
+
 export function hasBearer(): boolean {
-  return globalBearer !== null
-}
-
-function sessionToken(cred: Credential): string {
-  const t = cred.bearer ?? globalBearer
-  if (!t) throw new DriveError('auth', 'Sign in first')
-  return t
-}
-function googleToken(cred: Credential): string {
-  const t = cred.mode === 'google' ? cred.bearer ?? globalGoogleBearer : null
-  if (!t) throw new DriveError('auth', 'Sign in with Google first')
-  return t
-}
-
-async function workerFetch(path: string, init: RequestInit, cred: Credential): Promise<Response> {
-  if (!WORKER) throw new DriveError('api', 'VITE_NEXUS_WORKER_URL is not configured')
-  const headers = new Headers(init.headers)
-  headers.set('Authorization', 'Bearer ' + sessionToken(cred))
-  let res: Response
   try {
-    res = await fetch(WORKER + path, { ...init, headers })
-  } catch (e) {
-    throw new DriveError('network', e instanceof Error ? e.message : 'network error')
+    return sessionStorage.getItem(WORKER_TOKEN_KEY) !== null
+  } catch {
+    return false
   }
-  if (!res.ok) throw await parseError(res)
-  return res
 }
 
-async function googleFetch(url: string, init: RequestInit, cred: Credential): Promise<Response> {
-  const headers = new Headers(init.headers)
-  if (cred.mode === 'google') headers.set('Authorization', 'Bearer ' + googleToken(cred))
-  let res: Response
-  try {
-    res = await fetch(url, { ...init, headers })
-  } catch (e) {
-    throw new DriveError('network', e instanceof Error ? e.message : 'network error')
-  }
-  if (!res.ok) throw await parseError(res)
-  return res
+// ---------------------------------------------------------------------------
+// RPC plumbing
+// ---------------------------------------------------------------------------
+
+async function call<T>(p: Promise<FnResult<T>>): Promise<T> {
+  const r = await p
+  if (!r.ok) throw new DriveError(r.kind, r.message)
+  return r.data
 }
 
 export async function backoffRetry<T>(
@@ -155,70 +102,44 @@ export async function backoffRetry<T>(
   throw lastErr
 }
 
-export interface FileMeta {
-  id: string
-  name: string
-  headRevisionId?: string
-  md5Checksum?: string
-  version?: string
-  modifiedTime?: string
-  mimeType?: string
-  trashed?: boolean
-  createdTime?: string
-  // Drive v3 returns int64 fields as strings (and omits size entirely for
-  // Google-Docs-type files). Coerce via fileSizeBytes() in util/media.ts.
-  size?: string | number
+function fileUrl(key: string): string {
+  return '/files/' + encodeKeyPath(key)
 }
 
-const META_FIELDS = 'id,name,headRevisionId,md5Checksum,version,modifiedTime,mimeType,trashed,createdTime,size'
-
-export interface ListResult {
-  files: FileMeta[]
-  nextPageToken?: string
+async function fetchPublic(url: string): Promise<Response> {
+  let res: Response
+  try {
+    res = await fetch(url)
+  } catch (e) {
+    throw new DriveError('network', e instanceof Error ? e.message : 'network error')
+  }
+  if (!res.ok) throw new DriveError(mapStatus(res.status), `Storage ${res.status}`, res.status)
+  return res
 }
 
 // ---------------------------------------------------------------------------
-// Reads — bearer -> Worker, key -> direct (unchanged), google -> direct
+// Reads
 // ---------------------------------------------------------------------------
 
-export async function getMeta(fileId: string, cred: Credential): Promise<FileMeta> {
-  if (cred.mode === 'bearer' || (cred.mode === 'auto' && globalBearer)) {
-    const res = await workerFetch(`/drive/meta/${fileId}`, { method: 'GET' }, { ...cred, mode: 'bearer' })
-    return res.json()
-  }
-  const res = await googleFetch(withKey(`${API}/files/${fileId}?fields=${META_FIELDS}`, cred), { method: 'GET' }, cred)
-  return res.json()
+export async function getMeta(key: string): Promise<FileMeta> {
+  return call(metaFn({ data: { key } }))
 }
 
-export async function readFile(fileId: string, cred: Credential): Promise<string> {
-  if (cred.mode === 'bearer' || (cred.mode === 'auto' && globalBearer)) {
-    const res = await workerFetch(`/drive/content/${fileId}`, { method: 'GET' }, { ...cred, mode: 'bearer' })
-    return res.text()
-  }
-  const res = await googleFetch(withKey(`${API}/files/${fileId}?alt=media`, cred), { method: 'GET' }, cred)
-  return res.text()
+export async function readFile(key: string): Promise<string> {
+  return call(readTextFn({ data: { key } }))
 }
 
-/** Response for one file's content, on whichever credential path applies. */
-async function contentResponse(fileId: string, cred: Credential): Promise<Response> {
-  if (cred.mode === 'bearer' || (cred.mode === 'auto' && globalBearer)) {
-    return workerFetch(`/drive/content/${fileId}`, { method: 'GET' }, { ...cred, mode: 'bearer' })
-  }
-  return googleFetch(withKey(`${API}/files/${fileId}?alt=media`, cred), { method: 'GET' }, cred)
-}
-
-export async function downloadFile(fileId: string, cred: Credential): Promise<Blob> {
-  return (await contentResponse(fileId, cred)).blob()
+export async function downloadFile(key: string): Promise<Blob> {
+  return (await fetchPublic(fileUrl(key))).blob()
 }
 
 /** Download while streaming the body — reports byte progress as it lands.
  *  `total` is null when the response has no usable Content-Length. */
 export async function downloadFileProgress(
-  fileId: string,
-  cred: Credential,
+  key: string,
   onProgress?: (received: number, total: number | null) => void,
 ): Promise<Blob> {
-  const res = await contentResponse(fileId, cred)
+  const res = await fetchPublic(fileUrl(key))
   const len = res.headers.get('content-length')
   const total = len && /^\d+$/.test(len) ? Number(len) : null
   if (!res.body) {
@@ -242,187 +163,64 @@ export async function downloadFileProgress(
 }
 
 export async function listChildren(
-  folderId: string,
-  cred: Credential,
-  opts: { query?: string; pageSize?: number; pageToken?: string } = {},
+  parent: string,
+  opts: { pageSize?: number; pageToken?: string } = {},
 ): Promise<ListResult> {
-  if (cred.mode === 'bearer') {
-    const params = new URLSearchParams({ parent: folderId, pageSize: String(opts.pageSize ?? 100) })
-    if (opts.query) params.set('query', opts.query)
-    if (opts.pageToken) params.set('pageToken', opts.pageToken)
-    const res = await workerFetch(`/drive/list?${params.toString()}`, { method: 'GET' }, cred)
-    return res.json()
-  }
-  const params = new URLSearchParams({
-    q: `'${folderId}' in parents and trashed = false` + (opts.query ? ' and ' + opts.query : ''),
-    fields: 'nextPageToken,files(' + META_FIELDS + ')',
-    pageSize: String(opts.pageSize ?? 100),
-  })
-  if (opts.pageToken) params.set('pageToken', opts.pageToken)
-  const res = await googleFetch(withKey(`${API}/files?${params.toString()}`, cred), { method: 'GET' }, cred)
-  return res.json()
+  return call(listFn({ data: { parent, pageSize: opts.pageSize ?? 100, pageToken: opts.pageToken } }))
 }
 
 // ---------------------------------------------------------------------------
-// Writes — bearer -> Worker (the only supported write mode at runtime);
-// google -> direct (bootstrap only)
+// Writes (all server functions; require a signed-in editor/admin)
 // ---------------------------------------------------------------------------
 
-export async function writeFileJson(fileId: string, content: string, cred: Credential): Promise<FileMeta> {
-  return writeFileText(fileId, content, cred, 'application/json')
-}
-
-export async function writeFileText(
-  fileId: string,
-  content: string,
-  cred: Credential,
-  mimeType = 'text/markdown',
-): Promise<FileMeta> {
-  if (cred.mode === 'bearer') {
-    const res = await workerFetch(
-      `/drive/content/${fileId}`,
-      { method: 'PATCH', headers: { 'X-Mime-Type': mimeType }, body: content },
-      cred,
-    )
-    return res.json()
+export async function writeFileJson(key: string, content: string, expectEtag?: string): Promise<FileMeta> {
+  if (key === DOC_KEY) {
+    const { etag } = await call(docPutFn({ data: { raw: content, expectEtag } }))
+    return { id: DOC_KEY, name: 'nexus.json', mimeType: 'application/json', headRevisionId: etag, version: etag }
   }
-  const res = await googleFetch(
-    `${UPLOAD_API}/files/${fileId}?uploadType=media&fields=${META_FIELDS}`,
-    { method: 'PATCH', headers: { 'Content-Type': mimeType }, body: content },
-    cred,
-  )
-  return res.json()
+  return writeFileText(key, content, 'application/json')
 }
 
-export async function createFolder(name: string, parentId: string | null, cred: Credential): Promise<FileMeta> {
-  if (cred.mode === 'bearer') {
-    const res = await workerFetch(
-      '/drive/folders',
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, parentId }) },
-      cred,
-    )
-    return res.json()
+export async function writeFileText(key: string, content: string, mimeType = 'text/markdown'): Promise<FileMeta> {
+  return call(putTextFn({ data: { key, content, mimeType } }))
+}
+
+/** Create a folder marker. `key` is the full prefix, e.g.
+ *  `projects/prj_x/` — the caller derives it from entity ids. */
+export async function createFolder(_name: string, _parentId: string | null, key: string): Promise<FileMeta> {
+  return call(folderCreateFn({ data: { name: _name, parentId: _parentId, key } }))
+}
+
+export async function createJsonFile(name: string, parentId: string, content: string): Promise<FileMeta> {
+  return createTextFile(name, parentId, content, 'application/json')
+}
+
+export async function createTextFile(name: string, parentId: string, content: string, mimeType: string): Promise<FileMeta> {
+  return call(fileCreateFn({ data: { name, parentId, content, mimeType } }))
+}
+
+export async function copyFile(key: string, name: string, parentId: string): Promise<FileMeta> {
+  return call(fileCopyFn({ data: { key, name, parentId } }))
+}
+
+/** Move a key (or whole prefix) into trash/. Prefixes loop until empty. */
+export async function trashFile(key: string): Promise<void> {
+  for (;;) {
+    const r = await call(trashFn({ data: { key } }))
+    if (!r.remaining) return
   }
-  const body: Record<string, unknown> = { name, mimeType: 'application/vnd.google-apps.folder' }
-  if (parentId) body.parents = [parentId]
-  const res = await googleFetch(
-    `${API}/files?fields=${META_FIELDS}`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
-    cred,
-  )
-  return res.json()
 }
 
-export async function createJsonFile(name: string, parentId: string, content: string, cred: Credential): Promise<FileMeta> {
-  return createTextFile(name, parentId, content, 'application/json', cred)
+/** Rename a file — the KEY changes (copy+delete); the caller must rewrite
+ *  the doc (fileIds/mediaSectionOf) with the returned meta.id in the same
+ *  commit. Folder renames are doc-only (don't call this for prefixes). */
+export async function renameFile(key: string, newName: string): Promise<FileMeta> {
+  return call(renameFn({ data: { key, newName } }))
 }
 
-export async function createTextFile(
-  name: string,
-  parentId: string,
-  content: string,
-  mimeType: string,
-  cred: Credential,
-): Promise<FileMeta> {
-  if (cred.mode === 'bearer') {
-    const res = await workerFetch(
-      '/drive/files',
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, parentId, content, mimeType }) },
-      cred,
-    )
-    return res.json()
-  }
-  const boundary = 'nexusbound' + Math.random().toString(36).slice(2)
-  const metadata = JSON.stringify({ name, parents: [parentId], mimeType })
-  const body =
-    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n` +
-    `--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n${content}\r\n--${boundary}--`
-  const res = await googleFetch(
-    `${UPLOAD_API}/files?uploadType=multipart&fields=${META_FIELDS}`,
-    { method: 'POST', headers: { 'Content-Type': 'multipart/related; boundary=' + boundary }, body },
-    cred,
-  )
-  return res.json()
-}
-
-export async function copyFile(fileId: string, name: string, parentId: string, cred: Credential): Promise<FileMeta> {
-  if (cred.mode === 'bearer') {
-    const res = await workerFetch(
-      `/drive/files/${fileId}/copy`,
-      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, parentId }) },
-      cred,
-    )
-    return res.json()
-  }
-  const res = await googleFetch(
-    `${API}/files/${fileId}/copy?fields=${META_FIELDS}`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, parents: [parentId] }) },
-    cred,
-  )
-  return res.json()
-}
-
-export async function trashFile(fileId: string, cred: Credential): Promise<void> {
-  if (cred.mode === 'bearer') {
-    await workerFetch(
-      `/drive/files/${fileId}`,
-      { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) },
-      cred,
-    )
-    return
-  }
-  await googleFetch(
-    `${API}/files/${fileId}`,
-    { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashed: true }) },
-    cred,
-  )
-}
-
-export async function moveFile(fileId: string, addParent: string, removeParent: string | null, cred: Credential): Promise<FileMeta> {
-  if (cred.mode === 'bearer') {
-    const params = new URLSearchParams({ addParent })
-    if (removeParent) params.set('removeParent', removeParent)
-    const res = await workerFetch(
-      `/drive/files/${fileId}?${params.toString()}`,
-      { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) },
-      cred,
-    )
-    return res.json()
-  }
-  const params = new URLSearchParams({ addParents: addParent, fields: META_FIELDS })
-  if (removeParent) params.set('removeParents', removeParent)
-  const res = await googleFetch(`${API}/files/${fileId}?${params.toString()}`, { method: 'PATCH' }, cred)
-  return res.json()
-}
-
-export async function renameFile(fileId: string, name: string, cred: Credential): Promise<FileMeta> {
-  if (cred.mode === 'bearer') {
-    const res = await workerFetch(
-      `/drive/files/${fileId}`,
-      { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) },
-      cred,
-    )
-    return res.json()
-  }
-  const res = await googleFetch(
-    `${API}/files/${fileId}?fields=${META_FIELDS}`,
-    { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) },
-    cred,
-  )
-  return res.json()
-}
-
-export async function createAnyoneReaderPermission(fileId: string, cred: Credential): Promise<void> {
-  if (cred.mode === 'bearer') {
-    await workerFetch(`/drive/permissions/${fileId}`, { method: 'POST' }, cred)
-    return
-  }
-  await googleFetch(
-    `${API}/files/${fileId}/permissions?fields=id`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ type: 'anyone', role: 'reader' }) },
-    cred,
-  )
-}
+// ---------------------------------------------------------------------------
+// Uploads
+// ---------------------------------------------------------------------------
 
 /** One XHR PUT that resolves with whatever response came back (any status);
  *  rejects only on true network failure. Body may be null (status probes). */
@@ -451,43 +249,50 @@ function xhrPut(
   })
 }
 
-const UPLOAD_CHUNK = 16 * 1024 * 1024 // 16MB — a clean multiple of Drive's 256KB granularity
 const UPLOAD_RETRIES = 5 // consecutive network failures before giving up
 
-/** Resumable upload with progress (XHR — fetch can't report upload progress).
- *  Files over 5MB go up in chunks with Content-Range: a network blip costs
- *  one chunk, not the whole video — after a failure the loop asks Google how
- *  many bytes it already holds and resumes from there. */
+/** Upload with progress. Small files go in one form POST; larger files use
+ *  multipart parts (16 MiB, from the server) through a signed-URL XHR loop
+ *  that resumes from the byte the server reports after a network blip. */
 export async function uploadFile(
-  folderId: string,
+  parentId: string,
   file: File,
-  cred: Credential,
   onProgress?: (pct: number) => void,
 ): Promise<FileMeta> {
-  if (cred.mode !== 'bearer') throw new DriveError('auth', 'Sign in to upload')
+  if (!hasBearer()) throw new DriveError('auth', 'Sign in to upload')
 
   if (file.size <= 5 * 1024 * 1024) {
     const form = new FormData()
-    form.set('parentId', folderId)
+    form.set('parentId', parentId)
     form.set('file', file)
-    const res = await workerFetch('/drive/upload', { method: 'POST', body: form }, cred)
+    const meta = await call(uploadSmallFn({ data: form }))
     onProgress?.(100)
-    return res.json()
+    return meta
   }
 
-  const initRes = await workerFetch(
-    '/drive/upload/resumable/init',
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: file.name, parentId: folderId, mimeType: file.type }) },
-    cred,
-  )
-  const { url: sessionUrl } = (await initRes.json()) as { url: string }
+  const initRes = await fetch('/api/upload/resumable', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (sessionStorage.getItem(WORKER_TOKEN_KEY) ?? '') },
+    body: JSON.stringify({ name: file.name, parentId, mimeType: file.type, size: file.size }),
+  })
+  if (!initRes.ok) {
+    let message = `Upload init failed (${initRes.status})`
+    try {
+      const body = (await initRes.json()) as { error?: string }
+      if (body.error) message = body.error
+    } catch {
+      /* keep default */
+    }
+    throw new DriveError(mapStatus(initRes.status), message, initRes.status)
+  }
+  const { url: sessionUrl, partSize } = (await initRes.json()) as { url: string; partSize: number }
 
   const total = file.size
   const contentType = file.type || 'application/octet-stream'
   let offset = 0
   let failures = 0
   while (offset < total) {
-    const end = Math.min(offset + UPLOAD_CHUNK, total)
+    const end = Math.min(offset + partSize, total)
     try {
       const res = await xhrPut(
         sessionUrl,
@@ -501,19 +306,19 @@ export async function uploadFile(
           onProgress?.(100)
           return res.json
         }
-        throw new DriveError('api', 'Upload finished but Drive sent no metadata')
+        throw new DriveError('api', 'Upload finished but the server sent no metadata')
       }
       if (res.status === 308) {
         const m = res.range?.match(/bytes=0-(\d+)/)
         offset = m ? Number(m[1]) + 1 : offset
         continue
       }
-      throw new DriveError(mapStatus(res.status, undefined), `Upload failed (${res.status})`, res.status)
+      throw new DriveError(mapStatus(res.status), `Upload failed (${res.status})`, res.status)
     } catch (e) {
       if (e instanceof DriveError && e.kind !== 'network') throw e
       failures++
       if (failures > UPLOAD_RETRIES) throw e instanceof DriveError ? e : new DriveError('network', 'Upload network error')
-      // Ask Google how much it already holds, then resume from that byte.
+      // Ask the server how much it already holds, then resume from that byte.
       const status = await xhrPut(sessionUrl, null, { 'Content-Range': `bytes */${total}` }).catch(() => null)
       if (status && (status.status === 200 || status.status === 201)) {
         onProgress?.(100)
@@ -528,10 +333,14 @@ export async function uploadFile(
   throw new DriveError('api', 'Upload ended before the file was complete')
 }
 
-export function thumbnailUrl(fileId: string, size = 400): string {
-  return `https://drive.google.com/thumbnail?id=${encodeURIComponent(fileId)}&sz=w${size}`
+// ---------------------------------------------------------------------------
+// Public URLs (thumbnails / "Open") — plain same-origin URLs, no auth
+// ---------------------------------------------------------------------------
+
+export function thumbnailUrl(key: string, _size = 400): string {
+  return fileUrl(key)
 }
 
-export function webViewLink(fileId: string): string {
-  return `https://drive.google.com/file/d/${encodeURIComponent(fileId)}/view`
+export function webViewLink(key: string): string {
+  return fileUrl(key)
 }

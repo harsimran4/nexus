@@ -3,3 +3,5 @@ dist
 .env.local
 .env.*.local
 *.local
+.dev.vars
+src/routeTree.gen.ts
