@@ -315,6 +315,7 @@ function mediaKey(projectPrefix, driveName) {
 function planUpload(driveId, key, contentType, label) {
   // A resumed run keeps the exact key an earlier attempt already uploaded —
   // the object is likely in the bucket already and the doc must reference it.
+  // RETURNS the effective key — callers MUST use it for doc references.
   const prevKey = RESUME ? manifest.uploads[driveId]?.key : null
   if (prevKey) key = prevKey
   const f = byId.get(driveId)
@@ -322,6 +323,7 @@ function planUpload(driveId, key, contentType, label) {
   if (f) migratedBytes += size
   uploads.push({ driveId, key, contentType, size, label })
   newIdToKey.set(driveId, key)
+  return key
 }
 
 for (const g of Object.values(doc.groups)) {
@@ -346,9 +348,7 @@ for (const p of Object.values(doc.projects)) {
       warnings.push(`project ${p.name}: Google-Docs-native file "${f.name}" (${f.mimeType}) can't be migrated as bytes — dropped from fileIds (still on Drive)`)
       return null
     }
-    const key = mediaKey(prefix, f.name)
-    planUpload(fid, key, f.mimeType || 'application/octet-stream', `media:${p.name}/${f.name}`)
-    return key
+    return planUpload(fid, mediaKey(prefix, f.name), f.mimeType || 'application/octet-stream', `media:${p.name}/${f.name}`)
   }).filter(Boolean)
   const sectionOf = {}
   for (const [fid, section] of Object.entries(p.mediaSectionOf)) {
@@ -376,9 +376,8 @@ for (const s of Object.values(doc.scripts)) {
   s.copies = s.copies.map((c, i) => {
     const f = byId.get(c.fileId)
     if (!f) return null
-    const key = `scripts/${s.id}-${sanitizeNameSegment(c.label)}-${i + 1}.md`
-    planUpload(c.fileId, key, 'text/markdown', `script-copy:${s.title}/${c.label}`)
-    return { ...c, fileId: key }
+    const copied = planUpload(c.fileId, `scripts/${s.id}-${sanitizeNameSegment(c.label)}-${i + 1}.md`, 'text/markdown', `script-copy:${s.title}/${c.label}`)
+    return { ...c, fileId: copied }
   }).filter(Boolean)
 }
 
