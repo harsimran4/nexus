@@ -80,7 +80,7 @@ const TRASHED = 'trashed=false'
 // ---------------------------------------------------------------------------
 
 function sanitizeNameSegment(name) {
-  return name.replace(/[/\\]/g, '_').replace(/[\u0000-\u001f]/g, '').replace(/__/g, '_').trim() || 'untitled'
+  return name.replace(/[/\\]/g, '_').replace(/[\u0000-\u001f]/g, '').replace(/\.{2,}/g, '.').replace(/__/g, '_').trim() || 'untitled'
 }
 let mintSeq = 0
 function mintFileId() {
@@ -225,8 +225,8 @@ async function driveFetch(fileId) {
   return res
 }
 /** driveFetch that rides out Google's per-IP abuse throttle (HTML "Sorry…"
- *  403 block pages): waits grow 60s → 120s → 300s, then gives up. */
-const BLOCK_WAIT = [60_000, 120_000, 300_000]
+ *  403 block pages): waits grow 5min → 10min → 20min, then gives up. */
+const BLOCK_WAIT = [300_000, 600_000, 1_200_000]
 async function driveFetchBlocking(fileId) {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -248,11 +248,20 @@ function saveManifest() {
   if (DRY) return
   writeFileSync(MANIFEST_PATH, JSON.stringify(manifest))
 }
+// The PLAN (rewritten doc + exact keys) persists in the manifest — a resumed
+// run must reuse the SAME keys, or earlier runs' uploads would be orphaned.
+const savedPlan = RESUME ? (manifest.plan ?? null) : null
 
 // ---------------------------------------------------------------------------
 // 1. walk Drive
 // ---------------------------------------------------------------------------
 
+let doc, uploads, markers, warnings, migratedBytes
+if (savedPlan) {
+  console.log(`Resuming the saved plan (${savedPlan.uploads.length} uploads) — Drive is not re-walked.`)
+  ;({ doc, uploads, warnings, migratedBytes } = savedPlan)
+  markers = new Set(savedPlan.markers)
+} else {
 console.log('Listing the Drive workspace…')
 const byId = new Map() // driveId -> file meta + drivePath
 async function walk(folderId, path) {
@@ -277,12 +286,13 @@ if (!parsed.ok) {
   console.error('Drive nexus.json does not parse against the current schema:\n', parsed.error.issues?.slice(0, 10))
   process.exit(1)
 }
-const doc = structuredClone(parsed.doc)
+const doc0 = structuredClone(parsed.doc)
+doc = doc0
 
 const newIdToKey = new Map() // driveFileId -> new OCI key (for uploads + doc rewrite)
-const uploads = [] // { driveId | body, key, contentType, size, label }
-const warnings = []
-let migratedBytes = 0
+uploads = [] // { driveId | body, key, contentType, size, label }
+warnings = []
+migratedBytes = 0
 
 doc.ids = { rootFolderId: '', nexusFileId: 'master/nexus.json', systemFolders: { master: 'master/', snapshots: 'snapshots/', groups: 'groups/', scripts: 'scripts/' } }
 // writerId re-stamped; updatedAt and all entity stamps are PRESERVED — they
@@ -292,7 +302,7 @@ doc.writerId = 'migration'
 doc.snapshots = [] // fresh snapshot history in the new bucket
 
 // system + entity folder markers
-const markers = new Set(['master/', 'snapshots/', 'groups/', 'scripts/'])
+markers = new Set(['master/', 'snapshots/', 'groups/', 'scripts/'])
 for (const g of Object.values(doc.groups)) markers.add(`groups/${g.id}/`)
 for (const p of Object.values(doc.projects)) {
   const g = doc.groups[p.groupId]
@@ -303,6 +313,10 @@ function mediaKey(projectPrefix, driveName) {
   return projectPrefix + mintFileId() + '__' + sanitizeNameSegment(driveName)
 }
 function planUpload(driveId, key, contentType, label) {
+  // A resumed run keeps the exact key an earlier attempt already uploaded —
+  // the object is likely in the bucket already and the doc must reference it.
+  const prevKey = RESUME ? manifest.uploads[driveId]?.key : null
+  if (prevKey) key = prevKey
   const f = byId.get(driveId)
   const size = Number(f?.size ?? 0)
   if (f) migratedBytes += size
@@ -392,6 +406,9 @@ function projectPrefixByPath(groupFolderName, projectFolderName) {
   const p = Object.values(doc.projects).find((x) => x.groupId === g.id && sanitizeNameSegment(x.name) === sanitizeNameSegment(projectFolderName))
   return p?.folderId ?? null
 }
+manifest.plan = { doc, uploads, markers: [...markers], warnings, migratedBytes }
+saveManifest()
+}
 
 // ---------------------------------------------------------------------------
 // 3. summary / dry-run gate
@@ -464,7 +481,7 @@ let okCount = 0
 const sample = uploads.filter((u) => u.driveId)
 for (const u of [sample[0], sample[Math.floor(sample.length / 2)], sample[sample.length - 1]].filter(Boolean)) {
   const h = await s3Head(u.key)
-  const expect = byId.get(u.driveId)?.size
+  const expect = u.size || undefined
   const ok = h && (!expect || h.size === expect)
   console.log(`  ${ok ? 'OK ' : 'BAD'} ${u.key} (${h?.size} vs Drive ${expect})`)
   if (ok) okCount++
@@ -472,6 +489,38 @@ for (const u of [sample[0], sample[Math.floor(sample.length / 2)], sample[sample
 const check = parseDoc(JSON.stringify(doc))
 console.log(`  doc parse: ${check.ok ? 'OK' : 'FAILED ' + JSON.stringify(check.error.issues?.slice(0, 5))}`)
 
-console.log(`\nDone. ${uploads.length} files migrated, ${(migratedBytes / 1e6).toFixed(1)} MB.`)
-console.log('Next: start the dev server and open http://localhost:5173 — the workspace should boot with the original logins.')
-console.log('NOTE: this repo still contains the migration manifest at scripts/.migrate-state.json — delete it after verifying, and keep .env.local until Drive is formally retired.')
+// ---------------------------------------------------------------------------
+// 6. cleanup — remove strays from earlier aborted runs (keys not in this plan)
+// ---------------------------------------------------------------------------
+
+console.log('\nCleaning up strays from earlier attempts…')
+const expected = new Set(uploads.map((u) => u.key))
+for (const m of markers) expected.add(m + FOLDER_MARKER)
+expected.add('master/nexus.json')
+let strays = 0
+for (const prefix of ['groups/', 'scripts/', 'master/']) {
+  let token = null
+  do {
+    const params = new URLSearchParams({ 'list-type': '2', 'encoding-type': 'url', prefix })
+    if (token) params.set('continuation-token', token)
+    const res = await s3.fetch(objUrl('', params.toString().replace(/\+/g, '%20')), { headers: { 'x-amz-content-sha256': 'UNSIGNED-PAYLOAD' } })
+    if (!res.ok) throw new Error(`list ${prefix} → ${res.status}`)
+    const xmlText = await res.text()
+    for (const m of xmlText.matchAll(/<Key>([^<]+)<\/Key>/g)) {
+      const key = decodeURIComponent(m[1])
+      if (!expected.has(key)) {
+        await s3Del(key)
+        strays++
+        console.log(`  removed stray ${key}`)
+      }
+    }
+    token = /<IsTruncated>true<\/IsTruncated>/.test(xmlText)
+      ? (xmlText.match(/<NextContinuationToken>([^<]+)<\/NextContinuationToken>/)?.[1] ?? null)
+      : null
+  } while (token)
+}
+if (strays === 0) console.log('  none — the bucket matches the plan exactly.')
+
+console.log(`\nDone. ${uploads.length} files migrated, ${(migratedBytes / 1e6).toFixed(1)} MB, ${strays} strays removed.`)
+console.log('Next: open http://localhost:5173 — the workspace should boot with the original logins.')
+console.log('NOTE: scripts/.migrate-state.json holds the migration plan — keep it until the app is verified, then delete. Keep .env.local until Drive is formally retired.')
