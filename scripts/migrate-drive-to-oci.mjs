@@ -224,6 +224,20 @@ async function driveFetch(fileId) {
   if (!res.ok) throw new Error(`Drive download ${fileId} → ${res.status}: ${(await res.text()).slice(0, 200)}`)
   return res
 }
+/** driveFetch that rides out Google's per-IP abuse throttle (HTML "Sorry…"
+ *  403 block pages): waits grow 60s → 120s → 300s, then gives up. */
+const BLOCK_WAIT = [60_000, 120_000, 300_000]
+async function driveFetchBlocking(fileId) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await driveFetch(fileId)
+    } catch (e) {
+      if (attempt >= BLOCK_WAIT.length || !/→ 403/.test(e.message)) throw e
+      console.log(`    Drive throttle hit — waiting ${BLOCK_WAIT[attempt] / 1000}s…`)
+      await sleep(BLOCK_WAIT[attempt])
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // manifest (resume support)
@@ -421,8 +435,9 @@ for (const u of uploads) {
   }
   try {
     if (u.driveId) {
-      const res = await driveFetch(u.driveId)
+      const res = await driveFetchBlocking(u.driveId)
       await s3PutStreamed(u.key, res, u.contentType, u.size || 1)
+      await sleep(2500) // pacing — hammering the unsigned path is what trips the throttle
     } else {
       await s3Put(u.key, u.body, u.contentType)
     }
