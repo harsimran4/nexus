@@ -6,7 +6,7 @@ import { Empty, Modal, StatusBadge, banner } from '../components'
 import { canWrite } from '../../auth/session'
 import { createProject, deleteGroupCascade, renameGroup } from '../../state/actions'
 import { navigate } from '../../nav'
-import { thumbnailUrl } from '../../drive/client'
+import { MediaThumb } from '../MediaThumb'
 
 export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
   const doc = useStore((s) => s.doc)
@@ -77,13 +77,7 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
                   <td style={{ fontWeight: 570 }}>
                     <span className="row" style={{ gap: 9 }}>
                       {p.fileIds[0] && (
-                        <img
-                          src={thumbnailUrl(p.fileIds[0], 200)}
-                          alt=""
-                          loading="lazy"
-                          style={{ width: 42, height: 30, objectFit: 'cover', borderRadius: 4, background: 'var(--panel-2)' }}
-                          onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
-                        />
+                        <MediaThumb fileKey={p.fileIds[0]} style={{ width: 42, height: 30, borderRadius: 4, background: 'var(--panel-2)' }} />
                       )}
                       {p.name}
                     </span>

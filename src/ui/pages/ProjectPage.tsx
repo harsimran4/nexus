@@ -15,7 +15,8 @@ import {
 } from '../../state/actions'
 import { describeError, downloadToBrowserProgress } from '../../drive/preview'
 import { dismissUploads, startUploadBatch, useUploadBatch } from '../../state/uploads'
-import { getMeta, listChildren, renameFile, thumbnailUrl, webViewLink, type FileMeta } from '../../drive/client'
+import { getMeta, listChildren, renameFile, webViewLink, type FileMeta } from '../../drive/client'
+import { MediaThumb } from '../MediaThumb'
 import {
   KIND_GLYPH,
   KIND_LABEL,
@@ -595,12 +596,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
                   }}
                   onClick={() => selectMode && toggleSel(f)}
                 >
-                  <img
-                    src={thumbnailUrl(f, 400)}
-                    alt={displayName}
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                    onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
-                  />
+                  <MediaThumb fileKey={f} alt={displayName} />
                   {fileKind !== 'image' && (
                     <span className="media-kind-badge">
                       {KIND_GLYPH[fileKind]} {KIND_LABEL[fileKind]}

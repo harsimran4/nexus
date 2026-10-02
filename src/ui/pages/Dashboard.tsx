@@ -7,7 +7,7 @@ import { ActivityFeed } from '../ActivityFeed'
 import { createProject, setProjectStatus } from '../../state/actions'
 import { canWrite } from '../../auth/session'
 import { navigate } from '../../nav'
-import { thumbnailUrl } from '../../drive/client'
+import { MediaThumb } from '../MediaThumb'
 
 /** Humanized due text: "due today", "due in 3d", "2d overdue". */
 export function dueInfo(dueAt: string): { text: string; overdue: boolean } {
@@ -257,12 +257,9 @@ function ProjectCard({
       onClick={onOpen}
     >
       {cover && (
-        <img
-          src={thumbnailUrl(cover, 400)}
-          alt=""
-          loading="lazy"
-          style={{ width: '100%', height: 64, objectFit: 'cover', borderRadius: 2, marginBottom: 7, background: 'rgba(255,255,255,0.4)' }}
-          onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
+        <MediaThumb
+          fileKey={cover}
+          style={{ height: 64, borderRadius: 2, marginBottom: 7, background: 'rgba(255,255,255,0.4)' }}
         />
       )}
       <div className="title">{project.name}</div>
