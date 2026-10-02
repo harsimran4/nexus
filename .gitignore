@@ -6,3 +6,5 @@ dist
 .dev.vars
 src/routeTree.gen.ts
 .wrangler/
+
+.migrate-state.json
