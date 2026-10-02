@@ -19,7 +19,10 @@ async function serve(request: Request, params: { _splat?: string }, headOnly = f
   // The router already percent-decodes the splat — decoding again would
   // corrupt any key containing a literal '%' sequence.
   const key = params._splat ?? ''
-  if (!key || key.includes('..')) return new Response('Bad key', { status: 400 })
+  // Traversal defense, precisely: only whole '.'/'..' path segments are
+  // dangerous (and none can exist in our keys). Names may legitimately
+  // contain consecutive dots ("clip... .mp4") — those are fine.
+  if (!key || key.split('/').some((seg) => seg === '.' || seg === '..')) return new Response('Bad key', { status: 400 })
   // Deny internals quietly (404 — don't reveal their existence). nexus.json
   // itself stays public: anonymous boot reads it (same as the old setup).
   if (key.startsWith(TRASH_PREFIX) || key.endsWith('/' + FOLDER_MARKER)) {
