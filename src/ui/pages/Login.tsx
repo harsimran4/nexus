@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { loginWithSecret } from '../../auth/session'
-import { navigate } from '../../App'
+import { navigate } from '../../nav'
 import { banner, SecretInput } from '../components'
 import { useStore } from '../../sync/store'
 

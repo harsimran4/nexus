@@ -29,8 +29,8 @@ import {
   type MediaKind,
   type MediaSort,
 } from '../../util/media'
-import { navigate } from '../../App'
-import { touch } from '../../sync/writer'
+import { navigate } from '../../nav'
+import { commit, touch, appendActivity } from '../../sync/writer'
 
 type Tab = 'media' | 'scripts' | 'settings'
 
@@ -112,12 +112,8 @@ function NameEditor({ projectId, name }: { projectId: string; name: string }): R
             e.target.value = name
             return
           }
+          // Doc-only: the storage prefix (…/<projectId>/) never changes.
           updateProject(projectId, { name: v })
-          void (async () => {
-            const { storeGet } = await import('../../sync/store')
-            const folderId = storeGet().doc?.projects[projectId]?.folderId
-            if (folderId) await renameFile(folderId, v, { mode: 'bearer' }).catch(() => {})
-          })()
         }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
@@ -171,14 +167,14 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
   const sectionOf = project.mediaSectionOf
   const batch = useUploadBatch()
 
-  // One files.list per visit replaces the old N× getMeta calls; per-file
-  // getMeta fills only ids the listing missed (file moved manually on Drive,
-  // or no folder linked yet). Wholesale list merge also refreshes sizes.
+  // One listing per visit replaces the old N× getMeta calls; per-file
+  // getMeta fills only ids the listing missed (or no folder linked yet).
+  // Wholesale list merge also refreshes sizes.
   useEffect(() => {
     let alive = true
     const ids = fileKey ? fileKey.split(',') : []
     const fetchOne = (f: string) =>
-      getMeta(f, { mode: 'auto' })
+      getMeta(f)
         .then((m) => {
           if (alive) setMeta((prev) => ({ ...prev, [f]: m }))
         })
@@ -191,7 +187,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
           const files: FileMeta[] = []
           let pageToken: string | undefined
           for (let page = 0; page < 10 && (page === 0 || pageToken); page++) {
-            const res = await listChildren(folderId, { mode: 'auto' }, { pageToken })
+            const res = await listChildren(folderId, { pageToken })
             files.push(...res.files)
             pageToken = res.nextPageToken
           }
@@ -422,8 +418,27 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
     setRenamingId(null)
     if (!v) return
     try {
-      await renameFile(fileId, v, { mode: 'bearer' })
-      setMeta((prev) => ({ ...prev, [fileId]: { ...prev[fileId], id: fileId, name: v } }))
+      // The KEY changes (copy+delete under the hood) — rewrite the doc's
+      // references to the new key in the same commit.
+      const meta = await renameFile(fileId, v)
+      commit((doc) => {
+        const p = doc.projects[projectId]
+        if (!p) return
+        p.fileIds = p.fileIds.map((f) => (f === fileId ? meta.id : f))
+        const section = p.mediaSectionOf[fileId]
+        if (section !== undefined) {
+          p.mediaSectionOf[meta.id] = section
+          delete p.mediaSectionOf[fileId]
+        }
+        touch('projects', p)
+        appendActivity(doc, 'project.file.rename', projectId, { fileId: meta.id, name: v })
+      })
+      setMeta((prev) => {
+        const next = { ...prev }
+        delete next[fileId]
+        next[meta.id] = meta
+        return next
+      })
     } catch (e) {
       setError(describeError(e).message)
     }

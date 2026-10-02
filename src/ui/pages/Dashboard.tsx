@@ -6,7 +6,7 @@ import { Empty, Modal, banner, PageQuote } from '../components'
 import { ActivityFeed } from '../ActivityFeed'
 import { createProject, setProjectStatus } from '../../state/actions'
 import { canWrite } from '../../auth/session'
-import { navigate } from '../../App'
+import { navigate } from '../../nav'
 import { thumbnailUrl } from '../../drive/client'
 
 /** Humanized due text: "due today", "due in 3d", "2d overdue". */

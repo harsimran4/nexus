@@ -4,7 +4,7 @@ import { compareHlc } from '../../util/hlc'
 import { Empty, Modal, banner, PageQuote } from '../components'
 import { canWrite } from '../../auth/session'
 import { createGroup, deleteGroupCascade, renameGroup } from '../../state/actions'
-import { navigate } from '../../App'
+import { navigate } from '../../nav'
 
 export function Groups(): React.JSX.Element {
   const doc = useStore((s) => s.doc)

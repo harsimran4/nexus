@@ -25,9 +25,15 @@ import { commit, touch, recordTombstone, appendActivity, flush, writerId } from 
 import { mintToken, passwordPolicyError, stretchedAuth } from '../auth/hashing'
 import { storeGet } from '../sync/store'
 import { decodeHlc } from '../util/hlc'
-import { DriveError, createFolder, uploadFile, renameFile } from '../drive/client'
-import { ensureGroupsFolder, ensureScriptsFolder } from '../drive/bootstrap'
+import { DriveError, createFolder, uploadFile } from '../drive/client'
+import { SYSTEM_PREFIXES } from '../types/storage'
 import { sessionRef } from '../sync/identity'
+
+/** Deterministic storage keys: group = groups/<groupId>/, project lives
+ *  inside its group. Names are doc-only — keys never change on rename. */
+function groupPrefix(groupId: string): string {
+  return SYSTEM_PREFIXES.groups + groupId + '/'
+}
 
 function assertWrite(): void {
   if (!canWrite()) throw new Error('Your login cannot modify content — sign in as an editor or admin')
@@ -65,15 +71,15 @@ export async function createGroup(name: string, description = ''): Promise<strin
   return id
 }
 
-/** Create the group's Drive folder (Nexus/groups/<name>/) if missing. */
+/** Create the group's storage prefix (groups/<groupId>/) if missing. */
 export async function ensureGroupFolder(groupId: string): Promise<string | null> {
   const { storeGet } = await import('../sync/store')
   const doc = storeGet().doc
   const group = doc?.groups[groupId]
   if (!doc || !group) return null
   if (group.folderId) return group.folderId
-  const groupsParentId = await ensureGroupsFolder(doc, { mode: 'bearer' })
-  const folder = await createFolder(group.name, groupsParentId, { mode: 'bearer' })
+  const prefix = groupPrefix(groupId)
+  const folder = await createFolder(group.name, null, prefix)
   commit((d) => {
     const g = d.groups[groupId]
     if (g && !g.folderId) {
@@ -94,11 +100,8 @@ export function renameGroup(groupId: string, name: string): void {
     touch('groups', g)
     appendActivity(doc, 'group.rename', groupId, { name })
   })
-  void (async () => {
-    const { storeGet } = await import('../sync/store')
-    const folderId = storeGet().doc?.groups[groupId]?.folderId
-    if (folderId) await renameFile(folderId, name, { mode: 'bearer' }).catch(() => {})
-  })()
+  // Folder names live in the doc — the storage prefix (groups/<id>/) never
+  // changes, so there is nothing to rename on the storage side.
 }
 
 /**
@@ -118,7 +121,7 @@ export async function deleteGroupCascade(groupId: string): Promise<{ projects: n
   const { trashFile } = await import('../drive/client')
   let folderTrashed = false
   if (group.folderId) {
-    await trashFile(group.folderId, { mode: 'bearer' }).catch(() => {})
+    await trashFile(group.folderId).catch(() => {})
     folderTrashed = true
   }
   commit((d) => {
@@ -190,16 +193,17 @@ export async function createProject(fields: {
   return id
 }
 
-/** Project subfolder: Nexus/groups/<Group>/<Project name>/. Created on demand. */
+/** Project prefix: groups/<groupId>/<projectId>/ — created on demand. */
 export async function ensureProjectFolder(projectId: string): Promise<string | null> {
   const { storeGet } = await import('../sync/store')
   const doc = storeGet().doc
   const project = doc?.projects[projectId]
   if (!doc || !project) return null
   if (project.folderId) return project.folderId
-  const groupFolderId = await ensureGroupFolder(project.groupId)
-  if (!groupFolderId) return null
-  const folder = await createFolder(project.name, groupFolderId, { mode: 'bearer' })
+  const parent = await ensureGroupFolder(project.groupId)
+  if (!parent) return null
+  const prefix = parent + projectId + '/'
+  const folder = await createFolder(project.name, null, prefix)
   commit((d) => {
     const p = d.projects[projectId]
     if (p && !p.folderId) {
@@ -216,7 +220,6 @@ export function updateProject(
 ): void {
   assertWrite()
   let moveToGroup: string | null = null
-  let oldGroupFolder: string | null = null
   commit((doc) => {
     const p = doc.projects[projectId]
     if (!p) return
@@ -226,41 +229,54 @@ export function updateProject(
         throw new Error('Target group no longer exists — refresh and pick again')
       }
       moveToGroup = fields.groupId
-      oldGroupFolder = doc.groups[p.groupId]?.folderId ?? null
     }
     Object.assign(p, fields)
     touch('projects', p)
     const meaningful = Object.keys(fields).filter((k) => k !== 'notes')
     if (meaningful.length > 0) appendActivity(doc, 'project.update', projectId, { fields: meaningful })
   })
-  if (moveToGroup) void moveProjectToGroup(projectId, moveToGroup, oldGroupFolder)
+  if (moveToGroup) void moveProjectToGroup(projectId, moveToGroup)
 }
 
-/** Move a project (its Drive subfolder + all files) into another group. */
-export async function moveProjectToGroup(
-  projectId: string,
-  toGroupId: string,
-  fromFolderId: string | null,
-): Promise<void> {
+/** Move a project (its storage prefix and every file key in it) into another
+ *  group. Keys embed the path, so the doc's fileIds/mediaSectionOf are
+ *  rewritten in the same commit as the new prefix. */
+export async function moveProjectToGroup(projectId: string, toGroupId: string): Promise<void> {
   const { storeGet } = await import('../sync/store')
   const doc = storeGet().doc
   const project = doc?.projects[projectId]
   if (!doc || !project || !project.folderId) return
-  const to = await ensureGroupFolder(toGroupId)
-  if (!to) return
-  const { moveFile } = await import('../drive/client')
+  const fromPrefix = project.folderId
+  const parent = await ensureGroupFolder(toGroupId)
+  if (!parent) return
+  const toPrefix = parent + projectId + '/'
+  if (toPrefix === fromPrefix) return
+  const { movePrefix } = await import('../drive/client')
   try {
-    await moveFile(project.folderId, to, fromFolderId, { mode: 'bearer' })
+    await movePrefix(fromPrefix, toPrefix)
   } catch (e) {
-    // Metadata already says the new group; the Drive folder didn't follow.
+    // Metadata already says the new group; the files didn't follow.
     // Record the divergence instead of swallowing it.
     commit((d) => {
       appendActivity(d, 'project.moveFailed', projectId, {
         to: toGroupId,
-        reason: e instanceof Error ? e.message : 'Drive move failed',
+        reason: e instanceof Error ? e.message : 'Move failed',
       })
     })
+    return
   }
+  commit((d) => {
+    const p = d.projects[projectId]
+    if (!p) return
+    const rekey = (f: string): string => (f.startsWith(fromPrefix) ? toPrefix + f.slice(fromPrefix.length) : f)
+    p.folderId = toPrefix
+    p.fileIds = p.fileIds.map(rekey)
+    const sectionOf: typeof p.mediaSectionOf = {}
+    for (const [f, s] of Object.entries(p.mediaSectionOf)) sectionOf[rekey(f)] = s
+    p.mediaSectionOf = sectionOf
+    touch('projects', p)
+    appendActivity(d, 'project.move', projectId, { to: toGroupId })
+  })
 }
 
 export function setProjectStatus(projectId: string, status: string): void {
@@ -373,8 +389,8 @@ export async function uploadToProject(
   if (!doc || !project) return { ok: false, error: 'Project not found' }
   try {
     const folderId = await ensureProjectFolder(projectId)
-    if (!folderId) return { ok: false, error: 'Group folder not ready — try again in a few seconds' }
-    const meta = await uploadFile(folderId, file, { mode: 'bearer' }, onProgress)
+    if (!folderId) return { ok: false, error: 'Project folder not ready — try again in a few seconds' }
+    const meta = await uploadFile(folderId, file, onProgress)
     commit((d) => {
       const p = d.projects[projectId]
       if (!p) return
@@ -407,14 +423,14 @@ export async function removeProjectFile(
   if (opts.trashInDrive) {
     const { trashFile } = await import('../drive/client')
     try {
-      await trashFile(fileId, { mode: 'bearer' })
+      await trashFile(fileId)
     } catch (e) {
       if (e instanceof DriveError && e.kind === 'notFound') {
-        // Already gone from Drive — still unlink it below.
+        // Already gone from storage — still unlink it below.
       } else if (e instanceof DriveError) {
         return { ok: false, error: `${e.message} — ${e.kind}` }
       } else {
-        return { ok: false, error: e instanceof Error ? e.message : 'Drive delete failed' }
+        return { ok: false, error: e instanceof Error ? e.message : 'Delete failed' }
       }
     }
   }
@@ -441,9 +457,9 @@ export async function deleteProjectCascade(projectId: string): Promise<{ files: 
   if (!doc || !project) throw new Error('Project not found')
   const { trashFile } = await import('../drive/client')
   let folderTrashed = false
-  for (const f of project.fileIds) await trashFile(f, { mode: 'bearer' }).catch(() => {})
+  for (const f of project.fileIds) await trashFile(f).catch(() => {})
   if (project.folderId) {
-    await trashFile(project.folderId, { mode: 'bearer' }).catch(() => {})
+    await trashFile(project.folderId).catch(() => {})
     folderTrashed = true
   }
   commit((d) => {
@@ -515,12 +531,11 @@ export async function saveScriptBody(id: string, body: string): Promise<{ ok: tr
   const script = doc?.scripts[id]
   if (!doc || !script) return { ok: false, error: 'Script not found' }
   try {
-    const scriptsFolderId = await ensureScriptsFolder(doc, { mode: 'bearer' })
     const { createTextFile, writeFileText } = await import('../drive/client')
     if (script.storage.type === 'md' && script.storage.fileId) {
-      await writeFileText(script.storage.fileId, body, { mode: 'bearer' })
+      await writeFileText(script.storage.fileId, body, 'text/markdown')
     } else {
-      const created = await createTextFile(`${id}.md`, scriptsFolderId, body, 'text/markdown', { mode: 'bearer' })
+      const created = await createTextFile(`${id}.md`, SYSTEM_PREFIXES.scripts, body, 'text/markdown')
       commit((d) => {
         const s = d.scripts[id]
         if (!s) return
@@ -547,7 +562,7 @@ export async function readScriptBody(id: string): Promise<string | null> {
   if (script.storage.type !== 'md' || !script.storage.fileId) return ''
   const { readFile } = await import('../drive/client')
   try {
-    return await readFile(script.storage.fileId, { mode: 'auto' })
+    return await readFile(script.storage.fileId)
   } catch {
     return null
   }
@@ -571,13 +586,10 @@ export async function setScriptStatus(id: string, status: ScriptStatus): Promise
     if (!doc || !script) return
     if (script.storage.type !== 'md' || !script.storage.fileId) return
     try {
-      const scriptsFolderId = await ensureScriptsFolder(doc, { mode: 'bearer' })
       const body = await readScriptBody(id)
       if (body === null) return
       const { createTextFile } = await import('../drive/client')
-      const copy = await createTextFile(`${id}-${status}.md`, scriptsFolderId, body, 'text/markdown', {
-        mode: 'bearer',
-      })
+      const copy = await createTextFile(`${id}-${status}.md`, SYSTEM_PREFIXES.scripts, body, 'text/markdown')
       commit((d) => {
         const s = d.scripts[id]
         if (!s) return
@@ -792,30 +804,20 @@ export function updateSettings(mut: (s: NexusDoc['settings']) => void): void {
   })
 }
 
-export function setApiKeyOverride(key: string | null): void {
-  assertAdmin()
-  commit((doc) => {
-    doc.settings.api.keyOverride = key
-    doc.settings.updatedAt = hlcNow()
-    doc.settings.writerId = writerId()
-    appendActivity(doc, 'settings.apiKey', 'settings', {})
-  })
-}
-
 /**
  * Adopt a snapshot as the current doc. Keeps our write identity and a bumped
  * rev, then primes `base` with the remote's current tokens so the next flush
- * takes the unchanged fast path and overwrites Drive with exactly this
- * content. The snapshot itself stays on Drive as the pre-restore backup.
+ * takes the unchanged fast path and overwrites storage with exactly this
+ * content. The snapshot itself stays as the pre-restore backup.
  */
 export async function restoreSnapshot(fileId: string): Promise<void> {
   assertAdmin()
-  const { readFile, getMeta } = await import('../drive/client')
+  const { readFile, getMeta, copyFile } = await import('../drive/client')
   const { parseDoc } = await import('../types/schema')
   const store = storeGet()
   const nexusId = store.doc?.ids.nexusFileId
   if (!nexusId) throw new Error('Workspace file id unknown')
-  const raw = await readFile(fileId, { mode: 'auto' })
+  const raw = await readFile(fileId)
   const parsed = parseDoc(raw)
   if (!parsed.ok) throw new Error('That snapshot is not a readable nexus.json')
   const restored: NexusDoc = {
@@ -827,28 +829,22 @@ export async function restoreSnapshot(fileId: string): Promise<void> {
   // Safety net: the pre-restore state becomes its own snapshot copy first, so
   // a restore is itself reversible.
   try {
-    const currentRaw = await readFile(nexusId, { mode: 'auto' })
+    const currentRaw = await readFile(nexusId)
     if (currentRaw !== raw) {
-      const { ensureSnapshotsFolder } = await import('../drive/bootstrap')
-      const { copyFile } = await import('../drive/client')
-      const snapshotsFolderId = store.doc ? await ensureSnapshotsFolder(store.doc, { mode: 'bearer' }) : null
-      if (snapshotsFolderId) {
-        const backup = await copyFile(
-          nexusId,
-          `pre-restore-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`,
-          snapshotsFolderId,
-          { mode: 'bearer' },
-        )
-        restored.snapshots = [
-          ...restored.snapshots,
-          { fileId: backup.id, rev: store.doc?.rev ?? 0, at: new Date().toISOString(), by: writerId(), note: 'pre-restore' },
-        ]
-      }
+      const backup = await copyFile(
+        nexusId,
+        `pre-restore-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')}.json`,
+        SYSTEM_PREFIXES.snapshots,
+      )
+      restored.snapshots = [
+        ...restored.snapshots,
+        { fileId: backup.id, rev: store.doc?.rev ?? 0, at: new Date().toISOString(), by: writerId(), note: 'pre-restore' },
+      ]
     }
   } catch {
     /* best-effort — restore proceeds without the extra copy */
   }
-  const meta = await getMeta(nexusId, { mode: 'auto' })
+  const meta = await getMeta(nexusId)
   store.setDoc(restored)
   store.setBase({ headRevisionId: meta.headRevisionId, md5Checksum: meta.md5Checksum, version: meta.version })
   const ok = await flush()
@@ -912,14 +908,14 @@ export async function resetWorkspaceData(): Promise<{ groups: number; projects: 
   const groups = Object.values(doc.groups)
   const scripts = Object.values(doc.scripts)
 
-  // Drive-side: trash group folders (contain all project files) + script files.
+  // Storage side: trash group prefixes (contain all project files) + script files.
   const { trashFile } = await import('../drive/client')
   for (const g of groups) {
-    if (g.folderId) await trashFile(g.folderId, { mode: 'bearer' }).catch(() => {})
+    if (g.folderId) await trashFile(g.folderId).catch(() => {})
   }
   for (const s of scripts) {
     if (s.storage.type === 'md' && s.storage.fileId) {
-      await trashFile(s.storage.fileId, { mode: 'bearer' }).catch(() => {})
+      await trashFile(s.storage.fileId).catch(() => {})
     }
   }
 

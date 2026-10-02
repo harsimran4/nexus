@@ -18,6 +18,7 @@ import {
   fileCreateFn,
   fileCopyFn,
   trashFn,
+  movePrefixFn,
   renameFn,
   uploadSmallFn,
 } from '../server/fns'
@@ -210,6 +211,16 @@ export async function copyFile(key: string, name: string, parentId: string): Pro
 export async function trashFile(key: string): Promise<void> {
   for (;;) {
     const r = await call(trashFn({ data: { key } }))
+    if (!r.remaining) return
+  }
+}
+
+/** Move a whole prefix under another, preserving relative keys (a project
+ *  moving groups keeps its file ids). Loops until the source is empty; the
+ *  caller rewrites doc references (fileIds etc.) in the same commit. */
+export async function movePrefix(from: string, to: string): Promise<void> {
+  for (;;) {
+    const r = await call(movePrefixFn({ data: { from, to } }))
     if (!r.remaining) return
   }
 }

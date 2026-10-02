@@ -5,7 +5,7 @@ import { compareHlc, decodeHlc } from '../../util/hlc'
 import { Empty, Modal, StatusBadge, banner } from '../components'
 import { canWrite } from '../../auth/session'
 import { createProject, deleteGroupCascade, renameGroup } from '../../state/actions'
-import { navigate } from '../../App'
+import { navigate } from '../../nav'
 import { thumbnailUrl } from '../../drive/client'
 
 export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {

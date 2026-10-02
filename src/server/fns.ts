@@ -376,6 +376,7 @@ export const fileCopyFn = createServerFn({ method: 'POST' })
   })
 
 const TRASH_BATCH = 25 // stay far under the per-request subrequest cap
+const MOVE_BATCH = 25 // same cap, same loop-until-empty contract
 
 /** Move one key (or up to TRASH_BATCH keys of one prefix) into trash/.
  *  Returns `remaining > 0` for prefixes so the client can loop. */
@@ -400,6 +401,30 @@ export const trashFn = createServerFn({ method: 'POST' })
       return { ok: true, data: { trashed: page.contents.length, remaining: page.isTruncated } }
     } catch (e) {
       return err('api', e instanceof Error ? e.message : 'Delete failed')
+    }
+  })
+
+/** Move one prefix under another, PRESERVING each key's relative path (a
+ *  project moving groups keeps its file ids). Client loops while `remaining`. */
+export const movePrefixFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ from: z.string().regex(/\/$/), to: z.string().regex(/\/$/) }))
+  .middleware([writerAuth])
+  .handler(async ({ data, context }): Promise<FnResult<{ moved: number; remaining: boolean }>> => {
+    if (!context.auth.ok) return err('auth', context.auth.message)
+    try {
+      const s3 = await import('./s3')
+      if (data.from === data.to || data.to.startsWith(data.from) || data.from.startsWith(data.to)) {
+        return err('api', 'Refusing to move a prefix into itself')
+      }
+      const page = await s3.list({ prefix: data.from, maxKeys: MOVE_BATCH })
+      for (const entry of page.contents) {
+        const rel = entry.key.slice(data.from.length)
+        await s3.copy(entry.key, data.to + rel)
+        await s3.del(entry.key)
+      }
+      return { ok: true, data: { moved: page.contents.length, remaining: page.isTruncated } }
+    } catch (e) {
+      return err('api', e instanceof Error ? e.message : 'Move failed')
     }
   })
 

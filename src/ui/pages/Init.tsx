@@ -8,7 +8,7 @@ import { newUserId, newDeviceId } from '../../util/id'
 import { useStore } from '../../sync/store'
 import { rememberIds } from '../../sync/drafts'
 import { startPolling } from '../../sync/poller'
-import { navigate } from '../../App'
+import { navigate } from '../../nav'
 import { banner, CopyButton, PageQuote, SecretInput } from '../components'
 import { config } from '../../config'
 
