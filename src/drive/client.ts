@@ -5,16 +5,13 @@
 // layers stay stable; the `cred` arguments are gone (the server knows who
 // you are from the session token its middleware attaches).
 //
-// Keys are S3 object keys: `projects/<projectId>/<fileId>__<name>`. The id
-// segment is immutable; the name is decorative (rename = copy+delete).
+// Keys are S3 object keys: `groups/<groupId>/<projectId>/<fileId>__<name>`.
+// The id segment is immutable; the name is decorative (rename = copy+delete).
 
 import type { DriveErrorKind, FileMeta, ListResult, FnResult } from '../types/storage'
 import { DOC_KEY } from '../server/keys'
 import { encodeKeyPath } from '../server/mime'
 import {
-  metaFn,
-  readTextFn,
-  listFn,
   docPutFn,
   putTextFn,
   folderCreateFn,
@@ -118,15 +115,18 @@ async function fetchPublic(url: string): Promise<Response> {
 }
 
 // ---------------------------------------------------------------------------
-// Reads
+// Reads — ALL through the public routes, one path for anonymous, viewer and
+// editor alike (the old setup's link-shared Drive folder had exactly this
+// exposure; writes are the only thing gated behind a session).
 // ---------------------------------------------------------------------------
 
 export async function getMeta(key: string): Promise<FileMeta> {
-  return call(metaFn({ data: { key } }))
+  const res = await fetchPublic('/api/public/meta?key=' + encodeURIComponent(key))
+  return (await res.json()) as FileMeta
 }
 
 export async function readFile(key: string): Promise<string> {
-  return call(readTextFn({ data: { key } }))
+  return (await fetchPublic(fileUrl(key))).text()
 }
 
 export async function downloadFile(key: string): Promise<Blob> {
@@ -166,7 +166,10 @@ export async function listChildren(
   parent: string,
   opts: { pageSize?: number; pageToken?: string } = {},
 ): Promise<ListResult> {
-  return call(listFn({ data: { parent, pageSize: opts.pageSize ?? 100, pageToken: opts.pageToken } }))
+  const q = new URLSearchParams({ parent, pageSize: String(opts.pageSize ?? 100) })
+  if (opts.pageToken) q.set('pageToken', opts.pageToken)
+  const res = await fetchPublic('/api/public/list?' + q.toString())
+  return (await res.json()) as ListResult
 }
 
 // ---------------------------------------------------------------------------
