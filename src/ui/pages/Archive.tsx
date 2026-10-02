@@ -20,6 +20,11 @@ async function purgeProject(project: Project): Promise<void> {
     // surfaces it) — otherwise the doc forgets the project while its bytes
     // stay live in the bucket with no remaining reference.
     await trashFile(project.folderId)
+    const { thumbKeyFor } = await import('../../util/media')
+    for (const f of project.fileIds) {
+      const thumb = thumbKeyFor(f)
+      if (thumb) await trashFile(thumb).catch(() => {})
+    }
   }
   commit((doc) => {
     const next = { ...doc.projects }

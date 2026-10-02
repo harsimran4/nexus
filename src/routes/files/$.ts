@@ -32,7 +32,12 @@ async function serve(request: Request, params: { _splat?: string }, headOnly = f
   const range = request.headers.get('Range')
   const res = await s3.getRaw(key, range)
   if (!res.ok && res.status !== 304) {
-    return new Response(res.status === 404 ? 'Not found' : 'Storage error', { status: res.status === 404 ? 404 : 502 })
+    // 404s must not be heuristically cached — a generated thumbnail would
+    // then stay "missing" in the browser even after it exists.
+    return new Response(res.status === 404 ? 'Not found' : 'Storage error', {
+      status: res.status === 404 ? 404 : 502,
+      headers: { 'Cache-Control': 'no-store' },
+    })
   }
   const headers = new Headers()
   for (const h of ['Content-Type', 'Content-Length', 'Content-Range', 'ETag', 'Last-Modified']) {
@@ -42,9 +47,9 @@ async function serve(request: Request, params: { _splat?: string }, headOnly = f
   headers.set('Accept-Ranges', 'bytes')
   headers.set('X-Content-Type-Options', 'nosniff')
   // Media bytes at a key never change in place (uploads/renames mint fresh
-  // keys; snapshots are write-once copies) → immutable. Doc and scripts
-  // mutate in place → revalidate every time.
-  const immutable = key.startsWith('groups/') || key.startsWith('snapshots/')
+  // keys; snapshots and generated thumbnails are write-once) → immutable.
+  // Doc and scripts mutate in place → revalidate every time.
+  const immutable = key.startsWith('groups/') || key.startsWith('snapshots/') || key.startsWith('thumbs/')
   headers.set('Cache-Control', immutable ? 'public, max-age=86400, immutable' : 'no-cache')
   if (headOnly) return new Response(null, { status: res.status, headers })
   return new Response(res.body, { status: res.status, headers })

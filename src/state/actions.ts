@@ -11,6 +11,7 @@ import {
   newMediaSectionId,
 } from '../util/id'
 import { hlcNow } from '../util/hlc'
+import { thumbKeyFor } from '../util/media'
 import {
   defaultStatus,
   statusBucket,
@@ -436,6 +437,8 @@ export async function removeProjectFile(
     const { trashFile } = await import('../drive/client')
     try {
       await trashFile(fileId)
+      const thumb = thumbKeyFor(fileId)
+      if (thumb) await trashFile(thumb).catch(() => {}) // generated poster — optional
     } catch (e) {
       if (e instanceof DriveError && e.kind === 'notFound') {
         // Already gone from storage — still unlink it below.

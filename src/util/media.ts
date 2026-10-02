@@ -5,6 +5,16 @@ import type { FileMeta } from '../drive/client'
 
 export type MediaKind = 'image' | 'video' | 'audio' | 'other'
 
+/** Thumbnail object key for a media key — `thumbs/<id>.jpg`, derived from the
+ *  id segment (stable across renames since ids never change). Null for keys
+ *  without the `<id>__<name>` shape (snapshots, doc copies…). */
+export function thumbKeyFor(mediaKey: string): string | null {
+  const base = mediaKey.slice(mediaKey.lastIndexOf('/') + 1)
+  const id = base.split('__')[0]
+  if (!base.includes('__') || !id) return null
+  return `thumbs/${id}.jpg`
+}
+
 export function kindFromMime(mime: string | undefined): MediaKind {
   if (!mime) return 'other'
   if (mime.startsWith('image/')) return 'image'

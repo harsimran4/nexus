@@ -490,6 +490,34 @@ export const uploadSmallFn = createServerFn({ method: 'POST' })
     }
   })
 
+/** Store a generated thumbnail for a media object. The thumb key is derived
+ *  SERVER-SIDE from the media key's id segment (thumbs/<id>.jpg) — the client
+ *  never picks the storage location. Thumbnails are optional cache warmers:
+ *  losing one just falls back to the video's own first frame. */
+export const putThumbFn = createServerFn({ method: 'POST' })
+  .validator((input: FormData) => input) // identity: the payload IS the form
+  .middleware([writerAuth])
+  .handler(async ({ data, context }): Promise<FnResult<{ etag: string }>> => {
+    if (!context.auth.ok) return err('auth', context.auth.message)
+    try {
+      if (!(data instanceof FormData)) return err('api', 'Expected multipart form data')
+      const file = data.get('file')
+      const mediaKey = String(data.get('mediaKey') ?? '')
+      if (!(file instanceof File) || !mediaKey) return err('api', 'Missing file or mediaKey')
+      const base = mediaKey.slice(mediaKey.lastIndexOf('/') + 1)
+      const id = base.split('__')[0]
+      if (!base.includes('__') || !id) return err('api', 'Bad media key')
+      if (file.size > 300 * 1024) return err('api', 'Thumbnail too large (300 KB max)')
+      const contentType = file.type || 'image/jpeg'
+      if (contentType !== 'image/jpeg') return err('api', 'Thumbnails must be JPEG')
+      const s3 = await import('./s3')
+      const res = await s3.put(`thumbs/${id}.jpg`, await file.arrayBuffer(), { contentType: 'image/jpeg' })
+      return { ok: true, data: res }
+    } catch (e) {
+      return err('api', e instanceof Error ? e.message : 'Thumbnail upload failed')
+    }
+  })
+
 /** Bucket facts for the Admin storage card (admin-only). */
 export const storageInfoFn = createServerFn({ method: 'POST' })
   .middleware([writerAuth])

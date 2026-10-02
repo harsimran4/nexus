@@ -41,4 +41,5 @@ export const SYSTEM_PREFIXES = {
   snapshots: 'snapshots/',
   groups: 'groups/',
   scripts: 'scripts/',
+  thumbs: 'thumbs/',
 } as const
