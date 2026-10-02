@@ -1,19 +1,19 @@
 // App-managed sessions on top of the master doc.
-// - Editors/admins: the secret is now verified by the Worker (it fetches
-//   nexus.json with its own Google credential and checks the hash there).
+// - Editors/admins: the secret is verified by this app's own server function
+//   (loginFn — it reads the workspace doc from storage and checks the hash).
 //   Success returns a short-lived signed session token, stored the same way
-//   the old Google bearer used to be (setGlobalBearer) — every Drive write
-//   in drive/client.ts already reads it from there via `{ mode: 'bearer' }`.
+//   the old Google bearer used to be (setGlobalBearer) — every write in
+//   drive/client.ts attaches it from there via the writerAuth middleware.
 // - Viewers: unchanged — the capability token is still checked locally
-//   against the doc already loaded via the API key.
+//   against the doc already loaded via the public read path.
 
 import { sha256Hex, stretchSecret, STRETCH_ITERATIONS } from './hashing'
 import type { NexusDoc, Role } from '../types/schema'
 import { storeGet, useStore } from '../sync/store'
 import { sessionRef } from '../sync/identity'
 import { setGlobalBearer } from '../drive/client'
+import { loginFn } from '../server/fns'
 
-const WORKER = (import.meta.env.VITE_NEXUS_WORKER_URL ?? '').replace(/\/$/, '')
 const SESSION_KEY = 'nexus.session'
 const VIEWER_KEY = 'nexus.viewerToken'
 const WORKER_TOKEN_KEY = 'nexus.workerToken' // sessionStorage — dies with the tab, same lifetime as before
@@ -60,7 +60,7 @@ async function loginWithSecret(secret: string): Promise<{ ok: true; session: Ses
     return { ok: true, session }
   }
 
-  // Browser-side key stretching: the Worker only ever sees K (never the
+  // Browser-side key stretching: the server only ever sees K (never the
   // secret) and sha256-compares it against stored hashes — no KDF server-side
   // (workerd caps PBKDF2 at 100k iterations / 10ms CPU).
   const stretchSalt = doc.settings.authStretchSalt
@@ -72,36 +72,37 @@ async function loginWithSecret(secret: string): Promise<{ ok: true; session: Ses
     return { ok: false, error: 'This browser could not derive your login key' }
   }
 
-  // Editors/admins: ask the Worker (it owns the real verification now).
-  if (WORKER) {
-    try {
-      const res = await fetch(`${WORKER}/session`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ secret: loginSecret }),
-      })
-      if (res.ok) {
-        const data = (await res.json()) as { token: string; role: Role; name: string; uid?: string }
-        setGlobalBearer(data.token)
-        try {
-          sessionStorage.setItem(WORKER_TOKEN_KEY, data.token)
-        } catch {
-          /* ignore */
-        }
-        // uid is the doc's real user id (self-guards + activity attribution
-        // key off it); older workers only sent the name. App users with the
-        // viewer role get real signed sessions too — they are users.app
-        // entries, not Viewers-tab capability tokens.
-        const session: Session = { appUserId: data.uid ?? `worker:${data.name}`, name: data.name, role: data.role }
-        writeSession(session)
-        useStore.setState({ session })
-        return { ok: true, session }
+  // Editors/admins: the app's own loginFn owns the real verification (same
+  // contract the old Worker route had — it returns a signed session token).
+  try {
+    const result = await loginFn({ data: { secret: loginSecret } })
+    if (result.ok) {
+      const data = result.data
+      setGlobalBearer(data.token)
+      try {
+        sessionStorage.setItem(WORKER_TOKEN_KEY, data.token)
+      } catch {
+        /* ignore */
       }
-    } catch {
-      // Worker unreachable — surface this clearly rather than silently
-      // falling back to a mode that can't actually write to Drive.
+      // uid is the doc's real user id (self-guards + activity attribution
+      // key off it). App users with the viewer role get real signed sessions
+      // too — they are users.app entries, not Viewers-tab capability tokens.
+      const session: Session = { appUserId: data.uid, name: data.name, role: data.role as Role }
+      writeSession(session)
+      useStore.setState({ session })
+      return { ok: true, session }
+    }
+    // A network-shaped failure means the server was unreachable; anything
+    // else is a real "no matching login" from verification itself.
+    if (result.kind === 'network') {
       return { ok: false, error: 'Could not reach the Nexus server — check your connection and try again' }
     }
+    if (result.kind !== 'auth') {
+      return { ok: false, error: result.message }
+    }
+  } catch {
+    // Server fn threw across the RPC boundary (transport-level failure).
+    return { ok: false, error: 'Could not reach the Nexus server — check your connection and try again' }
   }
 
   // (Local viewer tokens were handled above — anything reaching this line had
