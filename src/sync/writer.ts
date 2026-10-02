@@ -9,11 +9,12 @@
 import { config } from '../config'
 import { DriveError, backoffRetry, getMeta, readFile, writeFileJson, copyFile, hasBearer, setGlobalBearer } from '../drive/client'
 import { emptyDoc, parseDoc, type NexusDoc } from '../types/schema'
+import { SYSTEM_PREFIXES } from '../types/storage'
+import { DOC_KEY } from '../server/keys'
 import { hlcNow, observeHlc } from '../util/hlc'
 import { mergeRemote, gcTombstones } from './merge'
 import { loadDraft, clearDraft, saveDraft } from './drafts'
 import { storeGet, useStore } from './store'
-import { ensureSnapshotsFolder } from '../drive/bootstrap'
 import { canWrite } from '../auth/session'
 import { writerId, sessionActor } from './identity'
 
@@ -161,9 +162,7 @@ async function performSave(trigger: string): Promise<boolean> {
 }
 
 async function saveLoop(): Promise<boolean> {
-  const nexusId = storeGet().doc?.ids.nexusFileId ?? ''
-  if (!nexusId) return false
-  const cred = { mode: 'bearer' as const }
+  const nexusId = storeGet().doc?.ids.nexusFileId || DOC_KEY
 
   if (tokenUnavailable()) {
     storeGet().setStatus('reconnect', 'Sign in to continue writing')
@@ -176,7 +175,7 @@ async function saveLoop(): Promise<boolean> {
       // and a stale snapshot would re-merge forever or write pre-merge state.
       const store = storeGet()
       const base = store.base
-      const meta = await backoffRetry(() => getMeta(nexusId, cred), { retries: 2 })
+      const meta = await backoffRetry(() => getMeta(nexusId), { retries: 2 })
 
       const unchanged =
         (base.headRevisionId !== undefined && meta.headRevisionId === base.headRevisionId) ||
@@ -186,16 +185,16 @@ async function saveLoop(): Promise<boolean> {
       const tokensKnown = meta.headRevisionId !== undefined || meta.version !== undefined
 
       if (tokensKnown && unchanged) {
-        await writeWholeDoc(nexusId, cred)
+        await writeWholeDoc(nexusId, meta.headRevisionId ?? meta.version)
         return true
       }
 
       // Remote moved (or tokens unknown) — rebase.
-      const remoteRaw = await backoffRetry(() => readFile(nexusId, cred), { retries: 2 })
+      const remoteRaw = await backoffRetry(() => readFile(nexusId), { retries: 2 })
       const parsed = parseDoc(remoteRaw)
       if (!parsed.ok) {
-        await quarantine(nexusId, remoteRaw, cred)
-        store.setStatus('corrupt', 'The workspace file on Drive is not valid nexus.json — it was quarantined')
+        await quarantine(remoteRaw)
+        store.setStatus('corrupt', 'The workspace file in storage is not valid nexus.json — it was quarantined')
         return false
       }
       if (parsed.doc.schema > config.maxKnownSchema) {
@@ -218,8 +217,13 @@ async function saveLoop(): Promise<boolean> {
           storeGet().setStatus('blocked', 'Workspace file not found — re-run setup or check sign-in')
           return false
         }
+        if (err.kind === 'conflict') {
+          // The server-side etag CAS rejected the write (a peer committed
+          // between our meta read and the put) — loop and rebase.
+          continue
+        }
         // rateLimit/network already retried by backoffRetry; give up for now — edits stay queued
-        storeGet().setStatus('queued', 'Drive is busy or offline — changes are saved locally and will retry')
+        storeGet().setStatus('queued', 'Storage is busy or offline — changes are saved locally and will retry')
         return false
       }
       throw err
@@ -237,14 +241,17 @@ function tokenUnavailable(): boolean {
   return !hasBearer()
 }
 
-async function writeWholeDoc(nexusId: string, cred: { mode: 'bearer' }): Promise<void> {
+async function writeWholeDoc(nexusId: string, expectEtag?: string): Promise<void> {
   const store = storeGet()
   const current = store.doc ?? emptyDoc()
   // Bump rev + stamp the write itself so local rev always equals remote rev.
   const doc: NexusDoc = { ...current, rev: current.rev + 1, writerId: writerId(), updatedAt: hlcNow() }
   store.setDoc(doc)
   const body = serialize(doc)
-  const resp = await backoffRetry(() => writeFileJson(nexusId, body, cred), { retries: 2 })
+  // The etag we just verified is the CAS precondition: docPutFn refuses (kind
+  // 'conflict') if a peer wrote between our read and this put. OCI ignores
+  // If-Match itself — the compare lives server-side in our own code.
+  const resp = await backoffRetry(() => writeFileJson(nexusId, body, expectEtag), { retries: 2 })
   // Our entities are now confirmed remote — drop them from the scratch set.
   scratch.clear()
   contentDirty = false
@@ -257,7 +264,7 @@ async function writeWholeDoc(nexusId: string, cred: { mode: 'bearer' }): Promise
   store.setStatus('ok', null)
   store.markSynced()
   await clearDraft()
-  void snapshotHook(nexusId, cred)
+  void snapshotHook(nexusId)
 }
 
 export function serialize(doc: NexusDoc): string {
@@ -266,15 +273,15 @@ export function serialize(doc: NexusDoc): string {
 
 /** Fire-and-forget daily snapshot (max one per UTC day, rides the next save's meta). */
 const snapshotMemo = new Set<string>()
-async function snapshotHook(nexusId: string, cred: { mode: 'bearer' }): Promise<void> {
+async function snapshotHook(nexusId: string): Promise<void> {
   const doc = storeGet().doc
   if (!doc || snapshotMemo.has(nexusId)) return
   const today = new Date().toISOString().slice(0, 10)
   if (doc.snapshots.some((s) => s.note.startsWith(today))) return
   snapshotMemo.add(nexusId)
   try {
-    const snapshotsFolderId = await ensureSnapshotsFolder(doc, cred)
-    const copy = await copyFile(nexusId, `nexus-${today}.json`, snapshotsFolderId, cred)
+    // The snapshots/ prefix is a system folder — its marker exists from init.
+    const copy = await copyFile(nexusId, `nexus-${today}.json`, SYSTEM_PREFIXES.snapshots)
     commitQuiet((d) => {
       d.snapshots = [
         ...d.snapshots,
@@ -302,14 +309,11 @@ export function commitQuiet(mut: (doc: NexusDoc) => void): void {
 // ---------------------------------------------------------------------------
 
 /** Merge a freshly-read remote doc into local state. Returns false on corrupt/newer-schema. */
-export async function applyRemoteIfChanged(
-  nexusId: string,
-  cred: { mode: 'bearer' | 'key' | 'auto' },
-): Promise<'unchanged' | 'applied' | 'corrupt' | 'newerSchema'> {
+export async function applyRemoteIfChanged(nexusId: string): Promise<'unchanged' | 'applied' | 'corrupt' | 'newerSchema'> {
   const store = storeGet()
   let meta
   try {
-    meta = await getMeta(nexusId, cred)
+    meta = await getMeta(nexusId)
   } catch {
     return 'unchanged'
   }
@@ -321,17 +325,14 @@ export async function applyRemoteIfChanged(
 
   let raw: string
   try {
-    raw = await readFile(nexusId, cred)
-  } catch (e) {
-    if (e instanceof DriveError && e.kind === 'downloadRestricted') {
-      store.setStatus('queued', 'Drive "Viewers can\'t download" is ON — an admin must turn it off for viewers to read content')
-    }
+    raw = await readFile(nexusId)
+  } catch {
     return 'unchanged'
   }
   const parsed = parseDoc(raw)
   if (!parsed.ok) {
-    if (cred.mode !== 'key') await quarantine(nexusId, raw, { mode: 'bearer' })
-    store.setStatus('corrupt', 'The workspace file on Drive is not valid nexus.json — it was quarantined')
+    if (canWrite()) await quarantine(raw) // best-effort; needs a writer session
+    store.setStatus('corrupt', 'The workspace file in storage is not valid nexus.json — it was quarantined')
     return 'corrupt'
   }
   if (parsed.doc.schema > config.maxKnownSchema) {
@@ -355,22 +356,17 @@ export async function applyRemoteIfChanged(
   return 'applied'
 }
 
-async function quarantine(nexusId: string, raw: string, cred: { mode: 'bearer' }): Promise<void> {
+async function quarantine(raw: string): Promise<void> {
   try {
-    const doc = storeGet().doc
-    const rootId = doc?.ids.rootFolderId ?? ''
-    if (!rootId) return
-    const snapshotsFolderId = doc ? await ensureSnapshotsFolder(doc, cred) : null
-    if (!snapshotsFolderId) return
-    await createCorruptCopy(snapshotsFolderId, raw, cred)
+    await createCorruptCopy(SYSTEM_PREFIXES.snapshots, raw)
   } catch {
-    void nexusId // quarantine is best-effort; the raw bytes are also mirrored to IndexedDB
+    // quarantine is best-effort; the raw bytes are also mirrored to IndexedDB
   }
 }
 
-async function createCorruptCopy(folderId: string, raw: string, cred: { mode: 'bearer' }): Promise<void> {
+async function createCorruptCopy(folderPrefix: string, raw: string): Promise<void> {
   const { createJsonFile } = await import('../drive/client')
-  await createJsonFile(`corrupt-${Date.now()}.json`, folderId, raw, cred)
+  await createJsonFile(`corrupt-${Date.now()}.json`, folderPrefix, raw)
 }
 
 // ---------------------------------------------------------------------------

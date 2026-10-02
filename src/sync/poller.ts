@@ -3,7 +3,6 @@
 // The poller never writes — it reconciles read state only (the writer
 // reconciles its own conflicts during commit).
 
-import { hasBearer } from '../drive/client'
 import { storeGet } from './store'
 import { applyRemoteIfChanged } from './writer'
 import { reverifySessions } from '../auth/session'
@@ -29,9 +28,8 @@ export function stopPolling(): void {
 async function pollOnce(nexusId: string): Promise<void> {
   const store = storeGet()
   if (!store.doc || store.status === 'booting' || store.status === 'needsInit' || store.status === 'corrupt') return
-  const cred = { mode: hasBearer() ? ('auto' as const) : ('key' as const) }
-  // applyRemoteIfChanged does the single cheap files.get per tick itself.
-  await applyRemoteIfChanged(nexusId, cred)
+  // applyRemoteIfChanged does the single cheap meta read per tick itself.
+  await applyRemoteIfChanged(nexusId)
   sweepAutoArchive()
   await reverifySessions()
 }
