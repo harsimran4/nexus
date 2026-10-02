@@ -5,3 +5,4 @@ dist
 *.local
 .dev.vars
 src/routeTree.gen.ts
+.wrangler/
