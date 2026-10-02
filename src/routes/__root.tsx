@@ -23,6 +23,9 @@ export const Route = createRootRoute({
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1.0' },
       { name: 'color-scheme', content: 'light' },
+      // Stale-build detection: update.ts fetches the shell no-store and
+      // compares this against the running bundle's config.appVersion.
+      { name: 'app-version', content: config.appVersion },
       { name: 'google-site-verification', content: 'mwemML4cI0Mq3l-aDufEFCiDkakirKx_X-SoEFEXe1M' },
       { title: 'Nexus — Content Manager' },
     ],
@@ -258,6 +261,20 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
     document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', next)
     setThemeTick((t) => t + 1)
   }
+  // The active icon is CSS-selected off html[data-theme] — reading document
+  // during render would crash the build-time prerender, and a JS-chosen icon
+  // would hydration-mismatch whenever the stored theme differs.
+  const themeToggle = (
+    <button
+      className="icon-btn theme-toggle"
+      title="Toggle light/dark theme"
+      aria-label="Toggle light/dark theme"
+      onClick={setTheme}
+    >
+      <span className="theme-ic-sun" aria-hidden>☀️</span>
+      <span className="theme-ic-moon" aria-hidden>🌙</span>
+    </button>
+  )
   return (
     <div className="shell">
       {menuOpen && <div className="drawer-backdrop" onClick={() => setMenuOpen(false)} />}
@@ -314,26 +331,11 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
           <div className="mobile-brand">
             <span className="brand-dot" /> Nexus
           </div>
-          <button
-            className="icon-btn"
-            style={{ marginLeft: 'auto' }}
-            title="Toggle light/dark theme"
-            aria-label="Toggle light/dark theme"
-            onClick={setTheme}
-          >
-            {document.documentElement.dataset.theme === 'dark' ? '☀️' : '🌙'}
-          </button>
+          <div style={{ marginLeft: 'auto' }}>{themeToggle}</div>
         </div>
         <div className="content-header">
           <div className="row desktop-tools" style={{ marginLeft: 'auto' }}>
-            <button
-              className="icon-btn"
-              title="Toggle light/dark theme"
-              aria-label="Toggle light/dark theme"
-              onClick={setTheme}
-            >
-              {document.documentElement.dataset.theme === 'dark' ? '☀️' : '🌙'}
-            </button>
+            {themeToggle}
             <SyncPill />
           </div>
         </div>

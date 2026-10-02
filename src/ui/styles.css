@@ -776,3 +776,10 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 .stamp-ink { color: var(--muted); }
 
 /* Admin page: intentionally unadorned — the clipboard clip tested poorly. */
+
+/* Theme toggle: the active icon follows html[data-theme] (prerender-safe,
+   hydration-safe — no JS reads document during render). */
+.theme-toggle .theme-ic-sun { display: none; }
+.theme-toggle .theme-ic-moon { display: inline; }
+html[data-theme='dark'] .theme-toggle .theme-ic-sun { display: inline; }
+html[data-theme='dark'] .theme-toggle .theme-ic-moon { display: none; }

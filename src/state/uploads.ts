@@ -39,7 +39,9 @@ export function getUploadBatch(): UploadBatch | null {
 }
 
 export function useUploadBatch(): UploadBatch | null {
-  return useSyncExternalStore(subscribeUploads, getUploadBatch)
+  // getServerSnapshot is required for the build-time prerender (module-level
+  // singleton — the server always sees the same value the client starts with).
+  return useSyncExternalStore(subscribeUploads, getUploadBatch, getUploadBatch)
 }
 
 export function uploadsBusy(): boolean {
