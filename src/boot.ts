@@ -1,37 +1,16 @@
-// Boot sequence: origin check → workspace-ID resolution chain (URL ?t= →
-// localStorage → baked config) → initial doc read (key path, or bearer when
-// already signed in) → session restore → poller → draft-recovery check.
+// Boot sequence: origin check → initial doc read (public /files route —
+// anonymous, viewer and editor share the same path) → poller → session
+// restore. One bucket IS the workspace: there are no workspace-id params to
+// resolve anymore.
 
 import { config } from './config'
-import { readFile, setGlobalApiKey, DriveError, hasBearer } from './drive/client'
-import { findWorkspace } from './drive/bootstrap'
+import { readFile, DriveError } from './drive/client'
+import { DOC_KEY } from './server/keys'
 import { parseDoc } from './types/schema'
 import { storeGet } from './sync/store'
-import { rememberIds, recallIds, loadDraft } from './sync/drafts'
 import { restoreSession } from './auth/session'
 import { startPolling } from './sync/poller'
 import { originCheck } from './diagnostics/health'
-
-export interface BootParams {
-  viewerToken: string | null
-  rootIdParam: string | null
-}
-
-export function parseBootParams(): BootParams {
-  // Login links carry ?vw=<token>&t=<rootId> inside the hash:
-  //   https://host/#/login?vw=...&t=...
-  const hash = location.hash
-  const qIndex = hash.indexOf('?')
-  const params = new URLSearchParams(qIndex >= 0 ? hash.slice(qIndex + 1) : '')
-  // Also accept plain query params before the hash (some link generators).
-  if (!params.get('t')) {
-    const top = new URLSearchParams(location.search)
-    const t = top.get('t')
-    const vw = top.get('vw')
-    return { viewerToken: params.get('vw') ?? vw, rootIdParam: params.get('t') ?? t }
-  }
-  return { viewerToken: params.get('vw'), rootIdParam: params.get('t') }
-}
 
 export async function boot(): Promise<void> {
   const store = storeGet()
@@ -41,52 +20,13 @@ export async function boot(): Promise<void> {
     store.setBootError(blocked.fix)
     return
   }
-  if (!config.apiKey) {
-    store.setStatus('blocked', 'Build config incomplete')
-    store.setBootError(
-      'No API key configured. Copy .env.example to .env.local, fill VITE_NEXUS_API_KEY (and VITE_NEXUS_CLIENT_ID), then rebuild.',
-    )
-    return
-  }
-  setGlobalApiKey(config.apiKey)
-  // Pre-load Google Identity Services so the first sign-in click opens its
-  // popup while the browser still honors the user gesture.
-  void import('./auth/tokenClient').then((t) => t.warmupAuth())
-
-  const params = parseBootParams()
-  if (params.rootIdParam) rememberIds({ rootFolderId: params.rootIdParam, nexusFileId: recallIds()?.nexusFileId ?? '' })
-
-  // Resolve workspace IDs. The BAKED config id wins over browser memory:
-  // localStorage survives across deploys and can point at a stale (pre-reset)
-  // database, which then fails the new-format parse and dead-ends in setup.
-  let rootId = params.rootIdParam ?? recallIds()?.rootFolderId ?? config.rootFolderId
-  let nexusId = config.nexusFileId || recallIds()?.nexusFileId || ''
 
   try {
-    if (!nexusId && rootId) {
-      const ws = await findWorkspace(rootId, { mode: 'key', apiKey: effectiveKey() })
-      if (ws?.nexusFileId) nexusId = ws.nexusFileId
-    }
-    if (!nexusId) {
-      // Maybe the visitor is a signed-in editor whose workspace isn't key-visible.
-      store.setStatus('needsInit')
-      return
-    }
-
-    // Prime the doc: bearer when we have one (editors), else the API key.
-    const result = await initialRead(nexusId)
+    const result = await initialRead()
     if (result === 'corrupt') return
-    if (result === 'none') {
-      store.setStatus('needsInit')
-      return
-    }
+    if (result === 'none') return
 
-    const doc = storeGet().doc
-    if (doc) {
-      if (doc.ids.rootFolderId) rootId = doc.ids.rootFolderId
-      rememberIds({ rootFolderId: rootId, nexusFileId: nexusId })
-      startPolling(nexusId)
-    }
+    if (storeGet().doc) startPolling(DOC_KEY)
     await restoreSession()
     if (storeGet().status === 'booting') storeGet().setStatus('ok')
   } catch (e) {
@@ -95,80 +35,33 @@ export async function boot(): Promise<void> {
   }
 }
 
-function effectiveKey(): string {
-  return storeGet().doc?.settings.api.keyOverride ?? config.apiKey
-}
-
-async function initialRead(nexusId: string): Promise<'ok' | 'corrupt' | 'none'> {
+async function initialRead(): Promise<'ok' | 'corrupt' | 'none'> {
   const store = storeGet()
-  const cred: Parameters<typeof readFile>[1] = hasBearer()
-    ? { mode: 'auto' }
-    : { mode: 'key', apiKey: effectiveKey() }
   try {
-    let raw: string
-    try {
-      raw = await readFile(nexusId, cred)
-    } catch (keyErr) {
-      // A network/CORS TypeError on the key path means Google refused this
-      // request without CORS headers — either the key's referrer list or
-      // (indistinguishable from here) Google's abuse filter throttling the
-      // visitor's IP for unsigned traffic. The Worker reads nexus.json with
-      // its own credential from a different IP, so fall back to it for boot.
-      if (keyErr instanceof DriveError && keyErr.kind === 'network' && config.workerUrl) {
-        try {
-          const res = await fetch(`${config.workerUrl}/drive/public/content/${nexusId}`)
-          if (!res.ok) throw new Error(`worker read failed (HTTP ${res.status})`)
-          raw = await res.text()
-        } catch {
-          throw new Error(
-            'The API key rejected this origin, and the Worker fallback also failed. In Google Cloud Console → Credentials → API key → Website restrictions, add: ' +
-              location.origin + '/* — then reload.',
-          )
-        }
-      } else {
-        throw keyErr
-      }
-    }
+    const raw = await readFile(DOC_KEY)
     const parsed = parseDoc(raw)
     if (!parsed.ok) {
-      store.setStatus('needsReset', 'The workspace file on Drive is not readable by this version of Nexus')
+      store.setStatus('needsReset', 'The workspace file in storage is not readable by this version of Nexus')
       store.setBootError(
-        'The database on Drive was written by an older/different format. ' +
-          'Use the setup below — Nexus will reuse your existing Drive folder and write a fresh database into it (the old file goes to Drive trash).',
+        'The database in storage was written by an older/different format. ' +
+          'Use the setup below to write a fresh database (the files already in the bucket stay where they are).',
       )
       return 'corrupt'
     }
     if (parsed.doc.schema > config.maxKnownSchema) {
       store.setDoc(parsed.doc)
-      store.setLastReadViaKey(true)
       store.setStatus('readOnly', `Written by a newer Nexus (schema ${parsed.doc.schema}) — update the app`)
       return 'ok'
     }
-    parsed.doc.ids.nexusFileId = parsed.doc.ids.nexusFileId || nexusId
     store.setDoc(parsed.doc)
-    store.setLastReadViaKey(true)
     store.markSynced()
     store.setStatus('ok')
     return 'ok'
   } catch (e) {
-    if (e instanceof DriveError) {
-      if (e.kind === 'notFound' || e.kind === 'permission') {
-        store.setStatus('needsInit')
-        return 'none'
-      }
-      if (e.kind === 'downloadRestricted') {
-        store.setStatus('blocked', 'Drive "Viewers can\'t download" is ON')
-        store.setBootError('An admin must turn off "Viewers can\'t download" in the Drive folder\'s sharing settings — it blocks all viewer reads.')
-        return 'corrupt'
-      }
+    if (e instanceof DriveError && (e.kind === 'notFound' || e.kind === 'permission')) {
+      store.setStatus('needsInit')
+      return 'none'
     }
     throw e
   }
-}
-
-/** Re-check for an unconfirmed draft at boot time (App shows the recovery modal). */
-export async function checkBootDraft(): Promise<{ savedAt: string } | null> {
-  const draft = await loadDraft()
-  if (!draft) return null
-  return { savedAt: draft.savedAt }
 }
