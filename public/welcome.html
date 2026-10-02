@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Nexus — every cut, on one wall</title>
 <meta name="description" content="Nexus pins your shoots, cuts and scripts to one shared board. Shoot day to client approved, for small content teams.">
+<script>
+  // Same theme source as the app: localStorage wins, else the OS preference.
+  try {
+    var t = localStorage.getItem('nexus.theme');
+    if (!t) t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    if (t === 'dark') document.documentElement.dataset.theme = 'dark';
+  } catch (e) {}
+</script>
 <style>
   @font-face {
     font-family: 'Fraunces';
@@ -14,40 +22,45 @@
     font-display: swap;
   }
   :root {
-    --paper: #f6f4ed;
-    --card: #fdfcf8;
-    --panel-2: #f1eee3;
-    --border: #e4dfd0;
-    --border-strong: #d3ccba;
-    --text: #22251f;
-    --muted: #6e6a5e;
-    --faint: #9a9484;
-    --accent: #c05621;
-    --accent-strong: #a84a1b;
-    --red: #b34a3e;
+    color-scheme: light;
+    --paper: #f6f4ed; --card: #fdfcf8; --panel-2: #f1eee3;
+    --border: #e4dfd0; --border-strong: #d3ccba;
+    --text: #22251f; --muted: #6e6a5e; --faint: #9a9484;
+    --accent: #c05621; --accent-strong: #a84a1b; --red: #b34a3e;
     --sticky-1: #fcf2cd; --sticky-2: #e3efd8; --sticky-3: #fae3dc; --sticky-4: #dfeaf2; --sticky-5: #e9e2f4;
     --serif: 'Fraunces', 'Iowan Old Style', Georgia, serif;
     --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Arial, sans-serif;
     --mono: ui-monospace, 'Cascadia Code', 'SF Mono', Consolas, monospace;
   }
+  [data-theme='dark'] {
+    color-scheme: dark;
+    --paper: #16171b; --card: #212329; --panel-2: #2b2d35;
+    --border: #33353e; --border-strong: #43454f;
+    --text: #e6e4dc; --muted: #a3a094; --faint: #73716a;
+    --accent: #e07636; --accent-strong: #ec8c52; --red: #d67f72;
+    --sticky-1: #35311e; --sticky-2: #26312a; --sticky-3: #37291f; --sticky-4: #222c34; --sticky-5: #2d2836;
+  }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
-  body { background: var(--paper); color: var(--text); font-family: var(--font); font-size: 16px; line-height: 1.55; -webkit-font-smoothing: antialiased; }
-  body::before { /* paper grain, same recipe as the app */
-    content: ''; position: fixed; inset: 0; z-index: 60; pointer-events: none; opacity: 0.5;
+  body { background: var(--paper); color: var(--text); font-family: var(--font); font-size: 16px; line-height: 1.55;
+         -webkit-font-smoothing: antialiased; transition: background 0.25s ease, color 0.25s ease; }
+  body::before { content: ''; position: fixed; inset: 0; z-index: 60; pointer-events: none; opacity: 0.5;
     background:
       radial-gradient(rgba(60,54,38,0.055) 1px, transparent 1.4px),
       radial-gradient(rgba(60,54,38,0.04) 1px, transparent 1.6px);
-    background-size: 19px 23px, 29px 31px;
-    background-position: 0 0, 9px 14px;
-    mix-blend-mode: multiply;
-  }
+    background-size: 19px 23px, 29px 31px; background-position: 0 0, 9px 14px; mix-blend-mode: multiply; }
+  [data-theme='dark'] body::before { opacity: 0.22;
+    background:
+      radial-gradient(rgba(255,255,255,0.05) 1px, transparent 1.4px),
+      radial-gradient(rgba(255,255,255,0.035) 1px, transparent 1.6px);
+    background-size: 19px 23px, 29px 31px; background-position: 0 0, 9px 14px; mix-blend-mode: screen; }
   .wrap { max-width: 1080px; margin: 0 auto; padding: 0 22px; }
   a { color: inherit; }
   a:focus-visible, button:focus-visible { outline: 2.5px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
 
-  /* ---------- top bar ---------- */
-  .bar { display: flex; align-items: center; gap: 14px; padding: 20px 0 8px; }
+  /* ---------- top bar: sticks to the top while scrolling ---------- */
+  .bar { position: sticky; top: 0; z-index: 40; display: flex; align-items: center; gap: 14px;
+         padding: 14px 0; background: var(--paper); border-bottom: 1px solid var(--border); margin-bottom: 6px; }
   .brand { display: flex; align-items: center; gap: 9px; font-family: var(--serif); font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
   .brand-dot { width: 11px; height: 11px; border-radius: 3px; background: var(--accent); transform: rotate(-4deg); }
   .bar .spacer { flex: 1; }
@@ -56,12 +69,12 @@
   .btn:hover { border-color: var(--faint); }
   .btn.primary { background: var(--accent); border-color: var(--accent-strong); color: #fff8f2; }
   .btn.primary:hover { background: var(--accent-strong); }
-  .btn.quiet { border-color: transparent; background: none; color: var(--muted); font-weight: 550; }
-  .btn.quiet:hover { color: var(--text); }
+  .btn.icon { padding: 8px 11px; font-size: 16px; line-height: 1; background: var(--card); }
 
   /* ---------- hero ---------- */
-  .hero { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: clamp(24px, 5vw, 64px); align-items: center; padding: 46px 0 20px; }
-  @media (max-width: 880px) { .hero { grid-template-columns: 1fr; padding-top: 28px; } }
+  .hero { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: clamp(24px, 5vw, 64px);
+          align-items: center; padding: 44px 0 16px; }
+  @media (max-width: 880px) { .hero { grid-template-columns: 1fr; padding-top: 26px; } }
   h1 { font-family: var(--serif); font-weight: 600; letter-spacing: -0.018em;
        font-size: clamp(38px, 6vw, 68px); line-height: 1.04; margin: 0 0 20px; }
   h1 .circled { position: relative; white-space: nowrap; }
@@ -71,13 +84,10 @@
   @keyframes draw { to { stroke-dashoffset: 0; } }
   .lede { font-size: clamp(16px, 1.8vw, 18.5px); color: var(--muted); max-width: 54ch; margin: 0 0 28px; }
   .lede b { color: var(--text); font-weight: 600; }
-  .cta-row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   .btn.big { padding: 14px 24px; font-size: 17px; }
-  .cta-note { font-size: 13.5px; color: var(--faint); max-width: 22ch; line-height: 1.4; }
 
-  /* the clapperboard — the one orchestrated moment */
   .clap { margin: 0; }
-  .clap svg { display: block; width: 100%; height: auto; filter: drop-shadow(0 10px 22px rgba(60,54,38,0.14)); }
+  .clap svg { display: block; width: 100%; height: auto; filter: drop-shadow(0 10px 22px rgba(0,0,0,0.22)); }
   .clap .jaw { transform-origin: 40px 108px; }
   .clap-live .jaw { animation: clap 0.95s cubic-bezier(.34,1.35,.5,1) 0.25s both; }
   @keyframes clap { from { transform: rotate(-30deg); } 62% { transform: rotate(2.4deg); } to { transform: rotate(0deg); } }
@@ -86,8 +96,8 @@
     h1 .circled path { animation: none; stroke-dashoffset: 0; }
   }
 
-  /* ---------- film-strip divider ---------- */
-  .strip { margin: clamp(30px, 5vw, 54px) 0 0; height: 46px; background: #262a24; position: relative; overflow: hidden; }
+  /* ---------- film strip ---------- */
+  .strip { margin: clamp(30px, 5vw, 54px) 0 0; height: 46px; background: #1b1e19; position: relative; overflow: hidden; border-radius: 2px; }
   .strip::before, .strip::after { content: ''; position: absolute; left: 0; right: 0; height: 12px;
     background-image: radial-gradient(circle at 9px 6px, var(--paper) 0 3.2px, transparent 3.6px);
     background-size: 34px 12px; background-position: 8px 0; }
@@ -107,54 +117,67 @@
   .board-wrap svg { display: block; width: 100%; height: auto; }
   .caption { text-align: center; color: var(--faint); font-size: 13.5px; margin-top: 12px; }
 
-  /* ---------- desk artifacts (deliberately uneven) ---------- */
+  /* diagram palette follows the theme */
+  .d-paper { fill: var(--card); stroke: var(--border-strong); }
+  .d-sticky-1 { fill: var(--sticky-1); stroke: var(--border-strong); }
+  .d-sticky-2 { fill: var(--sticky-2); stroke: var(--border-strong); }
+  .d-sticky-3 { fill: var(--sticky-3); stroke: var(--border-strong); }
+  .d-sticky-4 { fill: var(--sticky-4); stroke: var(--border-strong); }
+  .d-ink { stroke: var(--text); }
+  .d-text { fill: var(--text); stroke: none; }
+  .d-muted { fill: var(--faint); stroke: none; }
+  .d-accent { stroke: var(--accent); }
+  .d-accent-text { fill: var(--accent); stroke: none; }
+  .d-line { stroke: var(--border-strong); }
+
+  /* ---------- desk artifacts ---------- */
   .desk { display: flex; flex-wrap: wrap; gap: clamp(18px, 3vw, 34px); align-items: flex-start; }
   .artifact { position: relative; }
-  .artifact.folder {
-    background: var(--sticky-2); border: 1px solid #c6d4b2; border-radius: 4px;
+  .artifact.folder { background: var(--sticky-2); border: 1px solid var(--border-strong); border-radius: 4px;
     padding: 26px 24px 20px; width: min(340px, 100%); transform: rotate(-1.2deg);
-    box-shadow: 0 2px 3px rgba(60,54,38,0.08), 0 12px 24px rgba(60,54,38,0.1);
-  }
+    box-shadow: 0 2px 3px rgba(0,0,0,0.1), 0 12px 24px rgba(0,0,0,0.12); }
   .artifact.folder::before { content: ''; position: absolute; top: -13px; left: 18px; width: 74px; height: 20px;
-    background: #dce7cc; border: 1px solid #c6d4b2; border-bottom: none; border-radius: 6px 6px 0 0; transform: rotate(-1deg); }
-  .artifact.photo {
-    background: #fff; padding: 10px 10px 30px; width: min(320px, 100%); transform: rotate(1.6deg);
-    border: 1px solid var(--border); box-shadow: 0 3px 4px rgba(60,54,38,0.1), 0 14px 28px rgba(60,54,38,0.12);
-  }
+    background: var(--panel-2); border: 1px solid var(--border-strong); border-bottom: none;
+    border-radius: 6px 6px 0 0; transform: rotate(-1deg); }
+  .artifact.photo { background: var(--card); padding: 10px 10px 30px; width: min(320px, 100%); transform: rotate(1.6deg);
+    border: 1px solid var(--border); box-shadow: 0 3px 4px rgba(0,0,0,0.12), 0 14px 28px rgba(0,0,0,0.14); }
   .artifact.photo::before { content: ''; position: absolute; top: -12px; left: 50%; width: 96px; height: 22px;
-    transform: translateX(-50%) rotate(2deg); background: rgba(255,255,255,0.55);
-    border: 1px solid rgba(60,54,38,0.08); box-shadow: 0 1px 2px rgba(60,54,38,0.06); }
-  .artifact.photo .frame { aspect-ratio: 16/10; background:
-    linear-gradient(135deg, #2f3a30 0 18%, #46543f 18% 34%, #2f3a30 34% 52%, #46543f 52% 70%, #2f3a30 70% 86%, #46543f 86%);
-    border-radius: 2px; display: grid; place-items: center; }
+    transform: translateX(-50%) rotate(2deg); background: rgba(255,255,255,0.16);
+    border: 1px solid rgba(255,255,255,0.14); box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+  .artifact.photo .frame { aspect-ratio: 16/10; border-radius: 2px; display: grid; place-items: center;
+    background: linear-gradient(135deg, #14161a 0 18%, #23281f 18% 34%, #14161a 34% 52%, #23281f 52% 70%, #14161a 70% 86%, #23281f 86%); }
   .artifact.photo .frame span { font-family: var(--mono); font-size: 11px; color: rgba(246,244,237,0.75);
-    background: rgba(0,0,0,0.35); padding: 2px 7px; border-radius: 3px; }
-  .artifact.page {
-    background: var(--card); border: 1px solid var(--border); width: min(300px, 100%);
+    background: rgba(0,0,0,0.4); padding: 2px 7px; border-radius: 3px; }
+  .artifact.page { background: var(--card); border: 1px solid var(--border); width: min(300px, 100%);
     padding: 22px 22px 18px; transform: rotate(-0.8deg);
-    clip-path: polygon(0 2%, 100% 0, 99% 97%, 96% 100%, 2% 99%); /* torn bottom edge */
-    box-shadow: 0 2px 3px rgba(60,54,38,0.07), 0 10px 22px rgba(60,54,38,0.09);
-  }
-  .artifact.badge-card {
-    background: var(--sticky-4); border: 1px solid #a9bfd4; border-radius: 4px;
+    clip-path: polygon(0 2%, 100% 0, 99% 97%, 96% 100%, 2% 99%);
+    box-shadow: 0 2px 3px rgba(0,0,0,0.09), 0 10px 22px rgba(0,0,0,0.11); }
+  .artifact.badge-card { background: var(--sticky-4); border: 1px solid var(--border-strong); border-radius: 4px;
     padding: 24px 22px 20px; width: min(310px, 100%); transform: rotate(1.1deg);
-    box-shadow: 0 2px 3px rgba(60,54,38,0.08), 0 12px 24px rgba(60,54,38,0.1);
-  }
+    box-shadow: 0 2px 3px rgba(0,0,0,0.1), 0 12px 24px rgba(0,0,0,0.12); }
   .artifact h3 { font-family: var(--serif); font-size: 20px; font-weight: 600; margin: 2px 0 8px; }
-  .artifact p { margin: 0; color: #4d4a40; font-size: 14.5px; }
-  .artifact .stamp {
-    position: absolute; right: -14px; top: -18px; transform: rotate(11deg);
+  .artifact p { margin: 0; color: var(--muted); font-size: 14.5px; }
+  .artifact .stamp { position: absolute; right: -14px; top: -18px; transform: rotate(11deg);
     font-family: var(--serif); font-weight: 600; font-size: 13px; letter-spacing: 0.06em;
     color: var(--red); border: 2.5px solid var(--red); border-radius: 999px; padding: 6px 12px;
-    opacity: 0.82; mix-blend-mode: multiply; text-transform: uppercase;
-  }
+    opacity: 0.85; text-transform: uppercase; }
   .artifact .scribble { display: block; margin-top: 12px; width: 130px; height: 10px; }
 
-  /* ---------- under the hood ---------- */
-  .hood { margin-top: clamp(30px, 5vw, 48px); border: 1px dashed var(--border-strong); border-radius: 10px;
-    padding: 18px 20px; color: var(--muted); font-size: 14.5px; background: rgba(253,252,248,0.6); max-width: 860px; }
-  .hood b { color: var(--text); font-weight: 600; }
-  .hood code { font-family: var(--mono); font-size: 12.5px; background: var(--panel-2); border-radius: 5px; padding: 1.5px 6px; }
+  /* ---------- three moves ---------- */
+  .moves { display: flex; flex-wrap: wrap; gap: clamp(18px, 3vw, 30px); }
+  .move { background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 22px 20px 18px; width: min(300px, 100%); position: relative;
+    box-shadow: 0 2px 3px rgba(0,0,0,0.06), 0 10px 20px rgba(0,0,0,0.07); }
+  .move:nth-child(1) { transform: rotate(-0.7deg); }
+  .move:nth-child(2) { transform: rotate(0.5deg) translateY(10px); }
+  .move:nth-child(3) { transform: rotate(-0.4deg); }
+  .move .num { font-family: var(--serif); font-weight: 600; font-size: 30px; color: var(--accent); line-height: 1; }
+  .move .num::after { content: ''; display: block; width: 44px; height: 8px; margin-top: 2px; }
+  .move:nth-child(1) .num::after { background: var(--sticky-1); border-radius: 999px; transform: rotate(-2deg); }
+  .move:nth-child(2) .num::after { background: var(--sticky-4); border-radius: 999px; transform: rotate(1.6deg); }
+  .move:nth-child(3) .num::after { background: var(--sticky-2); border-radius: 999px; transform: rotate(-1deg); }
+  .move h3 { font-family: var(--serif); font-size: 19px; font-weight: 600; margin: 12px 0 6px; }
+  .move p { margin: 0; color: var(--muted); font-size: 14.5px; }
 
   /* ---------- final CTA + footer ---------- */
   .final { padding-bottom: 8px; }
@@ -164,19 +187,18 @@
   footer a:hover { color: var(--text); }
   footer .spacer { flex: 1; }
   @media (max-width: 700px) {
-    .bar .btn.quiet { display: none; }
-    .artifact.folder, .artifact.photo, .artifact.page, .artifact.badge-card { transform: none; }
+    .artifact.folder, .artifact.photo, .artifact.page, .artifact.badge-card, .move { transform: none; }
+    .move:nth-child(2) { transform: none; }
   }
 </style>
 </head>
 <body>
-<script>if (matchMedia('(prefers-reduced-motion: reduce)').matches === false) document.body.className = 'clap-live';</script>
 <div class="wrap">
 
   <div class="bar">
     <div class="brand"><span class="brand-dot"></span> Nexus</div>
     <div class="spacer"></div>
-    <a class="btn quiet" href="/login">Sign in</a>
+    <button class="btn icon" id="theme" title="Toggle light/dark" aria-label="Toggle light/dark theme"></button>
     <a class="btn primary" href="/">Open the console</a>
   </div>
 
@@ -193,23 +215,21 @@
       </p>
       <div class="cta-row">
         <a class="btn primary big" href="/">Open the console</a>
-        <a class="btn" href="/login">I have a login</a>
       </div>
-      <p class="cta-note" style="margin-top:12px">viewers just click their link — no account, no password</p>
+      <p class="cta-note" style="font-size:13.5px;color:var(--faint);margin-top:12px">
+        viewers just click their link — no account, no password
+      </p>
     </div>
 
-    <!-- the clapper: one clap on load, then it rests on the desk -->
     <div class="clap" aria-hidden="true">
       <svg viewBox="0 0 380 330">
         <g stroke="#22251f" stroke-width="2" stroke-linejoin="round">
-          <!-- body -->
-          <rect x="40" y="106" width="300" height="180" rx="10" fill="#262a24"/>
+          <rect x="40" y="106" width="300" height="180" rx="10" fill="#1b1e19"/>
           <text x="66" y="152" font-family="Fraunces, Georgia, serif" font-size="26" fill="#f6f4ed" stroke="none" font-weight="600">NEXUS</text>
           <text x="66" y="188" font-family="ui-monospace, Consolas, monospace" font-size="16" fill="#9aa08e" stroke="none" letter-spacing="2">SCENE 01 · TAKE ∞</text>
           <path d="M66 206 H314" stroke="#3d423a" stroke-width="1.5"/>
-          <text x="66" y="232" font-family="ui-monospace, Consolas, monospace" font-size="15" fill="#c05621" stroke="none" letter-spacing="3">00:00:01:12</text>
+          <text x="66" y="232" font-family="ui-monospace, Consolas, monospace" font-size="15" fill="#e07636" stroke="none" letter-spacing="3">00:00:01:12</text>
           <text x="66" y="262" font-family="system-ui" font-size="13" fill="#6e7566" stroke="none">director — you · status — client approved</text>
-          <!-- jaw (animated) -->
           <g class="jaw">
             <rect x="40" y="66" width="300" height="42" rx="8" fill="#f6f4ed"/>
             <g clip-path="url(#stripes)">
@@ -218,11 +238,10 @@
             <clipPath id="stripes"><rect x="40" y="66" width="300" height="42" rx="8"/></clipPath>
             <rect x="40" y="66" width="300" height="42" rx="8" fill="none"/>
           </g>
-          <!-- hinge + scribble -->
-          <circle cx="46" cy="106" r="5" fill="#c05621"/>
+          <circle cx="46" cy="106" r="5" fill="#e07636"/>
         </g>
-        <path d="M296 66 C 312 40, 348 34, 366 44 M356 38 L368 44 L360 56" fill="none" stroke="#c05621" stroke-width="2.4" stroke-linecap="round" opacity="0.8"/>
-        <text x="268" y="30" font-family="Fraunces, Georgia, serif" font-size="15" font-style="italic" fill="#c05621" font-weight="600">scene one, take anything</text>
+        <path d="M296 66 C 312 40, 348 34, 366 44 M356 38 L368 44 L360 56" fill="none" stroke="#e07636" stroke-width="2.4" stroke-linecap="round" opacity="0.8"/>
+        <text x="252" y="30" font-family="Fraunces, Georgia, serif" font-size="15" font-style="italic" fill="#e07636" font-weight="600">scene one, take anything</text>
       </svg>
     </div>
   </div>
@@ -231,96 +250,96 @@
 
   <section id="how">
     <h2>How everything connects</h2>
-    <p class="sub">One bucket holds every byte. One small server serves it. The board is just the paper it’s pinned to.</p>
+    <p class="sub">One wall holds the work. Pin groups, move projects, open a project to find its media and scripts.</p>
     <div class="board-wrap">
-      <svg viewBox="0 0 1000 500" role="img" aria-label="Hand-drawn diagram: your team pins groups, groups hold projects, projects move across a pipeline and hold media and scripts, and everyone watches the same board">
-        <g fill="none" stroke="#22251f" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <svg viewBox="0 0 1060 500" role="img" aria-label="Hand-drawn diagram: your team pins groups, groups hold projects, projects move across a pipeline and hold media and scripts, and everyone watches the same board">
+        <g fill="none" class="d-ink" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           <g transform="translate(40,180) rotate(-2)">
-            <rect x="0" y="0" width="130" height="110" rx="2" fill="#fcf2cd" stroke="#d8c890" stroke-width="1"/>
-            <path d="M28 -6 L44 -10 L40 4 Z" fill="rgba(255,255,255,0.6)" stroke="rgba(60,54,38,0.15)"/>
+            <rect class="d-sticky-1" x="0" y="0" width="130" height="110" rx="2" stroke-width="1"/>
+            <path d="M28 -6 L44 -10 L40 4 Z" fill="rgba(255,255,255,0.35)" stroke="rgba(128,120,100,0.4)"/>
             <circle cx="42" cy="42" r="16"/>
             <path d="M36 40 a6 6 0 0 1 12 0 M30 62 q12 -14 24 0"/>
-            <text x="65" y="38" font-family="Fraunces, Georgia, serif" font-size="16" fill="#22251f" stroke="none" font-weight="600">you &amp;</text>
-            <text x="65" y="58" font-family="Fraunces, Georgia, serif" font-size="16" fill="#22251f" stroke="none" font-weight="600">the team</text>
-            <text x="18" y="96" font-family="system-ui" font-size="10.5" fill="#8a7f5a" stroke="none">editors, admins, viewers</text>
+            <text class="d-text" x="65" y="38" font-family="Fraunces, Georgia, serif" font-size="16" font-weight="600">you &amp;</text>
+            <text class="d-text" x="65" y="58" font-family="Fraunces, Georgia, serif" font-size="16" font-weight="600">the team</text>
+            <text class="d-muted" x="14" y="96" font-family="system-ui" font-size="10.5">editors, admins, viewers</text>
           </g>
-          <path d="M186 226 C 216 222, 238 218, 262 214" stroke-dasharray="1 7"/>
-          <path d="M254 208 L266 214 L255 221"/>
+          <path class="d-line" d="M186 226 C 216 222, 238 218, 262 214" stroke-dasharray="1 7"/>
+          <path class="d-line" d="M254 208 L266 214 L255 221"/>
           <g transform="translate(272,140)">
-            <text x="10" y="-14" font-family="Fraunces, Georgia, serif" font-size="17" fill="#22251f" stroke="none" font-weight="600">groups</text>
+            <text class="d-text" x="10" y="-14" font-family="Fraunces, Georgia, serif" font-size="17" font-weight="600">groups</text>
             <g transform="translate(0,0) rotate(-1.5)">
-              <path d="M0 10 L38 10 L46 0 L104 0 L104 58 L0 58 Z" fill="#e3efd8" stroke="#a3b78e"/>
-              <text x="14" y="38" font-family="system-ui" font-size="11.5" fill="#5a6b4a" stroke="none">Personal</text>
+              <path class="d-sticky-2" d="M0 10 L38 10 L46 0 L104 0 L104 58 L0 58 Z"/>
+              <text class="d-text" x="14" y="38" font-family="system-ui" font-size="11.5">Personal</text>
             </g>
             <g transform="translate(52,58) rotate(1.4)">
-              <path d="M0 10 L38 10 L46 0 L104 0 L104 58 L0 58 Z" fill="#fae3dc" stroke="#cfa294"/>
-              <text x="14" y="38" font-family="system-ui" font-size="11.5" fill="#8a5c50" stroke="none">Client work</text>
+              <path class="d-sticky-3" d="M0 10 L38 10 L46 0 L104 0 L104 58 L0 58 Z"/>
+              <text class="d-text" x="14" y="38" font-family="system-ui" font-size="11.5">Client work</text>
             </g>
-            <text x="6" y="146" font-family="system-ui" font-size="10.5" fill="#9a9484" stroke="none">one folder each,</text>
-            <text x="6" y="160" font-family="system-ui" font-size="10.5" fill="#9a9484" stroke="none">names are just labels</text>
+            <text class="d-muted" x="6" y="146" font-family="system-ui" font-size="10.5">one folder each,</text>
+            <text class="d-muted" x="6" y="160" font-family="system-ui" font-size="10.5">names are just labels</text>
           </g>
-          <path d="M436 236 C 466 232, 488 228, 510 224" stroke-dasharray="1 7"/>
-          <path d="M502 218 L514 224 L503 231"/>
+          <path class="d-line" d="M436 236 C 466 232, 488 228, 510 224" stroke-dasharray="1 7"/>
+          <path class="d-line" d="M502 218 L514 224 L503 231"/>
           <g transform="translate(520,120)">
-            <text x="6" y="-14" font-family="Fraunces, Georgia, serif" font-size="17" fill="#22251f" stroke="none" font-weight="600">the board</text>
+            <text class="d-text" x="6" y="-14" font-family="Fraunces, Georgia, serif" font-size="17" font-weight="600">the board</text>
             <g transform="translate(0,0)">
-              <rect x="0" y="0" width="86" height="150" rx="6" fill="#fdfcf8" stroke="#d3ccba"/>
-              <text x="12" y="20" font-family="system-ui" font-size="10.5" fill="#6e6a5e" stroke="none">pending</text>
-              <rect x="10" y="30" width="66" height="34" rx="4" fill="#f1eee3" stroke="#d3ccba"/>
-              <rect x="10" y="72" width="66" height="34" rx="4" fill="#f1eee3" stroke="#d3ccba"/>
+              <rect class="d-paper" x="0" y="0" width="86" height="150" rx="6"/>
+              <text class="d-muted" x="12" y="20" font-family="system-ui" font-size="10.5">pending</text>
+              <rect class="d-paper" x="10" y="30" width="66" height="34" rx="4"/>
+              <rect class="d-paper" x="10" y="72" width="66" height="34" rx="4"/>
             </g>
             <g transform="translate(98,0)">
-              <rect x="0" y="0" width="86" height="150" rx="6" fill="#fdfcf8" stroke="#d3ccba"/>
-              <text x="12" y="20" font-family="system-ui" font-size="10.5" fill="#a97b2f" stroke="none">in process</text>
-              <rect x="10" y="30" width="66" height="34" rx="4" fill="#f6e8d4" stroke="#c05621" stroke-opacity="0.55"/>
-              <path d="M14 40 h48 M14 48 h36" stroke="#c05621" stroke-opacity="0.4" stroke-width="1.2"/>
-              <rect x="10" y="74" width="66" height="34" rx="4" fill="#f1eee3" stroke="#d3ccba"/>
+              <rect class="d-paper" x="0" y="0" width="86" height="150" rx="6"/>
+              <text class="d-accent-text" x="12" y="20" font-family="system-ui" font-size="10.5">in process</text>
+              <rect class="d-sticky-3" x="10" y="30" width="66" height="34" rx="4"/>
+              <path class="d-accent" d="M14 40 h48 M14 48 h36" stroke-opacity="0.5" stroke-width="1.2"/>
+              <rect class="d-paper" x="10" y="74" width="66" height="34" rx="4"/>
             </g>
             <g transform="translate(196,0)">
-              <rect x="0" y="0" width="86" height="150" rx="6" fill="#fdfcf8" stroke="#d3ccba"/>
-              <text x="14" y="20" font-family="system-ui" font-size="10.5" fill="#5f7a4e" stroke="none">done</text>
+              <rect class="d-paper" x="0" y="0" width="86" height="150" rx="6"/>
+              <text class="d-text" x="14" y="20" font-family="system-ui" font-size="10.5">done</text>
               <path d="M18 44 L26 54 L44 30" stroke="#5f7a4e" stroke-width="2"/>
-              <rect x="10" y="74" width="66" height="34" rx="4" fill="#e3efd8" stroke="#a3b78e"/>
+              <rect class="d-sticky-2" x="10" y="74" width="66" height="34" rx="4"/>
             </g>
             <g transform="translate(84,58) rotate(6)">
-              <rect x="0" y="0" width="28" height="20" rx="3" fill="#fdfcf8" stroke="#c05621"/>
-              <path d="M-8 -8 C -2 -12, 6 -12, 12 -9" stroke="#c05621" stroke-opacity="0.6" stroke-dasharray="2 4"/>
+              <rect class="d-paper" x="0" y="0" width="28" height="20" rx="3"/>
+              <path class="d-accent" d="M-8 -8 C -2 -12, 6 -12, 12 -9" stroke-opacity="0.6" stroke-dasharray="2 4"/>
             </g>
-            <text x="4" y="172" font-family="system-ui" font-size="10.5" fill="#9a9484" stroke="none">drag projects across —</text>
-            <text x="4" y="186" font-family="system-ui" font-size="10.5" fill="#9a9484" stroke="none">everyone sees it in seconds</text>
+            <text class="d-muted" x="4" y="172" font-family="system-ui" font-size="10.5">drag projects across —</text>
+            <text class="d-muted" x="4" y="186" font-family="system-ui" font-size="10.5">everyone sees it in seconds</text>
           </g>
-          <path d="M820 196 C 848 190, 868 184, 888 178" stroke-dasharray="1 7"/>
-          <path d="M880 171 L892 177 L881 185"/>
+          <path class="d-line" d="M820 196 C 848 190, 868 184, 888 178" stroke-dasharray="1 7"/>
+          <path class="d-line" d="M880 171 L892 177 L881 185"/>
           <g transform="translate(830,60) rotate(1)">
-            <text x="0" y="-12" font-family="Fraunces, Georgia, serif" font-size="17" fill="#22251f" stroke="none" font-weight="600">every project</text>
-            <path d="M0 12 L44 12 L54 0 L190 0 L190 118 L0 118 Z" fill="#fdfcf8" stroke="#d3ccba"/>
-            <rect x="14" y="30" width="74" height="56" rx="4" fill="#dfeaf2" stroke="#93aec5"/>
+            <text class="d-text" x="0" y="-12" font-family="Fraunces, Georgia, serif" font-size="17" font-weight="600">every project</text>
+            <path class="d-paper" d="M0 12 L44 12 L54 0 L190 0 L190 118 L0 118 Z"/>
+            <rect class="d-sticky-4" x="14" y="30" width="74" height="56" rx="4"/>
             <circle cx="51" cy="58" r="17"/>
             <circle cx="51" cy="58" r="4"/>
             <circle cx="43" cy="49" r="3.4"/><circle cx="59" cy="49" r="3.4"/>
             <circle cx="43" cy="67" r="3.4"/><circle cx="59" cy="67" r="3.4"/>
-            <text x="24" y="102" font-family="system-ui" font-size="10.5" fill="#5d7488" stroke="none">media</text>
+            <text class="d-muted" x="30" y="102" font-family="system-ui" font-size="10.5">media</text>
             <g transform="translate(104,28) rotate(3)">
-              <rect x="0" y="0" width="66" height="58" rx="3" fill="#fbfaf4" stroke="#d3ccba"/>
-              <path d="M9 12 h48 M9 22 h48 M9 32 h36" stroke="#c9c2ae" stroke-width="1.2"/>
-              <path d="M60 4 L68 12 L60 12 Z" fill="#f1eee3" stroke="#d3ccba"/>
+              <rect class="d-paper" x="0" y="0" width="66" height="58" rx="3"/>
+              <path class="d-line" d="M9 12 h48 M9 22 h48 M9 32 h36" stroke-width="1.2"/>
+              <path class="d-paper" d="M60 4 L68 12 L60 12 Z"/>
             </g>
-            <text x="106" y="102" font-family="system-ui" font-size="10.5" fill="#8a8474" stroke="none">scripts</text>
-            <text x="2" y="138" font-family="system-ui" font-size="10.5" fill="#9a9484" stroke="none">streams, downloads,</text>
-            <text x="2" y="152" font-family="system-ui" font-size="10.5" fill="#9a9484" stroke="none">milestone copies — all in one place</text>
+            <text class="d-muted" x="112" y="102" font-family="system-ui" font-size="10.5">scripts</text>
+            <text class="d-muted" x="2" y="138" font-family="system-ui" font-size="10.5">streams, downloads,</text>
+            <text class="d-muted" x="2" y="152" font-family="system-ui" font-size="10.5">milestone copies</text>
           </g>
-          <path d="M760 70 C 700 20, 420 8, 150 60" stroke="#c05621" stroke-opacity="0.65" stroke-dasharray="7 6"/>
-          <path d="M162 50 L148 61 L164 70" stroke="#c05621" stroke-opacity="0.65"/>
+          <path class="d-accent" d="M760 70 C 700 20, 420 8, 150 60" stroke-opacity="0.65" stroke-dasharray="7 6"/>
+          <path class="d-accent" d="M162 50 L148 61 L164 70" stroke-opacity="0.65"/>
           <g transform="translate(390,8) rotate(-1)">
-            <rect x="0" y="0" width="150" height="40" rx="2" fill="#dfeaf2" stroke="#93aec5"/>
-            <text x="12" y="17" font-family="Fraunces, Georgia, serif" font-size="13.5" fill="#3f5871" stroke="none" font-weight="600">no sync conflicts —</text>
-            <text x="12" y="32" font-family="system-ui" font-size="10.5" fill="#5d7488" stroke="none">every edit merges, nothing is lost</text>
+            <rect class="d-sticky-4" x="0" y="0" width="150" height="40" rx="2"/>
+            <text class="d-text" x="12" y="17" font-family="Fraunces, Georgia, serif" font-size="13.5" font-weight="600">no sync conflicts —</text>
+            <text class="d-muted" x="12" y="32" font-family="system-ui" font-size="10.5">every edit merges, nothing is lost</text>
           </g>
-          <g transform="translate(452,320) rotate(-2)">
-            <text x="0" y="0" font-family="Fraunces, Georgia, serif" font-size="21" fill="#c05621" stroke="none" font-weight="600">everything connects</text>
-            <path d="M2 10 C 90 16, 210 16, 296 8" stroke="#c05621" stroke-opacity="0.7" stroke-width="2.2"/>
+          <g transform="translate(452,330) rotate(-2)">
+            <text class="d-accent-text" x="0" y="0" font-family="Fraunces, Georgia, serif" font-size="21" font-weight="600">everything connects</text>
+            <path class="d-accent" d="M2 10 C 90 16, 210 16, 296 8" stroke-opacity="0.7" stroke-width="2.2"/>
           </g>
-          <text x="452" y="368" font-family="system-ui" font-size="13" fill="#6e6a5e" stroke="none">delete is undoable · restores are real · activity remembers who did what</text>
+          <text class="d-muted" x="452" y="378" font-family="system-ui" font-size="13">delete is undoable, restores are real, activity remembers who did what</text>
         </g>
       </svg>
     </div>
@@ -351,31 +370,59 @@
         <p>Share a link, not a password. Clients and viewers see the board read-only; revoke them in one click when the job wraps.</p>
       </div>
     </div>
-    <div class="hood">
-      <b>Under the hood, on purpose:</b> your files live in <b>object storage</b>, served by <b>one small server</b> —
-      no Google accounts, no API quotas, no desktop app to install. The whole workspace is one document
-      (<code>master/nexus.json</code>) plus your files, synced with <b>verify-then-write merging</b> —
-      two people typing at once can’t clobber each other.
+  </section>
+
+  <section>
+    <h2>Start in three moves</h2>
+    <p class="sub">From empty wall to full production desk.</p>
+    <div class="moves">
+      <div class="move">
+        <div class="num">1</div>
+        <h3>Open the console</h3>
+        <p>Set the workspace up once and make your own admin login. That’s the whole install.</p>
+      </div>
+      <div class="move">
+        <div class="num">2</div>
+        <h3>Build the wall</h3>
+        <p>Add a group for each kind of work, pin projects to the board, upload clips, write scripts.</p>
+      </div>
+      <div class="move">
+        <div class="num">3</div>
+        <h3>Bring the room</h3>
+        <p>Editors get logins, clients get viewer links. Everyone watches the same board move.</p>
+      </div>
     </div>
   </section>
 
   <section class="final">
     <h2>Roll camera</h2>
-    <p class="sub">The console opens straight onto the live board. Bring a login, or bring a link.</p>
+    <p class="sub">The console opens straight onto the live board.</p>
     <div class="cta-row">
       <a class="btn primary big" href="/">Open the console</a>
-      <a class="btn" href="/login">I have a login</a>
     </div>
   </section>
 
   <footer>
     <span>Nexus — a content desk for small teams</span>
     <span class="spacer"></span>
-    <a href="/login">sign in</a>
     <a href="/security">security notes</a>
     <a href="/">open the console</a>
   </footer>
 
 </div>
+<script>
+  var btn = document.getElementById('theme');
+  function paint() {
+    btn.textContent = document.documentElement.dataset.theme === 'dark' ? '☀️' : '🌙';
+  }
+  btn.addEventListener('click', function () {
+    var next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    if (next === 'light') delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = 'dark';
+    try { localStorage.setItem('nexus.theme', next); } catch (e) {}
+    paint();
+  });
+  paint();
+</script>
 </body>
 </html>

@@ -11,7 +11,7 @@ import { checkDraftRecovery, recommitDraft, discardDraft } from '../sync/writer'
 import { runHealthChecks, type HealthIssue } from '../diagnostics/health'
 import { IssueBanner, Modal, StatusBanners, SyncPill } from '../ui/components'
 import { config } from '../config'
-import { Login } from '../ui/pages/Login'
+import { WelcomeGate } from '../ui/WelcomeGate'
 import { Init } from '../ui/pages/Init'
 import { Setup } from '../ui/pages/Setup'
 import { UploadTile } from '../ui/UploadTile'
@@ -150,7 +150,7 @@ function AppBody(): ReactNode {
   if (needsLogin) {
     return (
       <Shell bare>
-        <Login viewerTokenFromLink={new URLSearchParams(location.search).get('vw')} />
+        <WelcomeGate viewerTokenFromLink={new URLSearchParams(location.search).get('vw')} />
       </Shell>
     )
   }
