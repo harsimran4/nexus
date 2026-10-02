@@ -1,13 +1,11 @@
-// Content preview/download helpers. Key-first (works for viewers and doubles
-// as a continuous key-path probe), bearer fallback (editors keep working when
-// the key is broken).
+// Content preview/download helpers. Everything is a same-origin /files/<key>
+// fetch — viewers and editors share one path.
 
-import { downloadFile, downloadFileProgress, DriveError, hasBearer, type Credential } from './client'
+import { downloadFile, downloadFileProgress, DriveError } from './client'
 
-/** Trigger a browser download of a Drive file (respects key/bearer path). */
-export async function downloadToBrowser(fileId: string, filename: string, cred?: Credential): Promise<void> {
-  const effective: Credential = cred ?? { mode: hasBearer() ? 'auto' : 'key' }
-  const blob = await downloadFile(fileId, effective)
+/** Trigger a browser download of a stored file. */
+export async function downloadToBrowser(fileId: string, filename: string): Promise<void> {
+  const blob = await downloadFile(fileId)
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
@@ -22,10 +20,8 @@ export async function downloadToBrowserProgress(
   fileId: string,
   filename: string,
   onProgress: (pct: number | null) => void,
-  cred?: Credential,
 ): Promise<void> {
-  const effective: Credential = cred ?? { mode: hasBearer() ? 'auto' : 'key' }
-  const blob = await downloadFileProgress(fileId, effective, (received, total) =>
+  const blob = await downloadFileProgress(fileId, (received, total) =>
     onProgress(total ? Math.min(100, Math.round((received / total) * 100)) : null),
   )
   const url = URL.createObjectURL(blob)
@@ -39,27 +35,21 @@ export async function downloadToBrowserProgress(
 export function describeError(e: unknown): { code: string; message: string; fix: string } {
   if (e instanceof DriveError) {
     switch (e.kind) {
-      case 'downloadRestricted':
-        return {
-          code: 'downloadRestricted',
-          message: 'Drive blocked this download',
-          fix: 'The folder has "Viewers can\'t download" enabled — anyone with share access can turn it off in Drive (Sharing settings).',
-        }
       case 'notFound':
         return {
           code: 'notFound',
-          message: 'File not visible to your account',
-          fix: 'The file may not be link-shared, or your login can\'t see it. Editors: sign in again from the login page.',
+          message: 'File not found in storage',
+          fix: 'The file may have been deleted, or your login can\'t see it. Editors: sign in again from the login page.',
         }
       case 'auth':
-        return { code: 'auth', message: 'Sign-in required', fix: 'Your session expired — sign in again. (Viewers: ask an admin to check the API key.)' }
+        return { code: 'auth', message: 'Sign-in required', fix: 'Your session expired — sign in again.' }
       case 'rateLimit':
-        return { code: 'rateLimit', message: 'Drive is busy', fix: 'Wait a moment and retry — quota recovers automatically.' }
+        return { code: 'rateLimit', message: 'Storage is busy', fix: 'Wait a moment and retry — it recovers automatically.' }
       case 'permission':
         return {
           code: 'permission',
-          message: 'Access denied by Drive',
-          fix: 'Check the folder is shared "Anyone with the link — Viewer" and the API key restrictions allow this site.',
+          message: 'Access denied',
+          fix: 'Your session may lack access to this content — sign in again.',
         }
       case 'network':
         return { code: 'network', message: 'Network error', fix: 'Check your connection and retry.' }

@@ -1,10 +1,10 @@
-// Startup + continuous probes. Every Google-side failure gets a named,
-// actionable banner — the app never breaks silently. Probes are cheap
-// (files.get = 5 quota units) and run on the key path so a broken key
-// surfaces immediately.
+// Startup + continuous probes. Every storage-side failure gets a named,
+// actionable banner — the app never breaks silently. Probes are cheap (one
+// public meta read) and run on the same path viewers use, so a broken public
+// route surfaces immediately.
 
-import { config } from '../config'
-import { getMeta, readFile, DriveError, hasBearer, type Credential } from '../drive/client'
+import { getMeta, DriveError } from '../drive/client'
+import { DOC_KEY } from '../server/keys'
 import { storeGet, type SyncStatus } from '../sync/store'
 
 export interface HealthIssue {
@@ -19,74 +19,33 @@ export function originCheck(): HealthIssue | null {
     return {
       level: 'error',
       code: 'origin',
-      message: 'Opened as a local file — Google sign-in cannot work from file://',
-      fix: 'Open Nexus from its hosted URL (GitHub Pages), or serve it via http://localhost:5173 for development.',
+      message: 'Opened as a local file — the app needs its server for storage access',
+      fix: 'Open Nexus from its hosted URL, or run it via `npm run dev` for development.',
     }
   }
   return null
 }
 
-export function missingConfigIssue(): HealthIssue | null {
-  const missing = config.clientId && config.apiKey ? [] : ['credentials']
-  if (missing.length === 0) return null
-  return {
-    level: 'error',
-    code: 'config',
-    message: 'Build config incomplete (client id / API key)',
-    fix: 'Copy .env.example to .env.local, fill both values, rebuild. See README "Google Cloud setup".',
-  }
-}
-
-/** Probe the anonymous key path with the effective key (override wins over baked). */
-export async function probeKeyPath(nexusId: string, apiKey: string): Promise<HealthIssue | null> {
-  const cred: Credential = { mode: 'key', apiKey }
+/** Probe the public read path with the workspace doc's key — the exact path
+ *  anonymous visitors and viewers depend on. */
+export async function probePublicRead(nexusId: string): Promise<HealthIssue | null> {
   try {
-    await getMeta(nexusId, cred)
+    await getMeta(nexusId)
     return null
   } catch (e) {
     if (e instanceof DriveError) {
       if (e.kind === 'notFound')
         return {
           level: 'error',
-          code: 'notShared',
-          message: 'Workspace not link-shared (or wrong file id)',
-          fix: 'In Drive: Nexus Root → Share → "Anyone with the link — Viewer". Then re-run the health check.',
-        }
-      if (e.kind === 'permission')
-        return {
-          level: 'error',
-          code: 'keyRejected',
-          message: 'API key rejected',
-          fix: 'Check the key still exists, is restricted to the Drive API, and its HTTP-referrer list includes this site. Admin can paste a fresh key in Admin → Settings (no redeploy needed).',
+          code: 'workspaceMissing',
+          message: 'Workspace file not found in storage',
+          fix: 'The bucket has no master/nexus.json — run /init (or the migration script) to create it.',
         }
       if (e.kind === 'rateLimit')
-        return { level: 'warn', code: 'quota', message: 'Drive quota exhausted for now', fix: 'Waits automatically; quota resets each minute.' }
+        return { level: 'warn', code: 'quota', message: 'Storage is throttling requests for now', fix: 'Waits automatically; try again in a minute.' }
     }
-    return { level: 'warn', code: 'keyUnknown', message: 'Key path unreachable', fix: 'Viewers cannot read until the key works; editors can still work via their Nexus login.' }
+    return { level: 'warn', code: 'publicReadUnknown', message: 'Public read path unreachable', fix: 'Viewers cannot read until it works; editors can still work via their Nexus login.' }
   }
-}
-
-/** Detect the "Viewers can't download" toggle — it silently 403s alt=media for viewers. */
-export async function probeDownloadRestriction(nexusId: string, apiKey: string): Promise<HealthIssue | null> {
-  try {
-    await readFile(nexusId, { mode: 'key', apiKey })
-    return null
-  } catch (e) {
-    if (e instanceof DriveError && e.kind === 'downloadRestricted') {
-      return {
-        level: 'error',
-        code: 'downloadRestricted',
-        message: 'Drive "Viewers can\'t download" is ON — viewers cannot read content',
-        fix: 'In Drive: Nexus Root → Share → turn OFF "Viewers can\'t download" (it silently blocks the app\'s viewer reads).',
-      }
-    }
-    return null // key-path probe already reported its own issue
-  }
-}
-
-export function consentIssue(): HealthIssue | null {
-  if (!hasBearer()) return null
-  return null // tokenClient owns expiry; writer surfaces 'reconnect' on 401
 }
 
 export function docSizeIssue(): HealthIssue | null {
@@ -115,22 +74,28 @@ export async function runHealthChecks(opts: { deep?: boolean } = {}): Promise<He
   const issues: HealthIssue[] = []
   const origin = originCheck()
   if (origin) return [origin]
-  const cfg = missingConfigIssue()
-  if (cfg) return [cfg]
 
   const doc = storeGet().doc
   if (doc?.ids.nexusFileId) {
-    const key = doc.settings.api.keyOverride ?? config.apiKey
-    const keyIssue = await probeKeyPath(doc.ids.nexusFileId, key)
-    if (keyIssue) issues.push(keyIssue)
+    const readIssue = await probePublicRead(doc.ids.nexusFileId)
+    if (readIssue) issues.push(readIssue)
     else if (opts.deep) {
-      // Deep probe transfers the file body (detects the "Viewers can't
-      // download" toggle) — boot + the Admin button only, never the 30s loop.
-      const dl = await probeDownloadRestriction(doc.ids.nexusFileId, key)
-      if (dl) issues.push(dl)
+      // Deep probe transfers the doc body — boot + the Admin button only,
+      // never the 30s loop.
+      try {
+        await getMeta(DOC_KEY)
+      } catch (e) {
+        const issue = e instanceof DriveError ? { kind: e.kind as string } : { kind: 'unknown' }
+        issues.push({
+          level: 'warn',
+          code: 'docRead',
+          message: 'Workspace doc read failed (' + issue.kind + ')',
+          fix: 'Retry from Admin → Diagnostics; if it persists, check the Worker logs.',
+        })
+      }
     }
   }
-  for (const issue of [consentIssue(), docSizeIssue()]) if (issue) issues.push(issue)
+  for (const issue of [docSizeIssue()]) if (issue) issues.push(issue)
   return issues
 }
 
