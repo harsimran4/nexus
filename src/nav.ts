@@ -2,8 +2,6 @@
 // they don't each need the router instance. router.tsx binds the real
 // router at startup.
 
-import type { Router } from '@tanstack/react-router'
-
 let bound: { navigate: (to: string) => void } | null = null
 
 export function bindRouter(r: { navigate: (opts: { to: string }) => void }): void {

@@ -14,13 +14,11 @@ import {
   resetUserPassword,
   restoreSnapshot,
   revokeViewer,
-  setApiKeyOverride,
   setUserDisabled,
   updateSettings,
 } from '../../state/actions'
 import { BUCKETS, ROLES, type Bucket, type NexusDoc, type Role } from '../../types/schema'
 import { runHealthChecks, type HealthIssue } from '../../diagnostics/health'
-import { workspaceUsesSystemFolders } from '../../drive/bootstrap'
 import { writerId } from '../../sync/writer'
 import { hlcNow } from '../../util/hlc'
 import { PageQuote } from '../components'
@@ -34,8 +32,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'maintenance', label: 'Maintenance' },
 ]
 
-const loginLink = (raw: string, rootFolderId?: string): string =>
-  `${location.origin}/#/login?vw=${raw}${rootFolderId ? `&t=${rootFolderId}` : ''}`
+const loginLink = (raw: string): string => `${location.origin}/login?vw=${raw}`
 
 const slugify = (label: string): string =>
   label.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
@@ -452,16 +449,12 @@ function ViewersTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
         </div>
       )}
 
-      {minting && (
-        <MintViewerModal rootFolderId={doc.ids.rootFolderId} onClose={() => setMinting(false)} />
-      )}
+      {minting && <MintViewerModal onClose={() => setMinting(false)} />}
     </div>
   )
 }
 
-function MintViewerModal(
-  { rootFolderId, onClose }: { rootFolderId: string; onClose: () => void },
-): React.JSX.Element {
+function MintViewerModal({ onClose }: { onClose: () => void }): React.JSX.Element {
   const [name, setName] = useState('')
   const [note, setNote] = useState('')
   const [reveal, setReveal] = useState<{ raw: string; link: string } | null>(null)
@@ -473,7 +466,7 @@ function MintViewerModal(
     setError(null)
     try {
       const { raw } = await mintViewerToken(name.trim(), note.trim())
-      setReveal({ raw, link: loginLink(raw, rootFolderId) })
+      setReveal({ raw, link: loginLink(raw) })
     } catch (e) {
       setError(errText(e))
     }
@@ -532,8 +525,6 @@ function SettingsTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
   const [newId, setNewId] = useState('')
   const [newBucket, setNewBucket] = useState<Bucket>('todo')
   const [labelDraft, setLabelDraft] = useState('')
-  const [keyDraft, setKeyDraft] = useState(doc.settings.api.keyOverride ?? '')
-  const [keySaved, setKeySaved] = useState(false)
   const commitLabel = useDebouncedCommit(800)
 
   const addLabel = () => {
@@ -729,39 +720,6 @@ function SettingsTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
         </label>
         <div className="muted small">Hides assignee and user names from viewers and anonymous visitors.</div>
       </div>
-
-      <div className="card">
-        <h2>Drive API key override</h2>
-        <p className="muted small" style={{ marginTop: 0 }}>
-          Read-only viewers fetch through this key. Blank = the key baked into the build.
-        </p>
-        <div className="row wrap mb8">
-          <input
-            className="input mono"
-            style={{ maxWidth: 420 }}
-            placeholder="AIza…"
-            value={keyDraft}
-            onChange={(e) => {
-              setKeyDraft(e.target.value)
-              setKeySaved(false)
-            }}
-          />
-          <button
-            className="btn primary"
-            onClick={() => {
-              setApiKeyOverride(keyDraft.trim() || null)
-              setKeySaved(true)
-            }}
-          >
-            Save
-          </button>
-          {keySaved && <span className="small muted">Saved — takes effect on the next read.</span>}
-        </div>
-        <div className="muted small">
-          Rotation order: create the new key in Google Cloud → set it here → verify reads work →
-          revoke the old key LAST.
-        </div>
-      </div>
     </div>
   )
 }
@@ -773,12 +731,10 @@ function SettingsTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
 function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
   const [issues, setIssues] = useState<HealthIssue[] | null>(null)
   const [running, setRunning] = useState(false)
-  const [reorgState, setReorgState] = useState<'idle' | 'busy' | 'done' | 'error'>('idle')
-  const [reorgMsg, setReorgMsg] = useState<string | null>(null)
   const [snapBusy, setSnapBusy] = useState<string | null>(null)
   const [snapMsg, setSnapMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null)
   const [backupBusy, setBackupBusy] = useState(false)
-  const reorganized = workspaceUsesSystemFolders(doc)
+  const [storage, setStorage] = useState<{ bucket: string; endpoint: string; region: string } | null>(null)
 
   const downloadRaw = async (raw: string, filename: string): Promise<void> => {
     const blob = new Blob([raw], { type: 'application/json' })
@@ -795,7 +751,7 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
     setSnapMsg(null)
     try {
       const { readFile } = await import('../../drive/client')
-      const raw = await readFile(s.fileId, { mode: 'auto' })
+      const raw = await readFile(s.fileId)
       await downloadRaw(raw, `nexus-snapshot-${(s.note || 'copy').replace(/[^\w-]+/g, '_')}.json`)
     } catch (e) {
       setSnapMsg({ kind: 'error', text: errText(e) })
@@ -821,30 +777,12 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
       const { readFile } = await import('../../drive/client')
       const nexusId = doc.ids.nexusFileId
       if (!nexusId) throw new Error('Workspace file id unknown')
-      const raw = await readFile(nexusId, { mode: 'auto' })
+      const raw = await readFile(nexusId)
       await downloadRaw(raw, `nexus-backup-${new Date().toISOString().slice(0, 10)}.json`)
     } catch (e) {
       setSnapMsg({ kind: 'error', text: errText(e) })
     }
     setBackupBusy(false)
-  }
-
-  const reorganize = async () => {
-    if (!confirm(
-      'Reorganize the Drive workspace into system folders?\n\n' +
-      'Creates master/ (nexus.json), snapshots/, groups/ and scripts/ inside the workspace folder.\n\n' +
-      'File IDs never change — the app, links and .env keep working. No content is deleted.',
-    )) return
-    setReorgState('busy')
-    try {
-      const { migrateWorkspaceFolders } = await import('../../drive/bootstrap')
-      const r = await migrateWorkspaceFolders({ mode: 'bearer' })
-      setReorgMsg(`Done — folders created: ${r.created.length ? r.created.join(', ') : 'none (already existed)'}; nexus.json ${r.movedNexus ? 'moved into master/' : 'was already in place'}.`)
-      setReorgState('done')
-    } catch (e) {
-      setReorgMsg(errText(e))
-      setReorgState('error')
-    }
   }
 
   const run = async () => {
@@ -860,30 +798,36 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
   }
 
   const ids: [string, string][] = [
-    ['Root folder id', doc.ids.rootFolderId],
-    ['nexus.json file id', doc.ids.nexusFileId],
+    ['nexus.json key', doc.ids.nexusFileId],
   ]
   const snapshots = [...doc.snapshots].reverse()
+
+  // Admin-only server fn — the bucket facts come from the Worker's secrets/vars.
+  void (async () => {
+    if (storage) return
+    try {
+      const { storageInfoFn } = await import('../../server/fns')
+      const r = await storageInfoFn()
+      if (r.ok) setStorage(r.data)
+    } catch {
+      /* the card simply stays empty */
+    }
+  })()
 
   return (
     <div>
       <div className="card">
-        <div className="spread mb8">
-          <h2>Drive layout</h2>
-          {reorganized ? (
-            <span className="badge done">organized</span>
-          ) : (
-            <button className="btn primary" disabled={reorgState === 'busy'} onClick={() => void reorganize()}>
-              {reorgState === 'busy' ? 'Reorganizing…' : 'Reorganize into system folders'}
-            </button>
-          )}
-        </div>
+        <h2 className="mb8">Storage</h2>
         <p className="muted small" style={{ marginTop: 0 }}>
-          Creates <code>master/</code> (nexus.json), <code>snapshots/</code>, <code>groups/</code> and{' '}
-          <code>scripts/</code> inside the workspace folder. File IDs never change — the app, links and
-          .env keep working; nothing is deleted.
+          All content lives in one OCI Object Storage bucket over the S3-compatible API. Layout:{' '}
+          <code>master/</code> (nexus.json), <code>snapshots/</code>, <code>groups/</code>,{' '}
+          <code>scripts/</code>, <code>trash/</code>.
         </p>
-        {reorgMsg && banner(reorgState === 'error' ? 'error' : 'info', reorgMsg)}
+        <div className="muted small mono" style={{ wordBreak: 'break-all' }}>
+          {storage
+            ? `${storage.bucket} @ ${storage.region}\n${storage.endpoint}`
+            : 'Bucket facts unavailable (admin session required).'}
+        </div>
       </div>
 
       <div className="card">
@@ -895,7 +839,7 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
         </div>
         {issues === null ? (
           <span className="muted small">
-            Probes origin, build config, the Drive API key path, link-sharing and doc size. The app
+            Probes the public read path (the exact route viewers use) and doc size. The app
             also runs these automatically every 30 seconds.
           </span>
         ) : issues.length === 0 ? (
@@ -913,12 +857,12 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
             onClick={async () => {
               const msg =
                 'Wipe ALL groups, projects and scripts?\n\n' +
-                'Their Drive files move to Drive trash (30-day recovery). Your login, settings and the workspace itself are kept.'
+                'Their files move to trash/ in the bucket. Your login, settings and the workspace itself are kept.'
               if (!confirm(msg)) return
               try {
                 const { resetWorkspaceData } = await import('../../state/actions')
                 const r = await resetWorkspaceData()
-                alert(`Wiped: ${r.groups} groups, ${r.projects} projects, ${r.scripts} scripts. Drive files are in Drive trash.`)
+                alert(`Wiped: ${r.groups} groups, ${r.projects} projects, ${r.scripts} scripts. Files are in trash/.`)
               } catch (e) {
                 alert(e instanceof Error ? e.message : 'Wipe failed')
               }
@@ -928,8 +872,8 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
           </button>
         </div>
         <p className="muted small" style={{ marginTop: 0 }}>
-          Removes every group, project and script from the database and moves their Drive files to trash.
-          Your login, other users, settings and the workspace folders are kept. For starting over while testing.
+          Removes every group, project and script from the database and moves their files to trash/.
+          Your login, other users, settings and the system folders are kept. For starting over while testing.
         </p>
       </div>
 
@@ -953,8 +897,8 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
       <div className="card">
         <h2>Snapshots</h2>
         <p className="muted small" style={{ marginTop: 0 }}>
-          Daily copies of nexus.json kept in the Drive “snapshots” folder, newest first. Restoring
-          replaces the workspace with the snapshot's contents — the current state is saved as a
+          Daily copies of nexus.json kept in the bucket's <code>snapshots/</code> prefix, newest first.
+          Restoring replaces the workspace with the snapshot's contents — the current state is saved as a
           “pre-restore” snapshot first.
         </p>
         {snapMsg && banner(snapMsg.kind === 'error' ? 'error' : 'info', snapMsg.text)}
