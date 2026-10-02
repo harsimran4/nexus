@@ -25,15 +25,17 @@ export function b64url(bytes: Uint8Array): string {
   for (const b of bytes) bin += String.fromCharCode(b)
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
-export function b64urlToBytes(str: string): Uint8Array {
+export function b64urlToBytes(str: string): Uint8Array<ArrayBuffer> {
   const pad = str.length % 4 === 0 ? '' : '='.repeat(4 - (str.length % 4))
   const bin = atob(str.replace(/-/g, '+').replace(/_/g, '/') + pad)
   const out = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
   return out
 }
-function utf8(str: string): Uint8Array {
-  return new TextEncoder().encode(str)
+// Uint8Array<ArrayBuffer> (not the ArrayBufferLike default) so the bytes are
+// accepted directly by WebCrypto's BufferSource parameters (TS 7 generics).
+function utf8(str: string): Uint8Array<ArrayBuffer> {
+  return new TextEncoder().encode(str) as Uint8Array<ArrayBuffer>
 }
 
 async function hmacKey(secret: string): Promise<CryptoKey> {
@@ -112,7 +114,7 @@ async function sha256Hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', utf8(input))
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
-function fromB64(b64: string): Uint8Array {
+function fromB64(b64: string): Uint8Array<ArrayBuffer> {
   const bin = atob(b64)
   const out = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
@@ -126,7 +128,7 @@ function toB64(bytes: Uint8Array): string {
 export async function verifyStaticToken(raw: string, hash: string): Promise<boolean> {
   return hash === 'sha256$' + (await sha256Hex(raw))
 }
-async function pbkdf2Bits(password: string, salt: Uint8Array, iterations: number): Promise<ArrayBuffer> {
+async function pbkdf2Bits(password: string, salt: Uint8Array<ArrayBuffer>, iterations: number): Promise<ArrayBuffer> {
   const key = await crypto.subtle.importKey('raw', utf8(password), { name: 'PBKDF2' }, false, ['deriveBits'])
   return crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations, hash: 'SHA-256' }, key, 256)
 }

@@ -9,6 +9,7 @@
 
 import { createServerFn, createMiddleware } from '@tanstack/react-start'
 import { z } from 'zod'
+import type { Session } from './auth'
 import type { DriveErrorKind, FnResult, FileMeta, ListResult } from '../types/storage'
 import { SYSTEM_PREFIXES } from '../types/storage'
 import { DOC_KEY, FOLDER_MARKER } from './keys'
@@ -31,22 +32,21 @@ export const writerAuth = createMiddleware({ type: 'function' })
     }
     return next({ headers: token ? { Authorization: 'Bearer ' + token } : {} })
   })
-  .server(async ({ next, request }) => {
+  .server(async ({ next }) => {
     const { env } = await import('cloudflare:workers')
     const auth = await import('./auth')
-    const session = await auth.verifyToken(env.SESSION_SECRET, auth.bearerFrom(request))
-    if (!session || !auth.requireWriter(session)) {
-      return next({ context: { auth: { ok: false as const, message: 'Sign in required' } } })
-    }
-    if (!(await auth.stillValid(session))) {
-      return next({ context: { auth: { ok: false as const, message: 'Session no longer valid — sign in again' } } })
-    }
-    return next({ context: { auth: { ok: true as const, session } } })
+    // Function middleware doesn't receive the Request object — read it from
+    // the request-scoped ALS context instead.
+    const { getRequest } = await import('@tanstack/react-start/server')
+    const session = await auth.verifyToken(env.SESSION_SECRET, auth.bearerFrom(getRequest()))
+    // One next() call with one context shape — the union is computed first,
+    // so the middleware's inferred context type stays intact.
+    let verdict: { ok: false; message: string } | { ok: true; session: Session }
+    if (!session || !auth.requireWriter(session)) verdict = { ok: false, message: 'Sign in required' }
+    else if (!(await auth.stillValid(session))) verdict = { ok: false, message: 'Session no longer valid — sign in again' }
+    else verdict = { ok: true, session }
+    return next({ context: { auth: verdict } })
   })
-
-interface AuthCtx {
-  auth: { ok: true; session: { uid: string; name: string; role: string } } | { ok: false; message: string }
-}
 
 // ---------------------------------------------------------------------------
 // Meta helpers
@@ -104,10 +104,11 @@ async function sha256Hex(v: string): Promise<string> {
 
 export const loginFn = createServerFn({ method: 'POST' })
   .validator(z.object({ secret: z.string().min(1).max(4096) }))
-  .handler(async ({ data, request }): Promise<FnResult<{ token: string; role: string; name: string; uid: string; expiresIn: number }>> => {
+  .handler(async ({ data }): Promise<FnResult<{ token: string; role: string; name: string; uid: string; expiresIn: number }>> => {
     const { env } = await import('cloudflare:workers')
     const auth = await import('./auth')
-    const ip = request?.headers.get('CF-Connecting-IP') ?? 'unknown'
+    const { getRequest } = await import('@tanstack/react-start/server')
+    const ip = getRequest().headers.get('CF-Connecting-IP') ?? 'unknown'
     if (auth.loginThrottled(ip)) return err('rateLimit', 'Too many login attempts — wait a few minutes and try again')
     try {
       const doc = await auth.loadNexusDoc()
@@ -216,7 +217,7 @@ export const initFn = createServerFn({ method: 'POST' })
 export const docGetFn = createServerFn({ method: 'POST' })
   .middleware([writerAuth])
   .handler(async ({ context }): Promise<FnResult<{ raw: string; etag: string }>> => {
-    if (!(context as AuthCtx).auth.ok) return err('auth', (context as AuthCtx).auth.message)
+    if (!context.auth.ok) return err('auth', context.auth.message)
     try {
       const s3 = await import('./s3')
       const h = await s3.head(DOC_KEY)
@@ -234,7 +235,7 @@ export const docPutFn = createServerFn({ method: 'POST' })
   .validator(z.object({ raw: z.string().max(16 * 1024 * 1024), expectEtag: z.string().optional() }))
   .middleware([writerAuth])
   .handler(async ({ data, context }): Promise<FnResult<{ etag: string }>> => {
-    if (!(context as AuthCtx).auth.ok) return err('auth', (context as AuthCtx).auth.message)
+    if (!context.auth.ok) return err('auth', context.auth.message)
     try {
       const s3 = await import('./s3')
       const auth = await import('./auth')
@@ -300,7 +301,7 @@ export const putTextFn = createServerFn({ method: 'POST' })
   .validator(z.object({ key: z.string().min(1), content: z.string().max(16 * 1024 * 1024), mimeType: z.string().default('text/markdown') }))
   .middleware([writerAuth])
   .handler(async ({ data, context }): Promise<FnResult<FileMeta>> => {
-    if (!(context as AuthCtx).auth.ok) return err('auth', (context as AuthCtx).auth.message)
+    if (!context.auth.ok) return err('auth', context.auth.message)
     try {
       const s3 = await import('./s3')
       const res = await s3.put(data.key, data.content, { contentType: data.mimeType })
@@ -321,7 +322,7 @@ export const folderCreateFn = createServerFn({ method: 'POST' })
   .validator(z.object({ name: z.string().min(1), parentId: z.string().nullable(), key: z.string().min(1).regex(/\/$/) }))
   .middleware([writerAuth])
   .handler(async ({ data, context }): Promise<FnResult<FileMeta>> => {
-    if (!(context as AuthCtx).auth.ok) return err('auth', (context as AuthCtx).auth.message)
+    if (!context.auth.ok) return err('auth', context.auth.message)
     try {
       const s3 = await import('./s3')
       await s3.put(data.key + FOLDER_MARKER, null, { contentType: 'application/x-nexus-folder' })
@@ -335,7 +336,7 @@ export const fileCreateFn = createServerFn({ method: 'POST' })
   .validator(z.object({ name: z.string().min(1), parentId: z.string(), content: z.string(), mimeType: z.string() }))
   .middleware([writerAuth])
   .handler(async ({ data, context }): Promise<FnResult<FileMeta>> => {
-    if (!(context as AuthCtx).auth.ok) return err('auth', (context as AuthCtx).auth.message)
+    if (!context.auth.ok) return err('auth', context.auth.message)
     try {
       const s3 = await import('./s3')
       const { sanitizeNameSegment } = await mimeHelpers()
@@ -359,7 +360,7 @@ export const fileCopyFn = createServerFn({ method: 'POST' })
   .validator(z.object({ key: z.string().min(1), name: z.string().min(1), parentId: z.string() }))
   .middleware([writerAuth])
   .handler(async ({ data, context }): Promise<FnResult<FileMeta>> => {
-    if (!(context as AuthCtx).auth.ok) return err('auth', (context as AuthCtx).auth.message)
+    if (!context.auth.ok) return err('auth', context.auth.message)
     try {
       const s3 = await import('./s3')
       const { sanitizeNameSegment } = await mimeHelpers()
@@ -382,7 +383,7 @@ export const trashFn = createServerFn({ method: 'POST' })
   .validator(z.object({ key: z.string().min(1) }))
   .middleware([writerAuth])
   .handler(async ({ data, context }): Promise<FnResult<{ trashed: number; remaining: boolean }>> => {
-    if (!(context as AuthCtx).auth.ok) return err('auth', (context as AuthCtx).auth.message)
+    if (!context.auth.ok) return err('auth', context.auth.message)
     try {
       const s3 = await import('./s3')
       const stamp = String(Date.now())
@@ -409,7 +410,7 @@ export const renameFn = createServerFn({ method: 'POST' })
   .validator(z.object({ key: z.string().min(1), newName: z.string().min(1) }))
   .middleware([writerAuth])
   .handler(async ({ data, context }): Promise<FnResult<FileMeta>> => {
-    if (!(context as AuthCtx).auth.ok) return err('auth', (context as AuthCtx).auth.message)
+    if (!context.auth.ok) return err('auth', context.auth.message)
     try {
       const s3 = await import('./s3')
       const { sanitizeNameSegment } = await mimeHelpers()
@@ -430,9 +431,10 @@ export const renameFn = createServerFn({ method: 'POST' })
   })
 
 export const uploadSmallFn = createServerFn({ method: 'POST' })
+  .validator((input: FormData) => input) // identity: the payload IS the form
   .middleware([writerAuth])
   .handler(async ({ data, context }): Promise<FnResult<FileMeta>> => {
-    if (!(context as AuthCtx).auth.ok) return err('auth', (context as AuthCtx).auth.message)
+    if (!context.auth.ok) return err('auth', context.auth.message)
     try {
       if (!(data instanceof FormData)) return err('api', 'Expected multipart form data')
       const parentId = String(data.get('parentId') ?? '')
@@ -458,9 +460,8 @@ export const uploadSmallFn = createServerFn({ method: 'POST' })
 export const storageInfoFn = createServerFn({ method: 'POST' })
   .middleware([writerAuth])
   .handler(async ({ context }): Promise<FnResult<{ bucket: string; endpoint: string; region: string }>> => {
-    const c = context as AuthCtx
-    if (!c.auth.ok) return err('auth', c.auth.message)
-    if (c.auth.session.role !== 'admin') return err('permission', 'Admin only')
+    if (!context.auth.ok) return err('auth', context.auth.message)
+    if (context.auth.session.role !== 'admin') return err('permission', 'Admin only')
     const { env } = await import('cloudflare:workers')
     return { ok: true, data: { bucket: env.OCI_S3_BUCKET, endpoint: env.OCI_S3_ENDPOINT, region: env.OCI_S3_REGION } }
   })
