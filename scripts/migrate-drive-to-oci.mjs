@@ -114,6 +114,7 @@ async function s3Put(key, body, contentType) {
 }
 async function s3Del(key) {
   await s3.fetch(objUrl(key), { method: 'DELETE', headers: { 'x-amz-content-sha256': 'UNSIGNED-PAYLOAD' } })
+  if (await s3Head(key)) throw new Error('delete did not take: ' + key)
 }
 async function s3Head(key) {
   const res = await s3.fetch(objUrl(key), { method: 'HEAD', headers: { 'x-amz-content-sha256': 'UNSIGNED-PAYLOAD' } })
@@ -506,7 +507,7 @@ for (const prefix of ['groups/', 'scripts/', 'master/']) {
     if (!res.ok) throw new Error(`list ${prefix} → ${res.status}`)
     const xmlText = await res.text()
     for (const m of xmlText.matchAll(/<Key>([^<]+)<\/Key>/g)) {
-      const key = decodeURIComponent(m[1])
+      const key = decodeURIComponent(m[1].replace(/\+/g, '%20')) // OCI form-encodes spaces as '+'
       if (!expected.has(key)) {
         await s3Del(key)
         strays++

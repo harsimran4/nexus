@@ -21,7 +21,7 @@ import {
   type ScriptStatus,
 } from '../types/schema'
 import { canWrite, canAdmin } from '../auth/session'
-import { commit, touch, recordTombstone, appendActivity, flush, writerId } from '../sync/writer'
+import { commit, touch, recordTombstone, appendActivity, flush, markContentDirty, writerId } from '../sync/writer'
 import { mintToken, passwordPolicyError, stretchedAuth } from '../auth/hashing'
 import { storeGet } from '../sync/store'
 import { decodeHlc } from '../util/hlc'
@@ -391,19 +391,31 @@ export async function uploadToProject(
     const folderId = await ensureProjectFolder(projectId)
     if (!folderId) return { ok: false, error: 'Project folder not ready — try again in a few seconds' }
     const meta = await uploadFile(folderId, file, onProgress)
+    // The project may have MOVED to another group while the bytes were in
+    // flight — the object sits under the old prefix and the doc already
+    // references the new one. Copy the object across, then link the copy.
+    let linked = meta
+    const pNow = storeGet().doc?.projects[projectId]
+    if (pNow?.folderId && !meta.id.startsWith(pNow.folderId)) {
+      const { copyFile, trashFile } = await import('../drive/client')
+      const nameSegment = meta.id.slice(meta.id.indexOf('__') + 2)
+      const moved = await copyFile(meta.id, nameSegment, pNow.folderId)
+      await trashFile(meta.id).catch(() => {})
+      linked = moved
+    }
     commit((d) => {
       const p = d.projects[projectId]
       if (!p) return
-      p.fileIds = [...new Set([...p.fileIds, meta.id])]
+      p.fileIds = [...new Set([...p.fileIds, linked.id])]
       // Assign the upload's section in the same commit as the link — atomic,
       // and skipped if that section was deleted while the upload was in flight.
       if (opts.sectionId && p.mediaSections.some((s) => s.id === opts.sectionId)) {
-        p.mediaSectionOf[meta.id] = opts.sectionId
+        p.mediaSectionOf[linked.id] = opts.sectionId
       }
       touch('projects', p)
-      appendActivity(d, 'project.attach', projectId, { fileId: meta.id, fileName: file.name, sectionId: opts.sectionId ?? null })
+      appendActivity(d, 'project.attach', projectId, { fileId: linked.id, fileName: file.name, sectionId: opts.sectionId ?? null })
     })
-    return { ok: true, fileId: meta.id }
+    return { ok: true, fileId: linked.id }
   } catch (e) {
     if (e instanceof DriveError && e.kind === 'auth')
       return { ok: false, error: 'Your session expired — sign in again to upload' }
@@ -845,6 +857,7 @@ export async function restoreSnapshot(fileId: string): Promise<void> {
   const meta = await getMeta(nexusId)
   store.setDoc(restored)
   store.setBase({ headRevisionId: meta.headRevisionId, md5Checksum: meta.md5Checksum, version: meta.version })
+  markContentDirty() // setDoc bypassed commit() — the restore MUST write
   const ok = await flush()
   if (!ok) throw new Error('Restore could not be written — your changes are staged; try again in a moment')
 }
@@ -869,6 +882,7 @@ let lastArchiveSweep = 0
 export function sweepAutoArchive(): void {
   const doc = storeGet().doc
   if (!doc) return
+  if (!canWrite()) return // viewers/anonymous tabs must not archive (writes would fail and banner)
   const days = doc.settings.workflow.archiveDoneAfterDays
   const now = Date.now()
   if (!days || now - lastArchiveSweep < 20 * 3600 * 1000) return
@@ -915,6 +929,7 @@ export async function resetWorkspaceData(): Promise<{ groups: number; projects: 
     if (s.storage.type === 'md' && s.storage.fileId) {
       await trashFile(s.storage.fileId).catch(() => {})
     }
+    for (const c of s.copies) await trashFile(c.fileId).catch(() => {})
   }
 
   commit((d) => {

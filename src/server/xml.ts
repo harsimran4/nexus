@@ -14,8 +14,11 @@ export function tagValue(xml: string, name: string): string | null {
 }
 
 function decodeSafe(v: string): string {
+  // OCI's ListObjectsV2 (encoding-type=url) FORM-encodes spaces as '+'; a
+  // literal '+' arrives as %2B. Undo the form-encoding first, then percent-
+  // decode — otherwise every space-named key comes back mangled.
   try {
-    return decodeURIComponent(v)
+    return decodeURIComponent(v.replace(/\+/g, '%20'))
   } catch {
     return v
   }

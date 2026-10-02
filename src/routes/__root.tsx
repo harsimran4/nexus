@@ -64,7 +64,6 @@ function RootComponent(): ReactNode {
 // ---------------------------------------------------------------------------
 
 function AppBody(): ReactNode {
-  const pathname = useRouterState({ select: (s) => s.location.pathname })
   const status = useStore((s) => s.status)
   const bootError = useStore((s) => s.bootError)
   const doc = useStore((s) => s.doc)
@@ -120,11 +119,11 @@ function AppBody(): ReactNode {
 
   useEffect(() => {
     if (status === 'ok' || status === 'queued' || status === 'reconnect') {
-      // Shallow checks in the interval — the deep probe transfers bytes and
-      // belongs to boot + the Admin health-check button.
-      const t = setInterval(() => void runHealthChecks({ deep: false }).then(setHealth), 30_000)
+      // The 10s poller already exercises the public read path — periodic
+      // shallow probes would double-hit /api/public/meta for no new signal
+      // (worker invocations are the free plan's scarce resource). The deep
+      // probe transfers bytes and belongs to boot + the Admin button.
       void runHealthChecks({ deep: true }).then(setHealth)
-      return () => clearInterval(t)
     }
   }, [status])
 
@@ -144,7 +143,10 @@ function AppBody(): ReactNode {
     )
   }
 
-  const needsLogin = doc != null && session === null && doc.settings.privacy.requireViewerLogin && pathname !== '/init'
+  // On an EMPTY bucket the needsInit branch above already renders Init
+  // without a login; a LIVE bucket must not leak the wizard to anonymous
+  // visitors via /init — hence no pathname exclusion here.
+  const needsLogin = doc != null && session === null && doc.settings.privacy.requireViewerLogin
   if (needsLogin) {
     return (
       <Shell bare>

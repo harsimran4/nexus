@@ -397,7 +397,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
             />
           )}
           <span className="faint small">
-            Press Save (or Ctrl+S) to write this script to its own markdown file in Drive (scripts/) — Drive keeps a version history for it.
+            Press Save (or Ctrl+S) to write this script to its own markdown file in the bucket (scripts/) — milestone copies at Review/Final give you restore points.
           </span>
           {saveState === 'error' && saveError && banner('error', 'Could not save the script', saveError)}
         </div>

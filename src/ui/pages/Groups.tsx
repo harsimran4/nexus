@@ -117,7 +117,7 @@ function GroupCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
 
   return (
     <Modal title="New group" onClose={onClose}>
-      {banner('info', 'One Drive folder per group', 'Nexus/groups/<name>/ — every project inside gets its own subfolder.')}
+      {banner('info', 'One storage prefix per group', 'groups/<groupId>/ — every project inside gets its own prefix. Folder names live in the app, not the keys.')}
       <div className="field">
         <label>Group name</label>
         <input
@@ -169,7 +169,7 @@ function GroupRenameModal({ groupId, onClose }: { groupId: string; onClose: () =
   return (
     <Modal title={`Rename "${group.name}"`} onClose={onClose}>
       <p className="muted small" style={{ marginTop: 0 }}>
-        The Drive folder is renamed too.
+        Storage keys never change — the name lives in the app only.
       </p>
       <div className="field">
         <label>Group name</label>
@@ -203,7 +203,7 @@ function GroupDeleteModal({ groupId, onClose }: { groupId: string; onClose: () =
 
   return (
     <Modal title={`Delete group "${group.name}"?`} onClose={onClose} wide>
-      {banner('warn', 'Everything inside moves to Drive trash', 'Recoverable for 30 days in Google Drive. All projects in the group are also removed from the board.')}
+      {banner('warn', 'Everything inside moves to trash/', 'The group prefix (with every project and file) moves to the trash/ prefix of the bucket. All projects in the group are also removed from the board.')}
       <div className="field">
         <label>What will be trashed:</label>
         <div style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>

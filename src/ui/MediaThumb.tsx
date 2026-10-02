@@ -13,12 +13,16 @@ export function MediaThumb({
   fileKey,
   alt = '',
   style,
+  mime,
 }: {
   fileKey: string
   alt?: string
   style?: React.CSSProperties
+  /** Stored Content-Type when known (meta) — beats the extension guess for
+   *  files uploaded without one (e.g. 'photo dump' → image/jpeg). */
+  mime?: string
 }): React.JSX.Element {
-  const kind = kindFromMime(mimeFromKey(fileKey))
+  const kind = kindFromMime(mime ?? mimeFromKey(fileKey))
   const src = thumbnailUrl(fileKey)
   if (kind === 'video') {
     return (

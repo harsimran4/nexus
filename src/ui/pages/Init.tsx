@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { mintToken, newStretchSalt, passwordPolicyError, stretchedAuth } from '../../auth/hashing'
 import { emptyDoc, parseDoc, type NexusDoc } from '../../types/schema'
 import { SYSTEM_PREFIXES } from '../../types/storage'
@@ -21,6 +21,7 @@ export function Init(): React.JSX.Element {
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const loginRef = useRef<Promise<unknown> | null>(null)
 
   const create = async () => {
     setError(null)
@@ -77,16 +78,23 @@ export function Init(): React.JSX.Element {
       // Re-parse the fully-formed doc (with ids) so the app boots on it directly.
       const done = { ...doc, ids: { rootFolderId: '', nexusFileId: DOC_KEY, systemFolders: { ...SYSTEM_PREFIXES } } }
       const parsed = parseDoc(JSON.stringify(done))
-      if (parsed.ok) {
-        useStore.getState().setDoc(parsed.doc)
-        useStore.getState().setStatus('ok')
-        startPolling(DOC_KEY)
+      if (!parsed.ok) {
+        setError('Workspace created but could not be loaded — reload the page and sign in')
+        return
       }
-      // Sign the new admin in immediately — otherwise requireViewerLogin
-      // would swap this card for the Login page and the shown-once secret
-      // would never be displayed.
-      await import('../../auth/session').then((s) => s.loginWithSecretPublic(rawSecret))
+      // Doc goes into the store, but status STAYS needsInit: that is what
+      // keeps THIS card mounted — the shell and the login gate only take
+      // over at status 'ok', which happens on "Go to dashboard".
+      useStore.getState().setDoc(parsed.doc)
+      startPolling(DOC_KEY)
+      // Reveal the secret BEFORE any async login — a slow or failed
+      // auto-login must never eat the one-time display. The auto-login runs
+      // in the background; the dashboard button awaits it before flipping
+      // status, so a successful login skips the login gate.
       sessionStorage.setItem('nexus.initSecret', rawSecret)
+      loginRef.current = import('../../auth/session')
+        .then((s) => s.loginWithSecretPublic(rawSecret))
+        .catch(() => null)
       setStep(1)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Workspace creation failed')
@@ -141,7 +149,18 @@ export function Init(): React.JSX.Element {
           {banner('info', 'Workspace created', 'Content is private in the bucket; the app serves reads, and only signed-in editors can write.')}
           <InitSecret />
           <div className="row mt16">
-            <button className="btn primary" onClick={() => navigate('dash')}>Go to dashboard →</button>
+            <button
+              className="btn primary"
+              onClick={() => {
+                void (async () => {
+                  await (loginRef.current ?? Promise.resolve())
+                  useStore.getState().setStatus('ok') // releases the shell; session skips the login gate
+                  navigate('dash')
+                })()
+              }}
+            >
+              Go to dashboard →
+            </button>
           </div>
         </>
       )}

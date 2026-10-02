@@ -114,7 +114,7 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
 
       {deleteOpen && (
         <Modal title={`Delete group "${group.name}"?`} onClose={() => setDeleteOpen(false)} wide>
-          {banner('warn', 'Everything inside moves to Drive trash', 'The group folder (with every project subfolder and file) is trashed — recoverable for 30 days in Google Drive. All projects in the group are also removed from the board.')}
+          {banner('warn', 'Everything inside moves to trash/', 'The group prefix (with every project and file) moves to the trash/ prefix of the bucket. All projects in the group are also removed from the board.')}
           <div className="field">
             <label>What will be trashed:</label>
             <div style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>

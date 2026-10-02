@@ -16,7 +16,10 @@ async function purgeProject(project: Project): Promise<void> {
   forgetPending(project.id) // its scratch entry must not resurrect it
   if (project.folderId) {
     const { trashFile } = await import('../../drive/client')
-    await trashFile(project.folderId).catch(() => {})
+    // NO silent catch: a failed trash must abort the purge (the caller
+    // surfaces it) — otherwise the doc forgets the project while its bytes
+    // stay live in the bucket with no remaining reference.
+    await trashFile(project.folderId)
   }
   commit((doc) => {
     const next = { ...doc.projects }
@@ -167,7 +170,7 @@ export function Archive(): React.JSX.Element {
             <h2>Purge permanently?</h2>
             <p className="muted small">
               Removes the project from the database. The tombstone keeps it deleted across merges. Files already
-              sit in Drive trash (30-day recovery).
+              move to the bucket's trash/ prefix — this is the step that deletes the bytes.
             </p>
             <div className="row" style={{ justifyContent: 'flex-end' }}>
               <button className="btn" onClick={() => setConfirmPurge(null)}>Cancel</button>

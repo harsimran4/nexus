@@ -322,7 +322,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
   const bulkDelete = () => {
     const ids = [...selected]
     if (ids.length === 0) return
-    if (!confirm(`Delete ${ids.length} file${ids.length === 1 ? '' : 's'}? They move to Drive trash (recoverable for 30 days).`)) return
+    if (!confirm(`Delete ${ids.length} file${ids.length === 1 ? '' : 's'}? They move to the bucket's trash/ prefix — recovery needs an admin with storage access.`)) return
     void runBulk(async () => {
       const failed: string[] = []
       for (let i = 0; i < ids.length; i++) {
@@ -332,7 +332,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
       }
       setSelected(new Set())
       if (failed.length) setError(`Some files could not be deleted — ${failed.join(' · ')}`)
-      else flash(`${ids.length} file${ids.length === 1 ? '' : 's'} moved to Drive trash.`)
+      else flash(`${ids.length} file${ids.length === 1 ? '' : 's'} moved to trash/.`)
     })
   }
 
@@ -596,7 +596,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
                   }}
                   onClick={() => selectMode && toggleSel(f)}
                 >
-                  <MediaThumb fileKey={f} alt={displayName} />
+                  <MediaThumb fileKey={f} alt={displayName} mime={info?.mimeType} />
                   {fileKind !== 'image' && (
                     <span className="media-kind-badge">
                       {KIND_GLYPH[fileKind]} {KIND_LABEL[fileKind]}
@@ -658,7 +658,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
                     <button
                       className="btn small danger"
                       onClick={async () => {
-                        if (!confirm(`Delete "${displayName}"? It moves to Drive trash (recoverable for 30 days).`)) return
+                        if (!confirm(`Delete "${displayName}"? It moves to the bucket's trash/ prefix — recovery needs an admin with storage access.`)) return
                         const r = await removeProjectFile(projectId, f, { trashInDrive: true })
                         if (!r.ok) setError(r.error)
                       }}
@@ -1050,7 +1050,7 @@ function SettingsTab({ projectId }: { projectId: string }): React.JSX.Element {
         <div className="card" style={{ borderColor: 'rgba(255,107,122,.35)' }}>
           <h3>Danger zone</h3>
           <p className="muted small">
-            Deletes this project and moves its Drive folder (with all files) to Drive trash — recoverable for 30 days.
+            Removes this project from the board. Its files stay in the bucket until you Purge it from the Archive — Restore from the Archive brings it back intact.
           </p>
           <button
             className="btn danger"

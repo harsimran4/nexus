@@ -103,8 +103,11 @@ let mutex: Promise<unknown> = Promise.resolve()
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 // Set by commit(), cleared by a confirmed write. performSave must not treat a
 // commit as a no-op just because the scratch set is empty — user/settings/
-// activity-only commits never touch() but still must reach Drive.
+// activity-only commits never touch() but still must reach storage.
 let contentDirty = false
+// The last doc state CONFIRMED remote (successful write or remote apply) —
+// the rollback point when a logged-out session's edits must be discarded.
+let lastConfirmedDoc: NexusDoc | null = null
 
 /** Apply a mutation to the doc, mirror to IndexedDB, schedule a save. */
 export function commit(mut: (doc: NexusDoc) => void): void {
@@ -121,6 +124,14 @@ export function commit(mut: (doc: NexusDoc) => void): void {
   store.setDoc(doc)
   void saveDraft(doc)
   store.setPending(scratch.size)
+  scheduleSave()
+}
+
+/** Declare write intent for a doc that was installed WITHOUT commit() (a
+ *  snapshot restore, a draft re-commit): the next flush() must actually
+ *  reach storage instead of being no-op'd by the dirty guard. */
+export function markContentDirty(): void {
+  contentDirty = true
   scheduleSave()
 }
 
@@ -263,6 +274,8 @@ async function writeWholeDoc(nexusId: string, expectEtag?: string): Promise<void
   })
   store.setStatus('ok', null)
   store.markSynced()
+  // Confirmed-remote snapshot — the rollback point when a session is discarded.
+  lastConfirmedDoc = structuredClone(doc)
   await clearDraft()
   void snapshotHook(nexusId)
 }
@@ -293,13 +306,16 @@ async function snapshotHook(nexusId: string): Promise<void> {
   }
 }
 
-/** Update the doc without creating pending edits (cosmetic/derived state). */
+/** Update the doc without creating pending edits (cosmetic/derived state) —
+ *  but it IS a real change: mark dirty so the save isn't no-op'd (the daily
+ *  snapshot record rides on this and must persist). */
 export function commitQuiet(mut: (doc: NexusDoc) => void): void {
   const store = storeGet()
   if (!store.doc) return
   const doc = structuredClone(store.doc)
   mut(doc)
   doc.updatedAt = hlcNow()
+  contentDirty = true
   store.setDoc(doc)
   scheduleSave()
 }
@@ -344,6 +360,8 @@ export async function applyRemoteIfChanged(nexusId: string): Promise<'unchanged'
   const { merged } = mergeRemote({ local: storeGet().doc ?? emptyDoc(), remote: parsed.doc })
   applyMerged(merged)
   store.setBase({ headRevisionId: meta.headRevisionId, md5Checksum: meta.md5Checksum, version: meta.version })
+  // Remote-confirmed state (on a fresh boot this is the first capture).
+  if (scratch.size === 0) lastConfirmedDoc = structuredClone(storeGet().doc)
   store.markSynced()
   // Only show "Synced" when nothing is actually pending — a successful read
   // must never mask unsynced local edits (they'd look lost until the next
@@ -397,6 +415,7 @@ export async function recommitDraft(draftDoc: NexusDoc): Promise<void> {
   merged.updatedAt = hlcNow()
   useStore.getState().setDoc(merged)
   store.setPending(0)
+  markContentDirty() // setDoc bypassed commit() — without this, flush() no-ops
   const ok = await flush()
   if (ok) await clearDraft() // a failed flush keeps the draft for another try
 }
@@ -406,7 +425,9 @@ export async function discardDraft(): Promise<void> {
 }
 
 /** Signing out: drop this session's unsynced edits so they can't be written
- *  under the next login. The IndexedDB draft still has them for recovery. */
+ *  under the next login — including rolling the doc back to the last state
+ *  CONFIRMED remote (A's half-synced edits must not ride into B's session).
+ *  The IndexedDB draft still has them for recovery. */
 export function discardPendingForLogout(): void {
   if (saveTimer) {
     clearTimeout(saveTimer)
@@ -414,6 +435,7 @@ export function discardPendingForLogout(): void {
   }
   scratch.clear()
   contentDirty = false // dropped edits must not be written under the next login
+  if (lastConfirmedDoc) storeGet().setDoc(structuredClone(lastConfirmedDoc))
   storeGet().setPending(0)
 }
 
