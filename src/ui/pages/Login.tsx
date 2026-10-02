@@ -53,7 +53,7 @@ export function Login({ viewerTokenFromLink }: { viewerTokenFromLink: string | n
       </button>
       <p className="faint small mt16">
         Tokens are single secrets — only their hash is stored. Lost yours? Ask an admin to mint a new one.
-        {' '}First time here? <a href="/welcome.html">What is Nexus?</a>
+        {' '}First time here? <a href="/welcome">What is Nexus?</a>
       </p>
     </div>
   )
