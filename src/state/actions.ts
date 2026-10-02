@@ -446,8 +446,9 @@ export async function removeProjectFile(
 }
 
 /**
- * Delete a project: its Drive subfolder (with all files) moves to Drive trash
- * (30-day recovery) and the metadata is tombstoned. The UI shows the list first.
+ * Delete a project: metadata only — the files STAY in the bucket so Archive
+ * → Restore brings everything back intact. Purge (from the Archive) is what
+ * moves the bytes to trash/. The UI shows the list first.
  */
 export async function deleteProjectCascade(projectId: string): Promise<{ files: number; folderTrashed: boolean }> {
   assertWrite()
@@ -455,13 +456,6 @@ export async function deleteProjectCascade(projectId: string): Promise<{ files: 
   const doc = storeGet().doc
   const project = doc?.projects[projectId]
   if (!doc || !project) throw new Error('Project not found')
-  const { trashFile } = await import('../drive/client')
-  let folderTrashed = false
-  for (const f of project.fileIds) await trashFile(f).catch(() => {})
-  if (project.folderId) {
-    await trashFile(project.folderId).catch(() => {})
-    folderTrashed = true
-  }
   commit((d) => {
     const p = d.projects[projectId]
     if (p) {
@@ -474,7 +468,7 @@ export async function deleteProjectCascade(projectId: string): Promise<{ files: 
       filesTrashed: project.fileIds.length,
     })
   })
-  return { files: project.fileIds.length, folderTrashed }
+  return { files: project.fileIds.length, folderTrashed: false }
 }
 
 // ---------------------------------------------------------------------------
@@ -707,6 +701,10 @@ export function changeUserRole(userId: string, role: 'admin' | 'editor' | 'viewe
       if (otherAdmins.length === 0) throw new Error('Cannot demote the last active admin')
     }
     user.role = role
+    // Kick active sessions: the signed token carries the OLD role, and
+    // stillValid only re-checks existence/disabled/epoch — without the bump
+    // a demoted editor would keep write access until their 12h token died.
+    user.sessionEpoch = (user.sessionEpoch ?? 0) + 1
     user.updatedAt = hlcNow()
     user.writerId = writerId()
     appendActivity(doc, 'user.role', userId, { name: user.name, role })

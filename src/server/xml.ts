@@ -21,6 +21,12 @@ function decodeSafe(v: string): string {
   }
 }
 
+/** XML etag values arrive quoted (<ETag>"hex"</ETag>) — strip here so every
+ *  consumer sees the bare hex exactly like response-header etags do. */
+function bareEtag(v: string): string {
+  return v.replace(/^"|"$/g, '')
+}
+
 export interface ListEntry {
   key: string
   lastModified: string
@@ -45,7 +51,7 @@ export function parseListV2(xml: string): ListResult {
     contents.push({
       key: decodeSafe(key),
       lastModified: tag(block, 'LastModified') ?? '',
-      etag: tag(block, 'ETag') ?? '',
+      etag: bareEtag(tag(block, 'ETag') ?? ''),
       size: Number(tag(block, 'Size') ?? '0'),
     })
   }
@@ -77,12 +83,12 @@ export function parseUploadId(xml: string): string {
 
 /** CopyObjectResult → the new object's ETag. */
 export function parseCopyEtag(xml: string): string {
-  return tag(xml, 'ETag') ?? ''
+  return bareEtag(tag(xml, 'ETag') ?? '')
 }
 
 /** CompleteMultipartUploadResult → the finished object's ETag. */
 export function parseCompleteEtag(xml: string): string {
-  return tag(xml, 'ETag') ?? ''
+  return bareEtag(tag(xml, 'ETag') ?? '')
 }
 
 export interface PartEntry {
@@ -100,7 +106,7 @@ export function parseParts(xml: string): PartEntry[] {
     if (!n) continue
     parts.push({
       partNumber: Number(n),
-      etag: tag(block, 'ETag') ?? '',
+      etag: bareEtag(tag(block, 'ETag') ?? ''),
       size: Number(tag(block, 'Size') ?? '0'),
     })
   }

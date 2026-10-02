@@ -8,11 +8,16 @@ import { unarchiveProject, updateProject } from '../../state/actions'
 import { Empty, banner, PageQuote } from '../components'
 
 /** Permanently remove from the database; tombstone prevents resurrection.
- *  Drive files were already trashed by the cascade delete (30-day recovery).
- *  Writes through IMMEDIATELY (no debounce) — a refresh right after purging
- *  must never bring the old state back. */
+ *  THIS is where the files leave the bucket (trash/ — delete only tombstoned
+ *  the doc so Restore stayed possible). Writes through IMMEDIATELY (no
+ *  debounce) — a refresh right after purging must never bring the old state
+ *  back. */
 async function purgeProject(project: Project): Promise<void> {
   forgetPending(project.id) // its scratch entry must not resurrect it
+  if (project.folderId) {
+    const { trashFile } = await import('../../drive/client')
+    await trashFile(project.folderId).catch(() => {})
+  }
   commit((doc) => {
     const next = { ...doc.projects }
     delete next[project.id]

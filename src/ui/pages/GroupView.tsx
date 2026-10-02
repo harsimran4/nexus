@@ -21,7 +21,7 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
   if (!doc || !group || group.deleted !== null) {
     return (
       <Empty icon="▦">
-        This group doesn't exist or has been deleted. <a href="#/dash">Back to dashboard</a>
+        This group doesn't exist or has been deleted. <a href="/">Back to dashboard</a>
       </Empty>
     )
   }
@@ -106,7 +106,7 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
           <h3>Scripts linked to this group</h3>
           <div className="chips mt8">
             {scriptsOfGroup.map((s) => (
-              <a key={s.id} className="chip" href="#/scripts">{s.title}</a>
+              <a key={s.id} className="chip" href="/scripts">{s.title}</a>
             ))}
           </div>
         </div>

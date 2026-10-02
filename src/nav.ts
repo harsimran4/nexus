@@ -12,9 +12,11 @@ export function bindRouter(r: { navigate: (opts: { to: string }) => void }): voi
   }
 }
 
-/** Old hash-style paths ('dash', 'project/<id>') → real paths. */
+/** Old hash-style paths ('dash', 'project/<id>') → real paths. 'dash' has no
+ *  route of its own — the Board IS '/'. */
 export function navigate(to: string): void {
-  const path = '/' + to.replace(/^\/+/, '').replace(/^#\/?/, '')
+  const clean = to.replace(/^\/+/, '').replace(/^#\/?/, '')
+  const path = clean === 'dash' || clean === '' ? '/' : '/' + clean
   if (bound) bound.navigate(path)
   else location.href = path
 }

@@ -3,6 +3,7 @@ import { statusBucket, statusLabel, type NexusDoc } from '../types/schema'
 import { useStore } from '../sync/store'
 import { statusToIssue, type HealthIssue } from '../diagnostics/health'
 import { commit, flush } from '../sync/writer'
+import { navigate } from '../nav'
 
 /**
  * Merge rapid mutations (typing in an input) into ONE commit after the user
@@ -106,7 +107,7 @@ export function SyncPill(): ReactNode {
     if (status === 'queued') void flush()
     if (status === 'reconnect') {
       // Session expired — the login page is the one way back.
-      location.hash = '#/login'
+      navigate('/login')
     }
   }
   return (

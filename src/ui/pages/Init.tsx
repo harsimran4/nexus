@@ -82,6 +82,10 @@ export function Init(): React.JSX.Element {
         useStore.getState().setStatus('ok')
         startPolling(DOC_KEY)
       }
+      // Sign the new admin in immediately — otherwise requireViewerLogin
+      // would swap this card for the Login page and the shown-once secret
+      // would never be displayed.
+      await import('../../auth/session').then((s) => s.loginWithSecretPublic(rawSecret))
       sessionStorage.setItem('nexus.initSecret', rawSecret)
       setStep(1)
     } catch (e) {

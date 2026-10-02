@@ -16,12 +16,9 @@ export const Route = createFileRoute('/files/$')({
 })
 
 async function serve(request: Request, params: { _splat?: string }, headOnly = false): Promise<Response> {
-  let key = params._splat ?? ''
-  try {
-    key = decodeURIComponent(key)
-  } catch {
-    /* keep raw */
-  }
+  // The router already percent-decodes the splat — decoding again would
+  // corrupt any key containing a literal '%' sequence.
+  const key = params._splat ?? ''
   if (!key || key.includes('..')) return new Response('Bad key', { status: 400 })
   // Deny internals quietly (404 — don't reveal their existence). nexus.json
   // itself stays public: anonymous boot reads it (same as the old setup).
@@ -41,9 +38,11 @@ async function serve(request: Request, params: { _splat?: string }, headOnly = f
   }
   headers.set('Accept-Ranges', 'bytes')
   headers.set('X-Content-Type-Options', 'nosniff')
-  // Media bytes at a key never change (uploads mint fresh keys) → immutable.
-  // Doc/scripts/snapshots mutate in place → revalidate every time.
-  headers.set('Cache-Control', key.startsWith('projects/') ? 'public, max-age=86400, immutable' : 'no-cache')
+  // Media bytes at a key never change in place (uploads/renames mint fresh
+  // keys; snapshots are write-once copies) → immutable. Doc and scripts
+  // mutate in place → revalidate every time.
+  const immutable = key.startsWith('groups/') || key.startsWith('snapshots/')
+  headers.set('Cache-Control', immutable ? 'public, max-age=86400, immutable' : 'no-cache')
   if (headOnly) return new Response(null, { status: res.status, headers })
   return new Response(res.body, { status: res.status, headers })
 }

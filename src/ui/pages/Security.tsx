@@ -10,30 +10,30 @@ import { Empty } from '../components'
 type Tone = 'good' | 'bad'
 
 const GUARANTEES: readonly ReactNode[] = [
-  <>Editors and admins never hold Google credentials — all Drive writes go through the Nexus Worker, which keeps the storage credential as a server-side secret.</>,
+  <>Editors and admins never hold storage credentials — all writes go through this app's own server functions running on the Worker, which keeps the OCI signing keys as server-side secrets.</>,
   <>Logins are app-issued tokens or passwords. Passwords are stretched in your browser (600,000-round PBKDF2) and only a sha256 of the stretched key is stored.</>,
-  <>Sessions are short-lived signed tokens (12h) carrying your identity and role; the Worker re-checks them against the live user list on every write (~60s staleness).</>,
-  <>Viewers read through an API key that Google structurally cannot write with.</>,
-  <>Every write is verified against the remote file before commit and merged per-item, so concurrent edits don't clobber each other.</>,
+  <>Sessions are short-lived signed tokens (12h) carrying your identity and role; the server re-checks them against the live user list on every write (~60s staleness).</>,
+  <>Reading content requires no account when the workspace is public, but writing always requires a signed-in editor or admin — anonymous and viewer requests are structurally limited to the read-only routes.</>,
+  <>Every write is verified against the remote file before commit (etag compare) and merged per-item, so concurrent edits don't clobber each other.</>,
   <>Every deletion is tombstoned so a stale sync can't resurrect it.</>,
-  <>Daily snapshots are kept on Drive (Admin → Maintenance restores them).</>,
+  <>Daily snapshots are kept in the bucket (Admin → Maintenance restores them).</>,
   <>Every error names its cause and fix.</>,
 ]
 
 const NOT_GUARANTEES: readonly ReactNode[] = [
-  <>The workspace file (<code>nexus.json</code>) is link-shared so anonymous viewers can read — everything in it, including password hashes, is readable by anyone with the link. Mitigation: hashes are 600k-stretched; 256-bit tokens are even safer.</>,
-  <>The embedded API key is extractable from the HTML (referrer restriction is advisory; worst case is quota burn — rotate via Admin → Settings).</>,
-  <>Worker login rate limiting is best-effort (per Cloudflare isolate) — a large distributed brute-force is not stopped by the app alone.</>,
-  <>Admin-vs-editor separation is enforced by the signed session token and the Worker's re-checks — strong, but revocation of an active session can take ~60s to land.</>,
+  <>The workspace file (<code>master/nexus.json</code>) is publicly readable so anonymous visitors and viewers can load the app — everything in it, including password hashes, is readable by anyone with the URL. Mitigation: hashes are 600k-stretched; 256-bit tokens are even safer.</>,
+  <>Login rate limiting is best-effort (per Cloudflare isolate) — a large distributed brute-force is not stopped by the app alone.</>,
+  <>Admin-vs-editor separation is enforced by the signed session token and the server's re-checks — strong, but revocation of an active session can take ~60s to land.</>,
   <>Deletes are eventually-safe (a raced newer edit can beat an older tombstone and is surfaced as an undelete event).</>,
   <>Revoking a viewer lands at their next poll and cannot claw back locally saved copies.</>,
+  <>Deleted projects keep their files until Purge in the Archive — between those two moments the files remain in the bucket (but out of the app's index).</>,
 ]
 
 const ENFORCEMENT: readonly (readonly [ability: string, enforcedBy: ReactNode])[] = [
-  ['View without a login', <>nothing when "require login to view" is off (by design: data is link-shared so viewers without accounts can read)</>],
-  ['Upload / edit / delete', <>app login (<code>admin|editor</code>) — writes are proxied by the Worker using its own storage credential, never yours</>],
+  ['View without a login', <>nothing when "require login to view" is off (by design: content is publicly served so viewers without accounts can read)</>],
+  ['Upload / edit / delete', <>app login (<code>admin|editor</code>) — writes run as server functions that sign OCI requests with credentials only the Worker holds</>],
   ['Admin actions', <>app admin login — the role travels inside the HMAC-signed session token and is re-checked server-side</>],
-  ['True no-download per person', 'only Google Drive sharing per Google account — not this app'],
+  ['Direct bucket access', 'only the OCI console / Customer Secret Keys — not this app'],
 ]
 
 function PointList({ points, tone }: { points: readonly ReactNode[]; tone: Tone }): React.JSX.Element {

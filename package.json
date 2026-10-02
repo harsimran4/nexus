@@ -24,7 +24,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite dev",
-    "build": "tsc --noEmit && vite build",
+    "build": "vite build && tsc --noEmit",
     "preview": "vite preview",
     "deploy": "npm run build && wrangler deploy",
     "test": "vitest run",

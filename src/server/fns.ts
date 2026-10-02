@@ -180,6 +180,10 @@ export const initFn = createServerFn({ method: 'POST' })
     const s3 = await import('./s3')
     const auth = await import('./auth')
     const { parseDoc } = await import('../types/schema')
+    // Same per-isolate throttle as login — SETUP_TOKEN is a public secret check.
+    const { getRequest } = await import('@tanstack/react-start/server')
+    const ip = getRequest().headers.get('CF-Connecting-IP') ?? 'unknown'
+    if (auth.loginThrottled(ip)) return err('rateLimit', 'Too many attempts — wait a few minutes and try again')
 
     const expected = env.SETUP_TOKEN ?? ''
     if (!expected) return err('api', 'SETUP_TOKEN is not configured on the server')
@@ -204,6 +208,7 @@ export const initFn = createServerFn({ method: 'POST' })
       }
       await s3.put(DOC_KEY, JSON.stringify(doc), { contentType: 'application/json' })
       auth.invalidateDocCache()
+      auth.loginForgiven(ip) // success — don't count this attempt toward the throttle
       return { ok: true, data: { rootFolderId: '', nexusFileId: DOC_KEY } }
     } catch (e) {
       return err('api', e instanceof Error ? e.message : 'Init failed')
@@ -375,8 +380,12 @@ export const fileCopyFn = createServerFn({ method: 'POST' })
     }
   })
 
-const TRASH_BATCH = 25 // stay far under the per-request subrequest cap
-const MOVE_BATCH = 25 // same cap, same loop-until-empty contract
+// Workers free plan caps ~50 subrequests/request. Each object costs a copy
+// + a delete, each batch one list, and a cold isolate spends one more on
+// writerAuth's doc re-check — keep the worst case well under.
+const SUBREQUEST_BUDGET = 40
+const TRASH_BATCH = Math.floor(SUBREQUEST_BUDGET / 2) - 1 // 19 objects
+const MOVE_BATCH = TRASH_BATCH // same cap, same loop-until-empty contract
 
 /** Move one key (or up to TRASH_BATCH keys of one prefix) into trash/.
  *  Returns `remaining > 0` for prefixes so the client can loop. */

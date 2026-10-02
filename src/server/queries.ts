@@ -3,7 +3,7 @@
 // dynamically imported.
 
 import type { FileMeta, ListResult } from '../types/storage'
-import { FOLDER_MARKER } from './keys'
+import { FOLDER_MARKER, TRASH_PREFIX } from './keys'
 
 async function mimeHelpers() {
   return import('./mime')
@@ -58,6 +58,7 @@ export async function listCore(parent: string, pageSize: number, pageToken?: str
   const files: FileMeta[] = []
   for (const prefix of page.commonPrefixes) {
     if (prefix === parent) continue
+    if (prefix === TRASH_PREFIX) continue // deny quietly — don't reveal trash exists
     files.push(folderMeta(prefix))
   }
   for (const entry of page.contents) {

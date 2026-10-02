@@ -48,7 +48,7 @@ export function ProjectPage({ projectId }: { projectId: string }): React.JSX.Ele
   if (!doc || !project || project.deleted !== null) {
     return (
       <Empty icon="▦">
-        This project doesn't exist or was deleted. <a href="#/dash">Back to board</a>
+        This project doesn't exist or was deleted. <a href="/">Back to board</a>
       </Empty>
     )
   }
@@ -60,8 +60,8 @@ export function ProjectPage({ projectId }: { projectId: string }): React.JSX.Ele
       <div className="content-header">
         <div style={{ minWidth: 0 }}>
           <div className="row" style={{ gap: 8 }}>
-            <a href="#/dash" className="faint small">← board</a>
-            {group && <a href={`#/group/${group.id}`} className="faint small">{group.name} /</a>}
+            <a href="/" className="faint small">← board</a>
+            {group && <a href={`/group/${group.id}`} className="faint small">{group.name} /</a>}
           </div>
           <NameEditor projectId={projectId} name={project.name} />
           <div className="row wrap" style={{ marginTop: 6 }}>
@@ -879,7 +879,7 @@ function ScriptsTab({ projectId }: { projectId: string }): React.JSX.Element {
               <span className={`badge ${s.status === 'final' ? 'done' : s.status === 'review' ? 'doing' : ''}`}>{s.status}</span>
             </div>
             <div className="row">
-              <a className="btn small" href="#/scripts">Edit on Scripts page</a>
+              <a className="btn small" href="/scripts">Edit on Scripts page</a>
               {writable && (
                 <button className="btn small ghost" onClick={() => updateScript(s.id, { projectId: null })}>Unlink</button>
               )}

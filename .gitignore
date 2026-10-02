@@ -4,7 +4,6 @@ dist
 .env.*.local
 *.local
 .dev.vars
-src/routeTree.gen.ts
 .wrangler/
 
 .migrate-state.json

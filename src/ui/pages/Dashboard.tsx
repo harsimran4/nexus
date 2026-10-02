@@ -88,7 +88,7 @@ export function Dashboard(): React.JSX.Element {
           <h1>Board</h1>
           <div className="sub">
             {projects.length} project{projects.length === 1 ? '' : 's'} on the board ·{' '}
-            <a href="#/groups">manage groups</a> · <a href="#/scripts">scripts</a>
+            <a href="/groups">manage groups</a> · <a href="/scripts">scripts</a>
           </div>
         </div>
         <div className="row">
