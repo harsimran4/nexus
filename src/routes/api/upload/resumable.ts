@@ -182,7 +182,7 @@ export const Route = createFileRoute('/api/upload/resumable')({
           try {
             const h = await s3.head(payload.key)
             if (h && h.size === payload.total) {
-              const { metaCore } = await import('../../server/queries')
+              const { metaCore } = await import('../../../server/queries')
               return Response.json(await metaCore(payload.key))
             }
           } catch { /* fall through to the error paths */ }
