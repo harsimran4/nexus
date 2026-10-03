@@ -113,7 +113,13 @@ export const Route = createFileRoute('/api/upload/resumable')({
           const meta = await metaCore(payload.key)
           return Response.json(meta)
         } catch (e) {
-          return Response.json({ error: e instanceof Error ? e.message : 'Upload failed' }, { status: 502 })
+          const msg = e instanceof Error ? e.message : 'Upload failed'
+          // OCI lost the session (NoSuchUpload) — tell the client to start a
+          // fresh one (410 Gone) instead of hammering a dead uploadId.
+          if (/no such upload/i.test(msg)) {
+            return Response.json({ error: 'Upload session expired at storage' }, { status: 410 })
+          }
+          return Response.json({ error: msg }, { status: 502 })
         }
       },
     },

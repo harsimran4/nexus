@@ -40,6 +40,7 @@ export class DriveError extends Error {
 export function mapStatus(status: number): DriveErrorKind {
   if (status === 401) return 'auth'
   if (status === 404) return 'notFound'
+  if (status === 410) return 'notFound'
   if (status === 429) return 'rateLimit'
   if (status >= 500) return 'rateLimit'
   if (status === 409) return 'conflict'
@@ -273,8 +274,10 @@ const UPLOAD_RETRIES = 5 // consecutive network failures before giving up
 const PART_RETRIES = 3 // server-side (429/5xx) failures before giving up
 
 /** Upload with progress. Small files go in one form POST; larger files use
- *  multipart parts (16 MiB, from the server) through a signed-URL XHR loop
- *  that resumes from the byte the server reports after a network blip. */
+ *  multipart parts (8 MiB, from the server) through a signed-URL XHR loop
+ *  that resumes from the byte the server reports after a network blip. If
+ *  storage loses the multipart session (rare NoSuchUpload), the whole
+ *  session re-inits once and starts over. */
 export async function uploadFile(
   parentId: string,
   file: File,
@@ -291,6 +294,21 @@ export async function uploadFile(
     return meta
   }
 
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await resumableUpload(parentId, file, onProgress)
+    } catch (e) {
+      if (e instanceof DriveError && e.kind === 'notFound' && attempt === 0) continue
+      throw e
+    }
+  }
+}
+
+async function resumableUpload(
+  parentId: string,
+  file: File,
+  onProgress?: (pct: number) => void,
+): Promise<FileMeta> {
   const initRes = await fetch('/api/upload/resumable', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (sessionStorage.getItem(WORKER_TOKEN_KEY) ?? '') },
