@@ -149,18 +149,43 @@ export const Route = createFileRoute('/api/upload/resumable')({
           if (end + 1 < payload.total) {
             return new Response(null, { status: 308, headers: { Range: `bytes=0-${end}` } })
           }
-          // Last part — complete the MPU and return the file's meta.
-          const parts = await s3.listParts(payload.key, payload.uploadId)
-          await s3.completeMpu(
-            payload.key,
-            payload.uploadId,
-            parts.map((p) => ({ partNumber: p.partNumber, etag: p.etag })),
-          )
+          // Last part — complete the MPU and return the file's meta. The
+          // complete step retries once: OCI intermittently 403s with an
+          // empty body here, and failing AFTER the last part landed costs
+          // the client the whole re-upload.
+          let lastError: unknown
+          for (let completeAttempt = 0; completeAttempt < 2; completeAttempt++) {
+            try {
+              const parts = await s3.listParts(payload.key, payload.uploadId)
+              await s3.completeMpu(
+                payload.key,
+                payload.uploadId,
+                parts.map((p) => ({ partNumber: p.partNumber, etag: p.etag })),
+              )
+              lastError = null
+              break
+            } catch (e) {
+              lastError = e
+              if (completeAttempt === 0) await new Promise((r) => setTimeout(r, 1200))
+            }
+          }
+          if (lastError) throw lastError
           const meta = await metaCore(payload.key)
           return Response.json(meta)
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'Upload failed'
           console.error(`[upload-part] part ${partNumber} for ${payload.key}: ${msg}`)
+          // The part may have landed and the session completed anyway — if
+          // the finished object already exists at the full size, we're done.
+          // (A retried last part after a lost completion would otherwise
+          // restart the ENTIRE upload.)
+          try {
+            const h = await s3.head(payload.key)
+            if (h && h.size === payload.total) {
+              const { metaCore } = await import('../../server/queries')
+              return Response.json(await metaCore(payload.key))
+            }
+          } catch { /* fall through to the error paths */ }
           // OCI lost the session (NoSuchUpload) — tell the client to start a
           // fresh one (410 Gone) instead of hammering a dead uploadId.
           if (/no such upload/i.test(msg)) {
