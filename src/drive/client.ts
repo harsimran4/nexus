@@ -244,6 +244,7 @@ function xhrPut(
   body: Blob | null,
   headers: Record<string, string>,
   onLoaded?: (loaded: number) => void,
+  readRange = false,
 ): Promise<{ status: number; range: string | null; json: FileMeta | null; error: string | null }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
@@ -263,7 +264,9 @@ function xhrPut(
       } catch {
         /* 308 Resume Incomplete responses have no body */
       }
-      resolve({ status: xhr.status, range: xhr.getResponseHeader('Range'), json, error })
+      // Range is only exposed on same-origin (relay) responses — reading it
+      // on cross-origin (direct) ones just spams the console.
+      resolve({ status: xhr.status, range: readRange ? xhr.getResponseHeader('Range') : null, json, error })
     }
     xhr.onerror = () => reject(new DriveError('network', 'Upload network error'))
     xhr.send(body)
@@ -324,11 +327,10 @@ async function resumableUpload(
     }
     throw new DriveError(mapStatus(initRes.status), message, initRes.status)
   }
-  const { url: sessionUrl, partSize, direct, completeUrl } = (await initRes.json()) as {
+  const { url: sessionUrl, partSize, direct } = (await initRes.json()) as {
     url: string
     partSize: number
     direct?: string[]
-    completeUrl?: string
   }
 
   const total = file.size
@@ -377,6 +379,7 @@ async function resumableUpload(
         file.slice(offset, end),
         { 'Content-Type': contentType, 'Content-Range': `bytes ${offset}-${end - 1}/${total}` },
         (loaded) => onProgress?.(Math.round(((offset + loaded) / total) * 100)),
+        true,
       )
       failures = 0
       if (res.status === 200 || res.status === 201) {
@@ -410,7 +413,7 @@ async function resumableUpload(
       failures++
       if (failures > UPLOAD_RETRIES) throw e instanceof DriveError ? e : new DriveError('network', 'Upload network error')
       // Ask the server how much it already holds, then resume from that byte.
-      const status = await xhrPut(sessionUrl, null, { 'Content-Range': `bytes */${total}` }).catch(() => null)
+      const status = await xhrPut(sessionUrl, null, { 'Content-Range': `bytes */${total}` }, undefined, true).catch(() => null)
       if (status && (status.status === 200 || status.status === 201)) {
         onProgress?.(100)
         if (status.json) return status.json
@@ -422,21 +425,21 @@ async function resumableUpload(
     }
   }
 
-  // All parts landed (direct PUTs don't auto-complete) — ask the server to
-  // assemble the file. A lost completion self-verifies server-side.
-  if (completeUrl) {
-    const comp = await fetch(completeUrl, { method: 'POST' }).catch((e) => {
-      throw new DriveError('network', e instanceof Error ? e.message : 'network error')
-    })
-    const j = (await comp.json().catch(() => null)) as FileMeta | { error?: string } | null
-    if (comp.ok && j && 'id' in (j as FileMeta)) {
-      onProgress?.(100)
-      return j as FileMeta
+  // All parts landed — the status probe (a PUT, same shape the relay uses)
+  // tells the server to assemble the file. A lost completion self-verifies
+  // server-side; a dead session (410) re-inits via the outer loop.
+  for (let i = 0; i < 3; i++) {
+    const status = await xhrPut(sessionUrl, null, { 'Content-Range': `bytes */${total}` }, undefined, true)
+    if (status.status === 200 || status.status === 201) {
+      if (status.json) {
+        onProgress?.(100)
+        return status.json
+      }
     }
-    const errMsg = j && 'error' in (j as { error?: string }) ? (j as { error: string }).error : `Complete failed (${comp.status})`
-    throw new DriveError(mapStatus(comp.status), errMsg, comp.status)
+    if (status.status === 410) throw new DriveError('notFound', 'Upload session expired — restarting', 410)
+    await new Promise((r) => setTimeout(r, 1200))
   }
-  throw new DriveError('api', 'Upload ended before the file was complete')
+  throw new DriveError('api', 'Upload could not be completed — try again')
 }
 
 // ---------------------------------------------------------------------------

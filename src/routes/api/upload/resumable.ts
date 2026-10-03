@@ -91,6 +91,35 @@ export const Route = createFileRoute('/api/upload/resumable')({
         if (probe) {
           const parts = await s3.listParts(payload.key, payload.uploadId).catch(() => [])
           const held = contiguousBytes(parts)
+          // Every byte is held — assemble now. (Direct-part uploads finish
+          // with this probe: it's the only worker request after the parts.)
+          if (held >= payload.total && parts.length > 0) {
+            try {
+              await s3.completeMpu(
+                payload.key,
+                payload.uploadId,
+                parts.map((p) => ({ partNumber: p.partNumber, etag: p.etag })),
+              )
+              const { metaCore } = await import('../../../server/queries')
+              return Response.json(await metaCore(payload.key))
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : 'Complete failed'
+              console.error(`[upload-probe-complete] ${payload.key}: ${msg}`)
+              // Completed anyway? The finished object says so.
+              try {
+                const h = await s3.head(payload.key)
+                if (h && h.size === payload.total) {
+                  const { metaCore } = await import('../../../server/queries')
+                  return Response.json(await metaCore(payload.key))
+                }
+              } catch { /* fall through */ }
+              if (/no such upload/i.test(msg)) {
+                const headers: Record<string, string> = { 'X-Total': String(payload.total), 'X-Session-Expired': '1' }
+                return new Response(null, { status: 410, headers })
+              }
+              return Response.json({ error: msg }, { status: 502 })
+            }
+          }
           const headers: Record<string, string> = { 'X-Total': String(payload.total) }
           if (held > 0) headers.Range = `bytes=0-${held - 1}`
           return new Response(null, { status: 308, headers })

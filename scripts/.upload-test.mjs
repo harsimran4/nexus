@@ -1,6 +1,4 @@
-// E2E: presigned DIRECT upload — mirrors the browser's new path exactly.
-// init (worker) → PUT parts straight to OCI (presigned URLs, no worker) →
-// POST completeUrl (worker) → meta. Cleans up after.
+// E2E: presigned DIRECT upload + probe-completion — mirrors the browser.
 import { readFileSync } from 'node:fs'
 import { webcrypto as crypto } from 'node:crypto'
 
@@ -29,36 +27,39 @@ const total = 20 * 1024 * 1024
 const init = await fetch(`${base}/api/upload/resumable`, {
   method: 'POST',
   headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${bearer}` },
-  body: JSON.stringify({ name: 'direct-test.mp4', parentId, mimeType: 'video/mp4', size: total }),
+  body: JSON.stringify({ name: 'direct-probe-test.mp4', parentId, mimeType: 'video/mp4', size: total }),
 })
 const initBody = await init.json()
-console.log('init:', init.status, '| partSize:', initBody.partSize, '| direct URLs:', initBody.direct?.length, '| completeUrl:', Boolean(initBody.completeUrl))
+console.log('init:', init.status, '| direct URLs:', initBody.direct?.length)
 if (!init.ok || !initBody.direct?.length) process.exit(1)
-const { direct, partSize, completeUrl } = initBody
+const { direct, partSize, url } = initBody
 
 const t0 = Date.now()
 for (let i = 0; i < direct.length; i++) {
   const start = i * partSize
   const end = Math.min(start + partSize, total)
-  const t = Date.now()
   const res = await fetch(direct[i], {
     method: 'PUT',
     headers: { 'Content-Type': 'video/mp4' },
-    body: Buffer.alloc(end - start, (i + 3) % 251),
+    body: Buffer.alloc(end - start, (i + 5) % 251),
   })
-  console.log(`direct part ${i + 1}: ${res.status} in ${Date.now() - t}ms etag=${(res.headers.get('etag') || '').slice(0, 14)}`)
+  console.log(`direct part ${i + 1}: ${res.status}`)
   if (res.status !== 200 && res.status !== 201) process.exit(1)
 }
-const comp = await fetch(`${base}${completeUrl}`, { method: 'POST' })
+
+// probe-completion: a PUT with bytes */total — the server assembles.
+const comp = await fetch(`${base}${url}`, {
+  method: 'PUT',
+  headers: { 'Content-Range': `bytes */${total}` },
+})
 const meta = await comp.json()
-console.log('complete:', comp.status, `${((total / 1024 / 1024) / ((Date.now() - t0) / 1000)).toFixed(1)} MB/s avg`, '| size:', meta.size)
+console.log('probe-complete:', comp.status, '| size:', meta.size, `| ${(total / 1048576 / ((Date.now() - t0) / 1000)).toFixed(1)} MB/s`)
 if (comp.status !== 200) process.exit(1)
 
-// cleanup via S3
 {
   const { AwsClient } = await import('aws4fetch')
   const s3 = new AwsClient({ accessKeyId: dev.OCI_S3_ACCESS_KEY_ID, secretAccessKey: dev.OCI_S3_SECRET_ACCESS_KEY, service: 's3', region: wr.vars.OCI_S3_REGION })
   const res = await s3.fetch(`${wr.vars.OCI_S3_ENDPOINT}/${wr.vars.OCI_S3_BUCKET}/${meta.id.split('/').map(encodeURIComponent).join('/')}`, { method: 'DELETE' })
-  console.log('cleanup:', res.status, meta.id)
+  console.log('cleanup:', res.status)
 }
-console.log('DIRECT UPLOAD OK')
+console.log('DIRECT + PROBE-COMPLETE OK')
