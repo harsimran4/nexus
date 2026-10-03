@@ -16,7 +16,7 @@
     "OCI_S3_ENDPOINT": "https://axryun3awvp1.compat.objectstorage.ap-hyderabad-1.oci.customer-oci.com",
     "OCI_S3_BUCKET": "nexus",
     "OCI_S3_REGION": "ap-hyderabad-1",
-    "PART_SIZE": "16777216"
+    "PART_SIZE": "8388608"
   },
   "assets": {
     // Unknown paths reach the Worker (assets-first only shields real files);

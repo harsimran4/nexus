@@ -243,7 +243,7 @@ function xhrPut(
   body: Blob | null,
   headers: Record<string, string>,
   onLoaded?: (loaded: number) => void,
-): Promise<{ status: number; range: string | null; json: FileMeta | null }> {
+): Promise<{ status: number; range: string | null; json: FileMeta | null; error: string | null }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('PUT', url)
@@ -251,12 +251,18 @@ function xhrPut(
     if (onLoaded) xhr.upload.onprogress = (e) => { if (e.lengthComputable) onLoaded(e.loaded) }
     xhr.onload = () => {
       let json: FileMeta | null = null
+      let error: string | null = null
       try {
-        json = JSON.parse(xhr.responseText) as FileMeta
+        const parsed = JSON.parse(xhr.responseText) as FileMeta | { error?: string }
+        if (parsed && typeof parsed === 'object' && 'error' in parsed && typeof (parsed as { error?: unknown }).error === 'string') {
+          error = (parsed as { error: string }).error
+        } else {
+          json = parsed as FileMeta
+        }
       } catch {
         /* 308 Resume Incomplete responses have no body */
       }
-      resolve({ status: xhr.status, range: xhr.getResponseHeader('Range'), json })
+      resolve({ status: xhr.status, range: xhr.getResponseHeader('Range'), json, error })
     }
     xhr.onerror = () => reject(new DriveError('network', 'Upload network error'))
     xhr.send(body)
@@ -264,6 +270,7 @@ function xhrPut(
 }
 
 const UPLOAD_RETRIES = 5 // consecutive network failures before giving up
+const PART_RETRIES = 3 // server-side (429/5xx) failures before giving up
 
 /** Upload with progress. Small files go in one form POST; larger files use
  *  multipart parts (16 MiB, from the server) through a signed-URL XHR loop
@@ -305,6 +312,7 @@ export async function uploadFile(
   const contentType = file.type || 'application/octet-stream'
   let offset = 0
   let failures = 0
+  let partRetries = 0
   while (offset < total) {
     const end = Math.min(offset + partSize, total)
     try {
@@ -323,13 +331,26 @@ export async function uploadFile(
         throw new DriveError('api', 'Upload finished but the server sent no metadata')
       }
       if (res.status === 308) {
+        partRetries = 0
         const m = res.range?.match(/bytes=0-(\d+)/)
         offset = m ? Number(m[1]) + 1 : offset
         continue
       }
-      throw new DriveError(mapStatus(res.status), `Upload failed (${res.status})`, res.status)
+      // Server-side hiccup (429 throttle, 5xx): retry this part a few times
+      // before giving up — one bad moment at storage shouldn't kill a 90 MB
+      // upload. The server's own error text rides along for the UI.
+      if ((res.status === 429 || res.status >= 500) && partRetries < PART_RETRIES) {
+        partRetries++
+        throw new DriveError('rateLimit', `Upload part failed (${res.status})${res.error ? ` — ${res.error}` : ''} — retrying`, res.status)
+      }
+      throw new DriveError(mapStatus(res.status), `Upload failed (${res.status})${res.error ? ` — ${res.error}` : ''}`, res.status)
     } catch (e) {
-      if (e instanceof DriveError && e.kind !== 'network') throw e
+      const retryablePart = e instanceof DriveError && e.kind === 'rateLimit' && partRetries <= PART_RETRIES
+      if (e instanceof DriveError && !retryablePart && e.kind !== 'network') throw e
+      if (retryablePart) {
+        await new Promise((r) => setTimeout(r, Math.min(2 ** partRetries * 1500, 12_000)))
+        continue // same offset — the part never landed
+      }
       failures++
       if (failures > UPLOAD_RETRIES) throw e instanceof DriveError ? e : new DriveError('network', 'Upload network error')
       // Ask the server how much it already holds, then resume from that byte.
