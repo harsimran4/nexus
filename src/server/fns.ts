@@ -479,7 +479,20 @@ export const uploadSmallFn = createServerFn({ method: 'POST' })
       const id = mintFileId()
       const key = fileKey(parentId, id, sanitizeNameSegment(file.name))
       const buf = await file.arrayBuffer()
-      await s3.put(key, buf, { contentType: file.type || 'application/octet-stream' })
+      // Storage's edge intermittently 403s worker-origin PUTs (empty body,
+      // passes on retry) — don't let one flake kill the upload.
+      let putError: unknown
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await s3.put(key, buf, { contentType: file.type || 'application/octet-stream' })
+          putError = null
+          break
+        } catch (e) {
+          putError = e
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 900))
+        }
+      }
+      if (putError) throw putError
       const h = await s3.head(key)
       return {
         ok: true,
