@@ -14,6 +14,50 @@ import { createFileRoute } from '@tanstack/react-router'
 export const Route = createFileRoute('/api/upload/resumable')({
   server: {
     handlers: {
+      GET: async ({ request }) => {
+        // TEMP DIAGNOSTIC: admin-only. Puts 16 bytes three ways and dumps
+        // OCI's raw responses — distinguishes AccessDenied XML from a
+        // firewall block page from an empty-body proxy 403.
+        const { env } = await import('cloudflare:workers')
+        const auth = await import('../../../server/auth')
+        const session = await auth.requireWriterRequest(request)
+        if (!session || session.role !== 'admin') return Response.json({ error: 'admin only' }, { status: 401 })
+        const { AwsClient } = await import('aws4fetch')
+        const testKey = 'trash/put-probe.bin'
+        const out: Record<string, unknown> = {}
+        const variants: Record<string, Record<string, string>> = {
+          'unsigned-payload': { 'x-amz-content-sha256': 'UNSIGNED-PAYLOAD' },
+          'no-header': {},
+          'signed-payload': { 'x-amz-content-sha256': await crypto.subtle.digest('SHA-256', new TextEncoder().encode('probe-test-body')).then((d) => [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('')) },
+        }
+        for (const [name, headers] of Object.entries(variants)) {
+          try {
+            const client = new AwsClient({ accessKeyId: env.OCI_S3_ACCESS_KEY_ID, secretAccessKey: env.OCI_S3_SECRET_ACCESS_KEY, service: 's3', region: env.OCI_S3_REGION, retries: 0 })
+            const res = await client.fetch(`${env.OCI_S3_ENDPOINT.replace(/\/+$/, '')}/${env.OCI_S3_BUCKET}/${testKey}`, {
+              method: 'PUT', headers, body: 'probe-test-body',
+            })
+            const text = await res.text()
+            out[name] = { status: res.status, body: text.slice(0, 400), cfRay: res.headers.get('cf-ray'), server: res.headers.get('server'), contentType: res.headers.get('content-type') }
+          } catch (e) {
+            out[name] = { threw: e instanceof Error ? e.message : String(e) }
+          }
+        }
+        // replicate the REAL failing small upload: project prefix, spaces +
+        // parens in the filename, Content-Type set, ~30KB body
+        try {
+          const client = new AwsClient({ accessKeyId: env.OCI_S3_ACCESS_KEY_ID, secretAccessKey: env.OCI_S3_SECRET_ACCESS_KEY, service: 's3', region: env.OCI_S3_REGION, retries: 0 })
+          const { encodeKeyPath } = await import('../../../server/mime')
+          const realKey = 'groups/grp_1a0c2bf747e09c843225a/prj_1a0c2d44f78403f90875f/probe testing (1).webp'
+          const res = await client.fetch(`${env.OCI_S3_ENDPOINT.replace(/\/+$/, '')}/${env.OCI_S3_BUCKET}/${encodeKeyPath(realKey)}`, {
+            method: 'PUT', headers: { 'x-amz-content-sha256': 'UNSIGNED-PAYLOAD', 'Content-Type': 'image/webp' }, body: 'x'.repeat(30_000),
+          })
+          const text = await res.text()
+          out['real-small-upload'] = { status: res.status, key: realKey, body: text.slice(0, 400) }
+        } catch (e) {
+          out['real-small-upload'] = { threw: e instanceof Error ? e.message : String(e) }
+        }
+        return Response.json(out, { headers: { 'Cache-Control': 'no-store' } })
+      },
       POST: async ({ request }) => {
         const { env } = await import('cloudflare:workers')
         const auth = await import('../../../server/auth')
@@ -40,7 +84,9 @@ export const Route = createFileRoute('/api/upload/resumable')({
         let uploadId: string
         try {
           uploadId = await s3.createMpu(key, contentType)
+          console.info(`[upload-init] ${key} -> ${uploadId} (partSize ${partSize})`)
         } catch (e) {
+          console.error(`[upload-init] createMpu failed: ${e instanceof Error ? e.message : e}`)
           return Response.json({ error: e instanceof Error ? e.message : 'Storage refused the upload' }, { status: 502 })
         }
 
@@ -114,6 +160,7 @@ export const Route = createFileRoute('/api/upload/resumable')({
           return Response.json(meta)
         } catch (e) {
           const msg = e instanceof Error ? e.message : 'Upload failed'
+          console.error(`[upload-part] part ${partNumber} for ${payload.key}: ${msg}`)
           // OCI lost the session (NoSuchUpload) — tell the client to start a
           // fresh one (410 Gone) instead of hammering a dead uploadId.
           if (/no such upload/i.test(msg)) {
