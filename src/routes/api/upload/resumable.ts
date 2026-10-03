@@ -58,43 +58,12 @@ export const Route = createFileRoute('/api/upload/resumable')({
         }
         return Response.json(out, { headers: { 'Cache-Control': 'no-store' } })
       },
+      // POST ?u=<session>&sig=… → COMPLETE an in-flight multipart upload.
+      // POST without → INIT: creates the MPU, presigns direct part URLs.
       POST: async ({ request }) => {
-        const { env } = await import('cloudflare:workers')
-        const auth = await import('../../../server/auth')
-        const session = await auth.requireWriterRequest(request)
-        if (!session) return Response.json({ error: 'Sign in to upload' }, { status: 401 })
-
-        const body = (await request.json().catch(() => null)) as
-          | { name?: string; parentId?: string; mimeType?: string; size?: number }
-          | null
-        if (!body?.name || !body.parentId || !Number.isFinite(body.size) || (body.size ?? 0) <= 0) {
-          return Response.json({ error: 'Missing name/parentId/size' }, { status: 400 })
-        }
-
-        const s3 = await import('../../../server/s3')
-        const { sanitizeNameSegment } = await import('../../../server/mime')
-        const bytes = crypto.getRandomValues(new Uint8Array(5))
-        let rand = ''
-        for (const b of bytes) rand += b.toString(16).padStart(2, '0')
-        const id = 'f_' + Date.now().toString(16) + rand.slice(0, 10)
-        const key = body.parentId + id + '__' + sanitizeNameSegment(body.name)
-        const contentType = body.mimeType || 'application/octet-stream'
-        const partSize = Number(env.PART_SIZE) || 16 * 1024 * 1024
-
-        let uploadId: string
-        try {
-          uploadId = await s3.createMpu(key, contentType)
-          console.info(`[upload-init] ${key} -> ${uploadId} (partSize ${partSize})`)
-        } catch (e) {
-          console.error(`[upload-init] createMpu failed: ${e instanceof Error ? e.message : e}`)
-          return Response.json({ error: e instanceof Error ? e.message : 'Storage refused the upload' }, { status: 502 })
-        }
-
-        const payload = JSON.stringify({ key, uploadId, total: body.size, partSize })
-        const token = auth.b64url(new TextEncoder().encode(payload))
-        const key_ = await authSign(env.SESSION_SECRET, token)
-        const url = `/api/upload/resumable?u=${token}&sig=${key_}`
-        return Response.json({ url, partSize })
+        const reqUrl = new URL(request.url)
+        if (reqUrl.searchParams.has('u')) return completeUpload(reqUrl)
+        return initUpload(request)
       },
 
       PUT: async ({ request }) => {
@@ -197,6 +166,91 @@ export const Route = createFileRoute('/api/upload/resumable')({
     },
   },
 })
+
+async function completeUpload(reqUrl: URL): Promise<Response> {
+        const env = (await import('cloudflare:workers')).env
+        const auth = await import('../../../server/auth')
+        const u = reqUrl.searchParams.get('u')
+        const sig = reqUrl.searchParams.get('sig')
+        if (!u || !sig || (await authSign(env.SESSION_SECRET, u)) !== sig) return Response.json({ error: 'Bad upload session' }, { status: 400 })
+        let payload: { key: string; uploadId: string; total: number }
+        try {
+          payload = JSON.parse(new TextDecoder().decode(auth.b64urlToBytes(u)))
+        } catch {
+          return Response.json({ error: 'Corrupt upload session' }, { status: 400 })
+        }
+        const s3 = await import('../../../server/s3')
+        try {
+          const parts = await s3.listParts(payload.key, payload.uploadId)
+          await s3.completeMpu(
+            payload.key,
+            payload.uploadId,
+            parts.map((p) => ({ partNumber: p.partNumber, etag: p.etag })),
+          )
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : 'Complete failed'
+          console.error(`[upload-complete] ${payload.key}: ${msg}`)
+          // The session may have completed anyway — or every byte went direct
+          // and the object already exists. Either way, done is done.
+          try {
+            const h = await s3.head(payload.key)
+            if (h && h.size === payload.total) {
+              const { metaCore } = await import('../../../server/queries')
+              return Response.json(await metaCore(payload.key))
+            }
+          } catch { /* fall through */ }
+          if (/no such upload/i.test(msg)) return Response.json({ error: 'Upload session expired at storage' }, { status: 410 })
+          return Response.json({ error: msg }, { status: 502 })
+        }
+        const { metaCore } = await import('../../../server/queries')
+        return Response.json(await metaCore(payload.key))
+      }
+
+async function initUpload(request: Request): Promise<Response> {
+        const { env } = await import('cloudflare:workers')
+        const auth = await import('../../../server/auth')
+        const session = await auth.requireWriterRequest(request)
+        if (!session) return Response.json({ error: 'Sign in to upload' }, { status: 401 })
+
+        const body = (await request.json().catch(() => null)) as
+          | { name?: string; parentId?: string; mimeType?: string; size?: number }
+          | null
+        if (!body?.name || !body.parentId || !Number.isFinite(body.size) || (body.size ?? 0) <= 0) {
+          return Response.json({ error: 'Missing name/parentId/size' }, { status: 400 })
+        }
+
+        const s3 = await import('../../../server/s3')
+        const { sanitizeNameSegment } = await import('../../../server/mime')
+        const bytes = crypto.getRandomValues(new Uint8Array(5))
+        let rand = ''
+        for (const b of bytes) rand += b.toString(16).padStart(2, '0')
+        const id = 'f_' + Date.now().toString(16) + rand.slice(0, 10)
+        const key = body.parentId + id + '__' + sanitizeNameSegment(body.name)
+        const contentType = body.mimeType || 'application/octet-stream'
+        const partSize = Number(env.PART_SIZE) || 16 * 1024 * 1024
+
+        let uploadId: string
+        try {
+          uploadId = await s3.createMpu(key, contentType)
+          console.info(`[upload-init] ${key} -> ${uploadId} (partSize ${partSize})`)
+        } catch (e) {
+          console.error(`[upload-init] createMpu failed: ${e instanceof Error ? e.message : e}`)
+          return Response.json({ error: e instanceof Error ? e.message : 'Storage refused the upload' }, { status: 502 })
+        }
+
+        // Presign a direct PUT URL per part — the browser uploads bytes
+        // straight to storage and the Worker never touches them.
+        const nParts = Math.ceil((body.size ?? 0) / partSize)
+        const direct: string[] = []
+        for (let i = 1; i <= nParts; i++) direct.push(await s3.presignPart(key, uploadId, i))
+
+        const payload = JSON.stringify({ key, uploadId, total: body.size, partSize })
+        const token = auth.b64url(new TextEncoder().encode(payload))
+        const key_ = await authSign(env.SESSION_SECRET, token)
+        const url = `/api/upload/resumable?u=${token}&sig=${key_}`
+        return Response.json({ url, partSize, direct, completeUrl: url })
+}
+
 
 function contiguousBytes(parts: { partNumber: number; size: number }[]): number {
   // Parts arrive in ascending order; count only the contiguous run from 1.

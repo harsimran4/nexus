@@ -324,15 +324,53 @@ async function resumableUpload(
     }
     throw new DriveError(mapStatus(initRes.status), message, initRes.status)
   }
-  const { url: sessionUrl, partSize } = (await initRes.json()) as { url: string; partSize: number }
+  const { url: sessionUrl, partSize, direct, completeUrl } = (await initRes.json()) as {
+    url: string
+    partSize: number
+    direct?: string[]
+    completeUrl?: string
+  }
 
   const total = file.size
   const contentType = file.type || 'application/octet-stream'
   let offset = 0
   let failures = 0
   let partRetries = 0
+  let useDirect = Array.isArray(direct) && direct.length > 0
   while (offset < total) {
     const end = Math.min(offset + partSize, total)
+    // ---- direct path: browser PUT straight to storage, Worker untouched ----
+    if (useDirect && direct) {
+      const idx = offset / partSize
+      try {
+        const res = await xhrPut(direct[idx], file.slice(offset, end), { 'Content-Type': contentType })
+        if (res.status === 200 || res.status === 201) {
+          partRetries = 0
+          offset = end
+          onProgress?.(Math.round((offset / total) * 100))
+          continue
+        }
+        // storage edge flake — retry the direct PUT before falling back
+        if (res.status === 403 || res.status === 429 || res.status >= 500) {
+          if (partRetries < 2) {
+            partRetries++
+            await new Promise((r) => setTimeout(r, Math.min(2 ** partRetries * 700, 4_000)))
+            continue // same part, same URL
+          }
+        }
+        useDirect = false // anything else (or retries spent): finish via the relay
+        continue
+      } catch (e) {
+        if (e instanceof DriveError && e.kind === 'network' && partRetries < 2) {
+          partRetries++
+          await new Promise((r) => setTimeout(r, Math.min(2 ** partRetries * 700, 4_000)))
+          continue
+        }
+        useDirect = false
+        continue
+      }
+    }
+    // ---- relay path: bytes pass through the Worker (Content-Range protocol) ----
     try {
       const res = await xhrPut(
         sessionUrl,
@@ -355,7 +393,7 @@ async function resumableUpload(
         continue
       }
       // Server-side hiccup (429 throttle, 5xx): retry this part a few times
-      // before giving up — one bad moment at storage shouldn't kill a 90 MB
+      // before giving up — one bad moment at storage shouldn't kill a big
       // upload. The server's own error text rides along for the UI.
       if ((res.status === 429 || res.status >= 500) && partRetries < PART_RETRIES) {
         partRetries++
@@ -382,6 +420,21 @@ async function resumableUpload(
       onProgress?.(Math.round((offset / total) * 100))
       await new Promise((r) => setTimeout(r, Math.min(2 ** failures * 1000, 15_000)))
     }
+  }
+
+  // All parts landed (direct PUTs don't auto-complete) — ask the server to
+  // assemble the file. A lost completion self-verifies server-side.
+  if (completeUrl) {
+    const comp = await fetch(completeUrl, { method: 'POST' }).catch((e) => {
+      throw new DriveError('network', e instanceof Error ? e.message : 'network error')
+    })
+    const j = (await comp.json().catch(() => null)) as FileMeta | { error?: string } | null
+    if (comp.ok && j && 'id' in (j as FileMeta)) {
+      onProgress?.(100)
+      return j as FileMeta
+    }
+    const errMsg = j && 'error' in (j as { error?: string }) ? (j as { error: string }).error : `Complete failed (${comp.status})`
+    throw new DriveError(mapStatus(comp.status), errMsg, comp.status)
   }
   throw new DriveError('api', 'Upload ended before the file was complete')
 }

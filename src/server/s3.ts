@@ -245,6 +245,14 @@ export async function listUploads(prefix?: string): Promise<{ key: string; uploa
   return out
 }
 
+/** Presigned direct-to-storage PUT URL for one multipart part — the browser
+ *  uploads bytes itself and the Worker never touches them. 24h validity. */
+export async function presignPart(key: string, uploadId: string, partNumber: number): Promise<string> {
+  const url = objectUrl(key, `partNumber=${partNumber}&uploadId=${encodeURIComponent(uploadId)}`)
+  const signed = await client().sign(url, { method: 'PUT', aws: { signQuery: true } })
+  return signed.url
+}
+
 export async function bucketExists(): Promise<boolean> {
   try {
     await request('HEAD', '')
