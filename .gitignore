@@ -7,3 +7,5 @@ dist
 .wrangler/
 
 .migrate-state.json
+.prod-session-secret.tmp
+.tail-live.log
