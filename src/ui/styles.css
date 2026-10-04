@@ -401,10 +401,16 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
   box-shadow: var(--shadow);
 }
 .upload-tile .progress { margin-top: 8px; }
+.upload-tile-list {
+  max-height: 176px; overflow-y: auto;
+  margin-top: 6px; padding-right: 2px;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.upload-tile-row .progress { margin-top: 3px; height: 3px; }
 .upload-tile-file {
-  margin-top: 3px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.upload-tile-fail { color: var(--red); }
 
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip {

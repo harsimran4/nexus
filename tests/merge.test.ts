@@ -266,3 +266,58 @@ describe('mergeRemote', () => {
     expect(out.projects['p_new']).toBeDefined()
   })
 })
+
+// ---------------------------------------------------------------------------
+// uploadLinks — per-entry LWW (a dropped field here would silently delete
+// just-minted guest links / revocations on every rebase)
+// ---------------------------------------------------------------------------
+
+import type { UploadLink } from '../src/types/schema'
+
+function makeLink(id: string, ms: number, writer: string, overrides: Partial<UploadLink> = {}): UploadLink {
+  return {
+    id,
+    tokenHash: 'sha256$' + id,
+    projectId: 'p0',
+    sectionId: 's0',
+    maxFileBytes: 1024 * 1024,
+    note: '',
+    createdAt: encodeHlc(BASE_MS, 0),
+    createdBy: 'u0',
+    expiresAt: new Date(9_999_999_999_000).toISOString(),
+    revokedAt: null,
+    updatedAt: encodeHlc(ms, 0),
+    writerId: writer,
+    ...overrides,
+  }
+}
+
+describe('mergeRemote — uploadLinks', () => {
+  it('keeps a locally-minted link through a rebase against a remote that lacks it', () => {
+    const local = baseDoc()
+    local.uploadLinks = [makeLink('ul_a', 2000, 'w-aaa')]
+    const remote = baseDoc()
+    const out = mergeRemote({ local: cloneDoc(local), remote: cloneDoc(remote) }).merged
+    expect(out.uploadLinks.some((l) => l.id === 'ul_a')).toBe(true)
+    const back = mergeRemote({ local: cloneDoc(remote), remote: cloneDoc(local) }).merged
+    expect(back.uploadLinks.some((l) => l.id === 'ul_a')).toBe(true)
+  })
+
+  it('a newer remote revocation wins over a stale local active link', () => {
+    const local = baseDoc()
+    local.uploadLinks = [makeLink('ul_a', 2000, 'w-aaa')]
+    const remote = baseDoc()
+    remote.uploadLinks = [makeLink('ul_a', 3000, 'w-bbb', { revokedAt: encodeHlc(3000, 0) })]
+    const out = mergeRemote({ local: cloneDoc(local), remote: cloneDoc(remote) }).merged
+    expect(out.uploadLinks.find((l) => l.id === 'ul_a')?.revokedAt).not.toBeNull()
+  })
+
+  it('unions concurrent creates from both sides', () => {
+    const local = baseDoc()
+    local.uploadLinks = [makeLink('ul_a', 2000, 'w-aaa')]
+    const remote = baseDoc()
+    remote.uploadLinks = [makeLink('ul_b', 2000, 'w-bbb')]
+    const out = mergeRemote({ local: cloneDoc(local), remote: cloneDoc(remote) }).merged
+    expect(out.uploadLinks.map((l) => l.id).sort()).toEqual(['ul_a', 'ul_b'])
+  })
+})

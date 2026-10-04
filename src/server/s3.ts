@@ -81,7 +81,27 @@ async function request(method: string, key: string, opts: ReqOpts = {}): Promise
   if (res.ok || opts.raw) return res
   const text = await res.text().catch(() => '')
   const parsed = xml.parseError(text)
-  throw new S3Error(res.status, parsed.code, parsed.message)
+  // Provenance in the message: genuine OCI errors carry an oci-* request id,
+  // a 403 with NO such header came from Cloudflare's platform/middlebox —
+  // this distinction is exactly what wrangler tail needs to show. (A HEAD
+  // never has a body, so its failures are provenance-only.)
+  const prov = [
+    res.headers.get('oci-request-id') ?? res.headers.get('opc-request-id'),
+    res.headers.get('cf-ray') ? `cf-ray=${res.headers.get('cf-ray')}` : null,
+    res.headers.get('cf-mitigated') ? `cf-mitigated=${res.headers.get('cf-mitigated')}` : null,
+  ]
+    .filter(Boolean)
+    .join(' ')
+  const message = [parsed.message || parsed.code || `S3 ${res.status}`, text.trim() === '' ? 'empty-body' : null, prov || null]
+    .filter(Boolean)
+    .join(' | ')
+  throw new S3Error(res.status, parsed.code, message)
+}
+
+/** OCI lost the upload session (aborted/completed/never existed). Match on
+ *  the CODE, not the prose — Message text varies, the code doesn't. */
+export function isNoSuchUpload(e: unknown): boolean {
+  return e instanceof S3Error && (e.code === 'NoSuchUpload' || /no such upload/i.test(e.message))
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +208,11 @@ export async function createMpu(key: string, contentType: string): Promise<strin
     headers: { 'Content-Type': contentType },
     body: null,
   })
-  return xml.parseUploadId(await res.text())
+  const id = xml.parseUploadId(await res.text())
+  // An unparseable success body must NOT mint a dead session (empty uploadId
+  // would presign part URLs that can never land).
+  if (!id) throw new S3Error(502, 'BadResponse', 'Storage accepted the upload but sent no upload id')
+  return id
 }
 
 export async function uploadPart(
@@ -205,8 +229,21 @@ export async function uploadPart(
 }
 
 export async function listParts(key: string, uploadId: string): Promise<xml.PartEntry[]> {
-  const res = await request('GET', key, { query: `uploadId=${encodeURIComponent(uploadId)}` })
-  return xml.parseParts(await res.text())
+  // Paginate — ListParts defaults to 1000 parts/page and an unpaged listing
+  // would both report held<total forever (>8 GiB at 8 MiB parts) and let
+  // completeMpu assemble a silently truncated object.
+  const all: xml.PartEntry[] = []
+  let marker = 0
+  for (let page = 0; page < 12; page++) {
+    // 12 pages × 1000 = 12 000 parts ≥ the S3 10 000-part ceiling.
+    const query = `uploadId=${encodeURIComponent(uploadId)}&max-parts=1000&part-number-marker=${marker}`
+    const res = await request('GET', key, { query })
+    const parts = xml.parseParts(await res.text())
+    all.push(...parts)
+    if (parts.length < 1000) return all.sort((a, b) => a.partNumber - b.partNumber)
+    marker = parts[parts.length - 1].partNumber
+  }
+  return all.sort((a, b) => a.partNumber - b.partNumber)
 }
 
 export async function completeMpu(
@@ -250,6 +287,15 @@ export async function listUploads(prefix?: string): Promise<{ key: string; uploa
 export async function presignPart(key: string, uploadId: string, partNumber: number): Promise<string> {
   const url = objectUrl(key, `partNumber=${partNumber}&uploadId=${encodeURIComponent(uploadId)}`)
   const signed = await client().sign(url, { method: 'PUT', aws: { signQuery: true } })
+  return signed.url
+}
+
+/** Presigned direct PutObject URL — single-shot uploads skip multipart
+ *  entirely, so the Worker never relays user bytes (Oracle's Cloudflare
+ *  front intermittently 403s worker-egress PUTs; browser-origin ones pass).
+ *  24h validity, same shape as presignPart. */
+export async function presignPut(key: string): Promise<string> {
+  const signed = await client().sign(objectUrl(key), { method: 'PUT', aws: { signQuery: true } })
   return signed.url
 }
 

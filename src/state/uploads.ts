@@ -9,6 +9,8 @@ import { uploadToProject } from './actions'
 export interface UploadEntry {
   name: string
   pct: number
+  /** The pool worker has picked this file up (bytes moving or finishing). */
+  started?: boolean
   done?: boolean
   ok?: boolean
   err?: string
@@ -48,8 +50,15 @@ export function uploadsBusy(): boolean {
   return batch !== null && batch.files.some((f) => !f.done)
 }
 
-/** Upload a batch sequentially, publishing progress to the store. Refused
- *  while another batch is running; replaces a finished one. */
+/** Files uploaded concurrently within one batch. Bytes go browser-direct to
+ *  OCI (no Drive-era throttle to pace around); 3 keeps per-file progress
+ *  readable, stays under the browser's ~6-connections-per-host budget, and
+ *  bounds contention on the server-side doc link each completion performs. */
+export const UPLOAD_CONCURRENCY = 3
+
+/** Upload a batch (up to UPLOAD_CONCURRENCY files at once), publishing
+ *  progress to the store. Refused while another batch is running; replaces a
+ *  finished one. */
 export function startUploadBatch(projectId: string, files: File[], sectionId: string | null): boolean {
   if (uploadsBusy() || files.length === 0) return false
   if (autoDismissTimer !== null) {
@@ -59,23 +68,31 @@ export function startUploadBatch(projectId: string, files: File[], sectionId: st
   batch = { projectId, files: files.map((f) => ({ name: f.name, pct: 0 })) }
   emit()
   void (async () => {
-    for (let i = 0; i < files.length; i++) {
-      const r = await uploadToProject(projectId, files[i], (pct) => {
-        if (!batch) return
-        // New object identity on every tick — useSyncExternalStore compares
-        // snapshots by reference, so in-place mutation would never re-render.
-        batch = { ...batch, files: batch.files.map((u, j) => (j === i ? { ...u, pct } : u)) }
+    let next = 0
+    const worker = async (): Promise<void> => {
+      for (;;) {
+        const i = next++
+        if (i >= files.length || !batch) return
+        batch = { ...batch, files: batch.files.map((u, j) => (j === i ? { ...u, started: true } : u)) }
         emit()
-      }, { sectionId })
-      if (!batch) return
-      batch = {
-        ...batch,
-        files: batch.files.map((u, j) =>
-          j === i ? { ...u, pct: 100, done: true, ok: r.ok, err: r.ok ? undefined : r.error } : u,
-        ),
+        const r = await uploadToProject(projectId, files[i], (pct) => {
+          if (!batch) return
+          // New object identity on every tick — useSyncExternalStore compares
+          // snapshots by reference, so in-place mutation would never re-render.
+          batch = { ...batch, files: batch.files.map((u, j) => (j === i ? { ...u, pct } : u)) }
+          emit()
+        }, { sectionId })
+        if (!batch) return
+        batch = {
+          ...batch,
+          files: batch.files.map((u, j) =>
+            j === i ? { ...u, pct: 100, done: true, ok: r.ok, err: r.ok ? undefined : r.error } : u,
+          ),
+        }
+        emit()
       }
-      emit()
     }
+    await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, files.length) }, worker))
     // All-good batches linger briefly as a receipt, then close themselves.
     // Failures stay until dismissed so they can't scroll by unseen.
     const finished = batch

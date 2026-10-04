@@ -20,8 +20,10 @@ import { Route as SecurityRouteImport } from './routes/security'
 import { Route as FilesSplatRouteImport } from './routes/files/$'
 import { Route as GroupGroupIdRouteImport } from './routes/group.$groupId'
 import { Route as ProjectProjectIdRouteImport } from './routes/project.$projectId'
+import { Route as UploadTokenRouteImport } from './routes/upload.$token'
 import { Route as ApiPublicListRouteImport } from './routes/api/public/list'
 import { Route as ApiPublicMetaRouteImport } from './routes/api/public/meta'
+import { Route as ApiUploadLinkRouteImport } from './routes/api/upload/link'
 import { Route as ApiUploadResumableRouteImport } from './routes/api/upload/resumable'
 
 const IndexRoute = IndexRouteImport.update({
@@ -79,6 +81,11 @@ const ProjectProjectIdRoute = ProjectProjectIdRouteImport.update({
   path: '/project/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const UploadTokenRoute = UploadTokenRouteImport.update({
+  id: '/upload/$token',
+  path: '/upload/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicListRoute = ApiPublicListRouteImport.update({
   id: '/api/public/list',
   path: '/api/public/list',
@@ -87,6 +94,11 @@ const ApiPublicListRoute = ApiPublicListRouteImport.update({
 const ApiPublicMetaRoute = ApiPublicMetaRouteImport.update({
   id: '/api/public/meta',
   path: '/api/public/meta',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiUploadLinkRoute = ApiUploadLinkRouteImport.update({
+  id: '/api/upload/link',
+  path: '/api/upload/link',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiUploadResumableRoute = ApiUploadResumableRouteImport.update({
@@ -107,8 +119,10 @@ export interface FileRoutesByFullPath {
   '/files/$': typeof FilesSplatRoute
   '/group/$groupId': typeof GroupGroupIdRoute
   '/project/$projectId': typeof ProjectProjectIdRoute
+  '/upload/$token': typeof UploadTokenRoute
   '/api/public/list': typeof ApiPublicListRoute
   '/api/public/meta': typeof ApiPublicMetaRoute
+  '/api/upload/link': typeof ApiUploadLinkRoute
   '/api/upload/resumable': typeof ApiUploadResumableRoute
 }
 export interface FileRoutesByTo {
@@ -123,8 +137,10 @@ export interface FileRoutesByTo {
   '/files/$': typeof FilesSplatRoute
   '/group/$groupId': typeof GroupGroupIdRoute
   '/project/$projectId': typeof ProjectProjectIdRoute
+  '/upload/$token': typeof UploadTokenRoute
   '/api/public/list': typeof ApiPublicListRoute
   '/api/public/meta': typeof ApiPublicMetaRoute
+  '/api/upload/link': typeof ApiUploadLinkRoute
   '/api/upload/resumable': typeof ApiUploadResumableRoute
 }
 export interface FileRoutesById {
@@ -140,8 +156,10 @@ export interface FileRoutesById {
   '/files/$': typeof FilesSplatRoute
   '/group/$groupId': typeof GroupGroupIdRoute
   '/project/$projectId': typeof ProjectProjectIdRoute
+  '/upload/$token': typeof UploadTokenRoute
   '/api/public/list': typeof ApiPublicListRoute
   '/api/public/meta': typeof ApiPublicMetaRoute
+  '/api/upload/link': typeof ApiUploadLinkRoute
   '/api/upload/resumable': typeof ApiUploadResumableRoute
 }
 export interface FileRouteTypes {
@@ -158,8 +176,10 @@ export interface FileRouteTypes {
     | '/files/$'
     | '/group/$groupId'
     | '/project/$projectId'
+    | '/upload/$token'
     | '/api/public/list'
     | '/api/public/meta'
+    | '/api/upload/link'
     | '/api/upload/resumable'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -174,8 +194,10 @@ export interface FileRouteTypes {
     | '/files/$'
     | '/group/$groupId'
     | '/project/$projectId'
+    | '/upload/$token'
     | '/api/public/list'
     | '/api/public/meta'
+    | '/api/upload/link'
     | '/api/upload/resumable'
   id:
     | '__root__'
@@ -190,8 +212,10 @@ export interface FileRouteTypes {
     | '/files/$'
     | '/group/$groupId'
     | '/project/$projectId'
+    | '/upload/$token'
     | '/api/public/list'
     | '/api/public/meta'
+    | '/api/upload/link'
     | '/api/upload/resumable'
   fileRoutesById: FileRoutesById
 }
@@ -207,8 +231,10 @@ export interface RootRouteChildren {
   FilesSplatRoute: typeof FilesSplatRoute
   GroupGroupIdRoute: typeof GroupGroupIdRoute
   ProjectProjectIdRoute: typeof ProjectProjectIdRoute
+  UploadTokenRoute: typeof UploadTokenRoute
   ApiPublicListRoute: typeof ApiPublicListRoute
   ApiPublicMetaRoute: typeof ApiPublicMetaRoute
+  ApiUploadLinkRoute: typeof ApiUploadLinkRoute
   ApiUploadResumableRoute: typeof ApiUploadResumableRoute
 }
 
@@ -291,6 +317,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/upload/$token': {
+      id: '/upload/$token'
+      path: '/upload/$token'
+      fullPath: '/upload/$token'
+      preLoaderRoute: typeof UploadTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/public/list': {
       id: '/api/public/list'
       path: '/api/public/list'
@@ -303,6 +336,13 @@ declare module '@tanstack/react-router' {
       path: '/api/public/meta'
       fullPath: '/api/public/meta'
       preLoaderRoute: typeof ApiPublicMetaRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/upload/link': {
+      id: '/api/upload/link'
+      path: '/api/upload/link'
+      fullPath: '/api/upload/link'
+      preLoaderRoute: typeof ApiUploadLinkRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/upload/resumable': {
@@ -327,8 +367,10 @@ const rootRouteChildren: RootRouteChildren = {
   FilesSplatRoute: FilesSplatRoute,
   GroupGroupIdRoute: GroupGroupIdRoute,
   ProjectProjectIdRoute: ProjectProjectIdRoute,
+  UploadTokenRoute: UploadTokenRoute,
   ApiPublicListRoute: ApiPublicListRoute,
   ApiPublicMetaRoute: ApiPublicMetaRoute,
+  ApiUploadLinkRoute: ApiUploadLinkRoute,
   ApiUploadResumableRoute: ApiUploadResumableRoute,
 }
 export const routeTree = rootRouteImport

@@ -165,6 +165,11 @@ export function mergeRemote(input: MergeInput): { merged: NexusDoc; undeletes: A
       : remote.users.studioSub,
   }
 
+  // upload links: per-entry LWW — without this a just-minted link (or just-
+  // applied revocation) not yet saved is silently dropped on any rebase,
+  // because the merged-doc literal below overrides the spread.
+  const uploadLinks = mergeUsers(local.uploadLinks ?? [], remote.uploadLinks ?? [], [])
+
   // tombstones: union by (type,id), newest wins
   const tombMap = new Map<string, Tombstone>()
   for (const t of [...remote.tombstones, ...local.tombstones]) {
@@ -193,6 +198,7 @@ export function mergeRemote(input: MergeInput): { merged: NexusDoc; undeletes: A
     ids: local.ids.nexusFileId ? local.ids : remote.ids,
     users,
     settings: settingsWinner,
+    uploadLinks,
     groups,
     projects,
     scripts,

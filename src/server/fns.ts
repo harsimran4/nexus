@@ -474,6 +474,8 @@ export const uploadSmallFn = createServerFn({ method: 'POST' })
       const parentId = String(data.get('parentId') ?? '')
       const file = data.get('file')
       if (!parentId || !(file instanceof File)) return err('api', 'Missing parentId or file')
+      const projectId = String(data.get('projectId') ?? '') || null
+      const sectionId = String(data.get('sectionId') ?? '') || null
       const s3 = await import('./s3')
       const { sanitizeNameSegment } = await mimeHelpers()
       const id = mintFileId()
@@ -482,9 +484,10 @@ export const uploadSmallFn = createServerFn({ method: 'POST' })
       // Storage's edge intermittently 403s worker-origin PUTs (empty body,
       // passes on retry) — don't let one flake kill the upload.
       let putError: unknown
+      let etag = ''
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
-          await s3.put(key, buf, { contentType: file.type || 'application/octet-stream' })
+          etag = (await s3.put(key, buf, { contentType: file.type || 'application/octet-stream' })).etag
           putError = null
           break
         } catch (e) {
@@ -493,11 +496,28 @@ export const uploadSmallFn = createServerFn({ method: 'POST' })
         }
       }
       if (putError) throw putError
-      const h = await s3.head(key)
-      return {
-        ok: true,
-        data: await fileMetaFromHead(key, h ?? { etag: '', size: buf.byteLength, lastModified: new Date().toUTCString() }),
+      // Meta from the put's OWN etag — the old post-put verification HEAD sat
+      // outside the retry loop, so one HEAD flake reported failure for bytes
+      // that were already safely stored (user retries → duplicate object).
+      const meta = await fileMetaFromHead(key, { etag, size: buf.byteLength, lastModified: new Date().toUTCString() })
+      // Link the file into the project doc server-side — the client commit is
+      // only a UI mirror (sync-kernel replay/discard/re-assert can undo it).
+      try {
+        const { linkUploadedFile } = await import('./linking')
+        const outcome = await linkUploadedFile({
+          key,
+          projectId,
+          sectionId,
+          actorUid: context.auth.session.uid,
+          fileName: file.name,
+        })
+        if (outcome === 'no-project') {
+          console.warn(`[upload-link] ${key}: no matching project — link left to the client commit`)
+        }
+      } catch (e) {
+        console.error(`[upload-link] ${key}: ${e instanceof Error ? e.message : e}`)
       }
+      return { ok: true, data: meta }
     } catch (e) {
       return err('api', e instanceof Error ? e.message : 'Upload failed')
     }

@@ -13,6 +13,8 @@ const QUIET_VERBS = new Set(['group.folder', 'project.folder']) // folder bookke
 function actorName(doc: NexusDoc, id: string): string {
   if (!id || id === 'anonymous') return 'Someone'
   if (id.startsWith('system:')) return 'Nexus'
+  if (id.startsWith('ul_')) return 'Guest (upload link)'
+  if (id === 'upload') return 'Guest (upload link)'
   const u = doc.users.app.find((x) => x.id === id)
   if (u) return u.name
   if (id.startsWith('worker:')) return id.slice(7) // legacy sessions pre-uid
@@ -62,6 +64,8 @@ function describe(doc: NexusDoc, e: ActivityEvent): string {
     case 'user.role': return `changed ${String(meta.name ?? 'a user')}'s role to ${String(meta.role ?? '')}`
     case 'viewer.create': return `minted a viewer token for ${String(meta.name ?? '')}`
     case 'viewer.revoke': return `revoked the viewer token for ${String(meta.name ?? '')}`
+    case 'uploadlink.create': return `created a guest upload link for ${quoted}`
+    case 'uploadlink.revoke': return `revoked a guest upload link for ${quoted}`
     case 'settings.update': return 'updated workspace settings'
     case 'settings.apiKey': return 'rotated the API key override'
     case 'workspace.reset': return 'wiped the workspace data'

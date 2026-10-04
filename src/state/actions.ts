@@ -9,6 +9,7 @@ import {
   newUserId,
   newViewerId,
   newMediaSectionId,
+  newUploadLinkId,
 } from '../util/id'
 import { hlcNow } from '../util/hlc'
 import { thumbKeyFor } from '../util/media'
@@ -20,6 +21,7 @@ import {
   type Group,
   type Script,
   type ScriptStatus,
+  type UploadLink,
 } from '../types/schema'
 import { canWrite, canAdmin } from '../auth/session'
 import { commit, touch, recordTombstone, appendActivity, flush, markContentDirty, writerId } from '../sync/writer'
@@ -391,11 +393,16 @@ export async function uploadToProject(
   try {
     const folderId = await ensureProjectFolder(projectId)
     if (!folderId) return { ok: false, error: 'Project folder not ready — try again in a few seconds' }
-    const meta = await uploadFile(folderId, file, onProgress)
+    // projectId/sectionId ride along so the SERVER links the file into the
+    // doc at completion — the commit below is only instant UI feedback; the
+    // sync kernel's replay/discard/re-assert behaviors can roll a client-side
+    // link back after a successful upload (files kept vanishing from Media).
+    const meta = await uploadFile(folderId, file, onProgress, { projectId, sectionId: opts.sectionId ?? null })
     // The project may have MOVED to another group while the bytes were in
     // flight — the object sits under the old prefix and the doc already
     // references the new one. Copy the object across, then link the copy.
     let linked = meta
+    let movedDuringUpload = false
     const pNow = storeGet().doc?.projects[projectId]
     if (pNow?.folderId && !meta.id.startsWith(pNow.folderId)) {
       const { copyFile, trashFile } = await import('../drive/client')
@@ -403,11 +410,19 @@ export async function uploadToProject(
       const moved = await copyFile(meta.id, nameSegment, pNow.folderId)
       await trashFile(meta.id).catch(() => {})
       linked = moved
+      movedDuringUpload = true
     }
     commit((d) => {
       const p = d.projects[projectId]
       if (!p) return
       p.fileIds = [...new Set([...p.fileIds, linked.id])]
+      // The server linked the PRE-move key at completion (it saw the old
+      // folderId); that object was copied to the new prefix and trashed at
+      // the old one — strip the ghost in the same commit that adds the copy.
+      if (movedDuringUpload) {
+        p.fileIds = p.fileIds.filter((f) => f !== meta.id)
+        delete p.mediaSectionOf[meta.id]
+      }
       // Assign the upload's section in the same commit as the link — atomic,
       // and skipped if that section was deleted while the upload was in flight.
       if (opts.sectionId && p.mediaSections.some((s) => s.id === opts.sectionId)) {
@@ -434,7 +449,7 @@ export async function removeProjectFile(
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   assertWrite()
   if (opts.trashInDrive) {
-    const { trashFile } = await import('../drive/client')
+    const { trashFile, getMeta } = await import('../drive/client')
     try {
       await trashFile(fileId)
       const thumb = thumbKeyFor(fileId)
@@ -443,7 +458,11 @@ export async function removeProjectFile(
       if (e instanceof DriveError && e.kind === 'notFound') {
         // Already gone from storage — still unlink it below.
       } else if (e instanceof DriveError) {
-        return { ok: false, error: `${e.message} — ${e.kind}` }
+        // Ghost links (a server link that raced a move/copy) point at keys
+        // that no longer exist but surface as api errors, not notFound —
+        // verify before failing the unlink, an already-gone object unlinks.
+        const still = await getMeta(fileId).catch((m) => (m instanceof DriveError && m.kind === 'notFound' ? null : undefined))
+        if (still !== null) return { ok: false, error: `${e.message} — ${e.kind}` }
       } else {
         return { ok: false, error: e instanceof Error ? e.message : 'Delete failed' }
       }
@@ -805,6 +824,70 @@ export function revokeViewer(viewerId: string): void {
     v.writerId = writerId()
     appendActivity(doc, 'viewer.revoke', viewerId, { name: v.name })
   })
+}
+
+// ---------------------------------------------------------------------------
+// Guest upload links — one project + one media section, no login. The raw
+// token is shown ONCE (like viewer tokens); only its sha256 hash is stored,
+// and the server derives the upload destination from the link, never from
+// the guest's request.
+// ---------------------------------------------------------------------------
+
+export async function createUploadLink(
+  projectId: string,
+  sectionId: string,
+  expiresInDays: 1 | 7 | 30,
+  maxFileBytes: number,
+  note = '',
+): Promise<{ raw: string; linkId: string; synced: boolean }> {
+  assertWrite()
+  const project = storeGet().doc?.projects[projectId]
+  if (!project || project.deleted) throw new Error('Project not found')
+  if (!project.mediaSections.some((s) => s.id === sectionId)) {
+    throw new Error('Pick one of the project’s media sections for this link')
+  }
+  await ensureProjectFolder(projectId)
+  if (!storeGet().doc?.projects[projectId]?.folderId) {
+    throw new Error('Project folder not ready — try again in a few seconds')
+  }
+  const { raw, hash } = await mintToken()
+  const id = newUploadLinkId()
+  const link: UploadLink = {
+    id,
+    tokenHash: hash,
+    projectId,
+    sectionId,
+    maxFileBytes,
+    note,
+    createdAt: hlcNow(),
+    createdBy: sessionModule().getSession()?.appUserId ?? 'pending',
+    expiresAt: new Date(Date.now() + expiresInDays * 86_400_000).toISOString(),
+    revokedAt: null,
+    updatedAt: hlcNow(),
+    writerId: writerId(),
+  }
+  commit((d) => {
+    d.uploadLinks = [...(d.uploadLinks ?? []), link]
+    appendActivity(d, 'uploadlink.create', projectId, { sectionId, expiresInDays, maxFileBytes })
+  })
+  // The secret must reach storage before it is shown — same as user creation.
+  const synced = await flush()
+  return { raw, linkId: id, synced }
+}
+
+export async function revokeUploadLink(linkId: string): Promise<boolean> {
+  assertWrite()
+  const doc = storeGet().doc
+  if (!doc?.uploadLinks?.some((l) => l.id === linkId)) throw new Error('Link not found')
+  commit((d) => {
+    const l = d.uploadLinks?.find((x) => x.id === linkId)
+    if (!l || l.revokedAt) return
+    l.revokedAt = hlcNow()
+    l.updatedAt = hlcNow()
+    l.writerId = writerId()
+    appendActivity(d, 'uploadlink.revoke', l.projectId, { linkId })
+  })
+  return await flush()
 }
 
 export function updateSettings(mut: (s: NexusDoc['settings']) => void): void {

@@ -15,6 +15,7 @@ import {
 } from '../../state/actions'
 import { describeError, downloadToBrowserProgress } from '../../drive/preview'
 import { dismissUploads, startUploadBatch, useUploadBatch } from '../../state/uploads'
+import { UploadLinksModal } from '../UploadLinks'
 import { getMeta, listChildren, renameFile, webViewLink, type FileMeta } from '../../drive/client'
 import { MediaThumb } from '../MediaThumb'
 import {
@@ -147,6 +148,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
   // section CRUD drafts
   const [newSectionName, setNewSectionName] = useState<string | null>(null)
   const [manageSections, setManageSections] = useState(false)
+  const [shareLinksOpen, setShareLinksOpen] = useState(false)
   const [editingSectionId, setEditingSectionId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
   // file rename (per card)
@@ -453,7 +455,6 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
   const uploadBatchHere = batch !== null && batch.projectId === projectId ? batch : null
   const uploadTotal = uploadBatchHere?.files.length ?? 0
   const uploadFinishedCount = uploadBatchHere ? uploadBatchHere.files.filter((u) => u.done).length : 0
-  const uploadCurrent = uploadBatchHere?.files.find((u) => !u.done)
   const uploadBusy = uploadBatchHere !== null && uploadBatchHere.files.some((u) => !u.done)
 
   // Uploads always run in the background — the modal shows progress while
@@ -551,6 +552,11 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
           {writable && (
             <button className="btn primary" onClick={() => setUploadOpen(true)}>
               Upload
+            </button>
+          )}
+          {writable && (
+            <button className="btn" title="Guests upload via a link — no login needed" onClick={() => setShareLinksOpen(true)}>
+              Share link
             </button>
           )}
           <button className="btn" onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}>
@@ -743,15 +749,37 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
             {uploadBatchHere ? (
               <div style={{ textAlign: 'left' }}>
                 <div className="small muted">
-                  {uploadFinishedCount}/{uploadTotal} uploaded · {uploadCurrent ? uploadCurrent.name : 'done'}
+                  {uploadFinishedCount}/{uploadTotal} uploaded
+                  {uploadBusy
+                    ? ` · ${uploadBatchHere.files.filter((u) => u.started && !u.done).length} in parallel`
+                    : ''}
                 </div>
-                <div className="progress"><div style={{ width: `${uploadCurrent?.pct ?? 100}%` }} /></div>
+                <div style={{ maxHeight: 190, overflowY: 'auto', marginTop: 6, display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  {uploadBatchHere.files.map((u, i) => (
+                    <div key={i}>
+                      <div className="spread small">
+                        <span
+                          style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: u.done && !u.ok ? 'var(--red)' : undefined }}
+                          title={u.err ?? u.name}
+                        >
+                          {u.done ? (u.ok ? '✓ ' : '✗ ') : !u.started ? '· ' : ''}
+                          {u.name}
+                        </span>
+                        <span className="muted">{u.done ? (u.ok ? 'done' : 'failed') : u.started ? `${u.pct}%` : 'queued'}</span>
+                      </div>
+                      {u.started && !u.done && (
+                        <div className="progress" style={{ marginTop: 3 }}><div style={{ width: `${u.pct}%` }} /></div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {!uploadBusy && <div className="progress" style={{ marginTop: 6 }}><div style={{ width: '100%' }} /></div>}
               </div>
             ) : (
               <div>
                 Drop media here or click to upload
                 <div className="faint" style={{ fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: 12.5, marginTop: 4 }}>
-                  they land in this project&apos;s folder on Drive — and upload in the background
+                  up to 3 files upload in parallel, straight to storage — the app keeps working while they run
                 </div>
               </div>
             )}
@@ -780,6 +808,7 @@ function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
       )}
 
       {/* Manage sections modal */}
+      {shareLinksOpen && <UploadLinksModal projectId={projectId} onClose={() => setShareLinksOpen(false)} />}
       {manageSections && (
         <Modal title="Manage sections" onClose={() => { setManageSections(false); setEditingSectionId(null) }}>
           {project.mediaSections.length === 0 ? (

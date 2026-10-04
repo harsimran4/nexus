@@ -191,6 +191,26 @@ export const viewerSchema = z.object({
 })
 export type Viewer = z.infer<typeof viewerSchema>
 
+/** Guest upload link — the raw token is shown ONCE and never stored; only its
+ *  sha256 hash lives in the doc (same model as viewer tokens). The link pins
+ *  ONE project + ONE real media section; the server derives the upload
+ *  destination from it, never from the guest's request. */
+export const uploadLinkSchema = z.object({
+  id: z.string(), // "ul_…" — also the activity actor for guest uploads
+  tokenHash: z.string(), // "sha256$<hex>"
+  projectId: z.string(),
+  sectionId: z.string(), // must be an existing project.mediaSections entry at mint time
+  maxFileBytes: z.number().int().positive(),
+  note: z.string().default(''),
+  createdAt: z.string(), // HLC
+  createdBy: z.string().default(''),
+  expiresAt: z.string(), // ISO instant — wall-clock compared (NOT an HLC stamp)
+  revokedAt: z.string().nullable().default(null),
+  updatedAt: z.string().optional(), // LWW stamps (merge.ts)
+  writerId: z.string().optional(),
+})
+export type UploadLink = z.infer<typeof uploadLinkSchema>
+
 export const usersSchema = z
   .object({
     app: z.array(appUserSchema).default([]),
@@ -222,6 +242,7 @@ export const nexusDocSchema = z.object({
     .default({ rootFolderId: '', nexusFileId: '' }),
   users: usersSchema,
   settings: settingsSchema,
+  uploadLinks: z.array(uploadLinkSchema).default([]),
   groups: z.record(z.string(), groupSchema).default({}),
   projects: z.record(z.string(), projectSchema).default({}),
   scripts: z.record(z.string(), scriptSchema).default({}),

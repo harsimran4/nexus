@@ -72,13 +72,21 @@ function AppBody(): ReactNode {
   const [draftRecovery, setDraftRecovery] = useState<string | null>(null)
   const [staleBuild, setStaleBuild] = useState(false)
 
+  // Guest upload links (/upload/<token>) are self-contained: they must never
+  // download the workspace doc, start the poller, or be swallowed by the
+  // viewer-login gate below. The pathname branch returns before every doc-
+  // based branch, and boot is skipped so even the public doc read never runs.
+  const pathname = useRouterState({ select: (s) => s.location.pathname })
+  const isGuestUpload = pathname.startsWith('/upload/')
+
   useEffect(() => {
+    if (isGuestUpload) return
     void boot().then(() => {
       void checkDraftRecovery().then((d) => {
         if (d) setDraftRecovery(d.savedAt)
       })
     })
-  }, [])
+  }, [isGuestUpload])
 
   // The moment an editor/admin signs in: retry any project folders that failed
   // to create earlier, and flush queued edits so they reach storage instead
@@ -126,6 +134,14 @@ function AppBody(): ReactNode {
       void runHealthChecks({ deep: true }).then(setHealth)
     }
   }, [status])
+
+  if (isGuestUpload) {
+    return (
+      <Shell bare>
+        <Outlet />
+      </Shell>
+    )
+  }
 
   if (status === 'blocked' && bootError && !doc) {
     return (
