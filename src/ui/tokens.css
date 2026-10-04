@@ -1,0 +1,130 @@
+/* ---------------------------------------------------------------------------
+   Nexus design tokens — primitives + semantic values.
+
+   Primitives (space/type/radius/z/motion) are the scales everything new code
+   uses. Semantic tokens are where the LOOK lives: a future direction pass
+   edits this file, not the component CSS. styles.css consumes both; dark
+   values override under [data-theme='dark'] ("same paper, different hour").
+-------------------------------------------------------------------------- */
+
+:root {
+  /* ---- primitives: spacing (4/8 grid) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* ---- primitives: type scale + weights ---- */
+  --fs-xs: 11.5px;
+  --fs-sm: 12.5px;
+  --fs-md: 13.5px;
+  --fs-base: 14.5px;
+  --fs-lg: 15px;
+  --fs-xl: 18px;
+  --fs-2xl: 26px;
+  --fw-regular: 400;
+  --fw-medium: 550;
+  --fw-semibold: 650;
+
+  /* ---- primitives: radius ---- */
+  --radius-xs: 3px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  /* ---- primitives: z-index ladder (one layering, documented) ---- */
+  --z-card-hover: 2;   /* hovered/raised cards inside a stacking context */
+  --z-topbar: 40;      /* mobile sticky top bar */
+  --z-tray: 45;        /* floating selection tray + upload tile */
+  --z-modal: 50;       /* modal backdrop + dialog */
+  --z-backdrop: 55;    /* mobile drawer backdrop */
+  --z-drawer: 60;      /* mobile drawer */
+  --z-lightbox: 80;    /* media viewer — above all chrome */
+  --z-toast: 90;       /* toasts — visible over the lightbox too */
+  --z-grain: 9999;     /* paper grain: visual only, pointer-events none */
+
+  /* ---- primitives: motion ---- */
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --dur-slow: 280ms;
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+
+  /* ---- semantic: color (current palette = "storyboard paper") ---- */
+  --paper: #f6f4ed;
+  --paper-raised: #f0ede2;
+  --card: #fdfcf8;
+  --panel: #fbfaf4;
+  --panel-2: #f1eee3;
+  --border: #e4dfd0;
+  --border-strong: #d3ccba;
+  --text: #22251f;
+  --muted: #6e6a5e;
+  --faint: #9a9484;
+  --accent: #c05621;          /* grease-pencil orange — actions & doing */
+  --accent-strong: #a84a1b;
+  --accent-dim: rgba(192, 86, 33, 0.1);
+  --green: #5f7a4e;           /* done / healthy */
+  --green-dim: rgba(95, 122, 78, 0.13);
+  --amber: #a97b2f;           /* review / queued */
+  --amber-dim: rgba(169, 123, 47, 0.13);
+  --red: #b34a3e;             /* danger / overdue */
+  --red-dim: rgba(179, 74, 62, 0.1);
+
+  /* ---- semantic: derived surfaces & effects ---- */
+  --bg: var(--paper);              /* legacy alias — was referenced but undefined */
+  --bg-raised: var(--paper-raised);/* legacy alias — was referenced but undefined */
+  --surface-thumb: var(--panel);   /* thumb wells / skeleton ground */
+  --backdrop: rgba(46, 42, 30, 0.4);       /* modal backdrop */
+  --scrim: rgba(20, 18, 12, 0.78);         /* lightbox ground */
+  --shadow: 0 1px 2px rgba(60, 54, 38, 0.06), 0 6px 20px rgba(60, 54, 38, 0.07);
+  --shadow-lg: 0 12px 40px rgba(60, 54, 38, 0.18);
+  --focus-ring: 0 0 0 2px var(--paper), 0 0 0 4px var(--accent);
+
+  /* ---- semantic: sticky-note palette (matches public/welcome.html) ---- */
+  --sticky-1: #fcf2cd;
+  --sticky-2: #e3efd8;
+  --sticky-3: #fae3dc;
+  --sticky-4: #dfeaf2;
+  --sticky-5: #e9e2f4;
+
+  /* ---- fonts (unchanged) ---- */
+  --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --serif: 'Fraunces', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
+  --mono: ui-monospace, 'Cascadia Code', 'SF Mono', Consolas, monospace;
+}
+
+[data-theme='dark'] {
+  --paper: #16171b;
+  --paper-raised: #1c1e23;
+  --card: #212329;
+  --panel: #25272e;
+  --panel-2: #2b2d35;
+  --border: #33353e;
+  --border-strong: #43454f;
+  --text: #e6e4dc;
+  --muted: #a3a094;
+  --faint: #73716a;
+  --accent: #e07636;
+  --accent-strong: #ec8c52;
+  --accent-dim: rgba(224, 118, 54, 0.16);
+  --green: #8fae7c;
+  --green-dim: rgba(143, 174, 124, 0.16);
+  --amber: #d1a356;
+  --amber-dim: rgba(209, 163, 86, 0.16);
+  --red: #d67f72;
+  --red-dim: rgba(212, 122, 110, 0.14);
+  --backdrop: rgba(10, 10, 14, 0.55);
+  --scrim: rgba(8, 8, 11, 0.86);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 20px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
+  --focus-ring: 0 0 0 2px var(--paper), 0 0 0 4px var(--accent);
+  --sticky-1: #35311e;
+  --sticky-2: #26312a;
+  --sticky-3: #37291f;
+  --sticky-4: #222c34;
+  --sticky-5: #2d2836;
+}

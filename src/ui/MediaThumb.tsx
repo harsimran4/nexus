@@ -8,9 +8,29 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { mimeFromKey } from '../server/mime'
-import { kindFromMime, thumbKeyFor } from '../util/media'
+import { extFromKey, kindFromMime, thumbKeyFor } from '../util/media'
 import { thumbnailUrl } from '../drive/client'
 import { canWrite } from '../auth/session'
+import { Icon, type IconName } from './components/Icon'
+import type { MediaKind } from '../util/media'
+
+const KIND_ICON: Record<MediaKind, IconName> = {
+  image: 'image',
+  video: 'video',
+  audio: 'audio',
+  other: 'file',
+}
+
+/** Centered glyph tile for kinds without a visual thumbnail (audio, docs,
+ *  failed images) — never a blank well. */
+export function ThumbGlyphTile({ icon, ext, style }: { icon: IconName; ext?: string; style?: React.CSSProperties }) {
+  return (
+    <div className="thumb-fallback" style={style} aria-hidden="true">
+      <Icon name={icon} size={26} />
+      {ext && <span className="thumb-fallback-ext">{ext}</span>}
+    </div>
+  )
+}
 
 // One generation attempt per media key per session; failures are not retried
 // (the video-poster fallback is the permanent answer for that file).
@@ -72,7 +92,12 @@ export function MediaThumb({
   const tUrl = kind === 'video' ? (thumbKeyFor(fileKey) ? '/files/' + thumbKeyFor(fileKey) : null) : null
   // 'thumb' until the JPEG proves missing; then poster (+ generation).
   const [mode, setMode] = useState<'thumb' | 'poster'>(tUrl ? 'thumb' : 'poster')
+  const [imgFailed, setImgFailed] = useState(false)
   const queued = useRef(false)
+
+  useEffect(() => {
+    setImgFailed(false)
+  }, [fileKey])
 
   useEffect(() => {
     setMode(tUrl ? 'thumb' : 'poster')
@@ -91,6 +116,15 @@ export function MediaThumb({
       })
       .catch(() => {})
   }, [mode, kind, tUrl, fileKey, src])
+
+  // Audio, docs, and images that failed to load get a glyph tile — a blank
+  // well teaches nothing. This branch sits AFTER every hook: the same
+  // instance can flip between it and the media branches (meta arriving
+  // changes the kind; a 404ing image flips imgFailed) and the hook count
+  // must stay constant.
+  if (kind === 'audio' || kind === 'other' || (kind === 'image' && imgFailed)) {
+    return <ThumbGlyphTile icon={KIND_ICON[kind]} ext={extFromKey(fileKey)} style={style} />
+  }
 
   if (kind === 'video' && mode === 'thumb' && tUrl) {
     return (
@@ -121,7 +155,7 @@ export function MediaThumb({
       alt={alt}
       loading="lazy"
       style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', ...style }}
-      onError={(e) => ((e.target as HTMLImageElement).style.display = 'none')}
+      onError={() => setImgFailed(true)}
     />
   )
 }

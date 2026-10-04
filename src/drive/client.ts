@@ -28,11 +28,15 @@ export type { DriveErrorKind, FileMeta, ListResult }
 export class DriveError extends Error {
   kind: DriveErrorKind
   status?: number
-  constructor(kind: DriveErrorKind, message: string, status?: number) {
+  /** Set on the marked error a cancelled upload rejects with — callers test
+   *  this flag rather than sniffing DOMException names. */
+  aborted = false
+  constructor(kind: DriveErrorKind, message: string, status?: number, aborted = false) {
     super(message)
     this.name = 'DriveError'
     this.kind = kind
     this.status = status
+    this.aborted = aborted
   }
 }
 
@@ -238,9 +242,10 @@ export async function renameFile(key: string, newName: string): Promise<FileMeta
 // ---------------------------------------------------------------------------
 
 /** One XHR PUT that resolves with whatever response came back (any status);
- *  rejects only on true network failure (timeout included — without a
- *  timeout a stalled connection hangs the batch forever with no error).
- *  Body may be null (status probes). */
+ *  rejects on true network failure (timeout included — without a timeout a
+ *  stalled connection hangs the batch forever with no error) or on abort —
+ *  an aborted signal rejects with the marked error. Body may be null
+ *  (status probes). */
 function xhrPut(
   url: string,
   body: Blob | null,
@@ -248,14 +253,30 @@ function xhrPut(
   onLoaded?: (loaded: number) => void,
   readRange = false,
   timeoutMs = 120_000,
+  signal?: AbortSignal,
 ): Promise<{ status: number; range: string | null; json: FileMeta | null; error: string | null }> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(cancelled())
+      return
+    }
     const xhr = new XMLHttpRequest()
+    // The signal listener must go when the request ends by any path — it
+    // would otherwise pile up across every part of a big upload.
+    const onAbort = (): void => {
+      cleanup()
+      xhr.abort() // stop the bytes; the reject below settles the promise
+      reject(cancelled())
+    }
+    const cleanup = (): void => {
+      signal?.removeEventListener('abort', onAbort)
+    }
     xhr.open('PUT', url)
     xhr.timeout = timeoutMs
     for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v)
     if (onLoaded) xhr.upload.onprogress = (e) => { if (e.lengthComputable) onLoaded(e.loaded) }
     xhr.onload = () => {
+      cleanup()
       let json: FileMeta | null = null
       let error: string | null = null
       try {
@@ -272,8 +293,10 @@ function xhrPut(
       // on cross-origin (direct) ones just spams the console.
       resolve({ status: xhr.status, range: readRange ? xhr.getResponseHeader('Range') : null, json, error })
     }
-    xhr.onerror = () => reject(new DriveError('network', 'Upload network error'))
-    xhr.ontimeout = () => reject(new DriveError('network', 'Upload timed out'))
+    xhr.onerror = () => { cleanup(); reject(new DriveError('network', 'Upload network error')) }
+    xhr.ontimeout = () => { cleanup(); reject(new DriveError('network', 'Upload timed out')) }
+    xhr.onabort = () => { cleanup(); reject(cancelled()) }
+    signal?.addEventListener('abort', onAbort)
     xhr.send(body)
   })
 }
@@ -289,6 +312,45 @@ function partTimeoutMs(bytes: number): number {
   return Math.max(120_000, Math.ceil((bytes / 40_000) * 1000))
 }
 
+/** The marked error every abort point in the upload path raises. One shape,
+ *  one flag: transports and loops throw this directly instead of leaking raw
+ *  AbortErrors, so callers only ever test `aborted`. */
+function cancelled(): DriveError {
+  return new DriveError('api', 'Upload cancelled', undefined, true)
+}
+
+function isCancelled(e: unknown): boolean {
+  return e instanceof DriveError && e.aborted
+}
+
+/** A cancel surfaces either as the marked error (our own abort points) or a
+ *  raw AbortError (fetch's signal rejection) — both mean stop right now. */
+function abortedNow(e: unknown, signal?: AbortSignal): boolean {
+  return isCancelled(e) || signal?.aborted === true
+}
+
+/** sleep that a cancel cuts short — every wait in the upload path rides the
+ *  signal so a cancelled upload stops within one retry pause, not after the
+ *  full backoff ladder. With no signal this is a plain setTimeout. */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(cancelled())
+      return
+    }
+    const onAbort = (): void => {
+      clearTimeout(t)
+      signal?.removeEventListener('abort', onAbort)
+      reject(cancelled())
+    }
+    const t = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    signal?.addEventListener('abort', onAbort)
+  })
+}
+
 /** Upload with progress. Every size rides the presigned DIRECT path — the
  *  browser PUTs bytes straight to storage (single PutObject for ≤1 part, or
  *  multipart parts above that), because Oracle's Cloudflare front
@@ -300,14 +362,18 @@ export async function uploadFile(
   parentId: string,
   file: File,
   onProgress?: (pct: number) => void,
-  opts: { projectId?: string | null; sectionId?: string | null; authToken?: string } = {},
+  opts: { projectId?: string | null; sectionId?: string | null; authToken?: string; signal?: AbortSignal } = {},
 ): Promise<FileMeta> {
   if (!opts.authToken && !hasBearer()) throw new DriveError('auth', 'Sign in to upload')
+  if (opts.signal?.aborted) throw cancelled()
 
   for (let attempt = 0; ; attempt++) {
     try {
       return await resumableUpload(parentId, file, onProgress, opts)
     } catch (e) {
+      // A cancel surfaces as cancelled, never as a fallback trigger — the
+      // notFound re-init and the small-file relay below must not run.
+      if (opts.signal?.aborted) throw cancelled()
       if (e instanceof DriveError && e.kind === 'notFound' && attempt === 0) continue
       // Small files: one last-resort attempt through the worker relay. It
       // rides the flaky worker→OCI write path (Oracle's Cloudflare front
@@ -346,12 +412,14 @@ async function resumableUpload(
   parentId: string,
   file: File,
   onProgress?: (pct: number) => void,
-  opts: { projectId?: string | null; sectionId?: string | null; authToken?: string } = {},
+  opts: { projectId?: string | null; sectionId?: string | null; authToken?: string; signal?: AbortSignal } = {},
 ): Promise<FileMeta> {
+  const signal = opts.signal
   const initRes = await fetch('/api/upload/resumable', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (opts.authToken ?? sessionStorage.getItem(WORKER_TOKEN_KEY) ?? '') },
     body: JSON.stringify({ name: file.name, parentId, mimeType: file.type, size: file.size, projectId: opts.projectId ?? null, sectionId: opts.sectionId ?? null }),
+    signal,
   })
   if (!initRes.ok) {
     let message = `Upload init failed (${initRes.status})`
@@ -372,233 +440,263 @@ async function resumableUpload(
     presignMoreUrl?: string
   }
 
-  const total = file.size
-  const contentType = file.type || 'application/octet-stream'
+  // From here on a session exists at storage, so a cancel fires its DELETE
+  // on the way out — nothing else will ever complete it, and OCI's S3
+  // endpoint has no lifecycle API to reap it later.
+  try {
+    const total = file.size
+    const contentType = file.type || 'application/octet-stream'
 
-  // ---- single-shot: one presigned PutObject, then POST the completion ----
-  if (single && direct && direct.length === 1 && completeUrl) {
-    const put = () => xhrPut(direct[0], file, { 'Content-Type': contentType }, (loaded) => onProgress?.(Math.round((loaded / total) * 95)), false, partTimeoutMs(total))
-    let last: { status: number; error: string | null } | null = null
-    for (let i = 0; i < 3; i++) {
+    // Status probe: a PUT with no body asking the server how much it holds /
+    // to assemble the file. A probe that REJECTS (network error/timeout) is
+    // just a failed probe; a cancel must tear straight through.
+    const statusProbe = async (): Promise<Awaited<ReturnType<typeof xhrPut>> | null> => {
       try {
-        const res = await put()
-        if (res.status === 200 || res.status === 201) {
-          last = null
-          break
-        }
-        last = { status: res.status, error: res.error }
-      } catch {
-        last = { status: 0, error: 'network error' }
+        return await xhrPut(sessionUrl, null, { 'Content-Range': `bytes */${total}` }, undefined, true, 30_000, signal)
+      } catch (e) {
+        if (abortedNow(e, signal)) throw cancelled()
+        return null
       }
-      if (i < 2) await new Promise((r) => setTimeout(r, Math.min(2 ** (i + 1) * 700, 4_000)))
     }
-    if (last) throw new DriveError(mapStatus(last.status) === 'rateLimit' ? 'rateLimit' : 'api', `Upload failed (${last.status || 'network'})${last.error ? ` — ${last.error}` : ''}`, last.status || undefined)
-  onProgress?.(96)
-  // Completion: HEAD-verify at storage, link the doc server-side, meta.
-  for (let i = 0; i < 3; i++) {
-    try {
-      const res = await fetch(completeUrl, { method: 'POST' })
-      if (res.ok) {
-        const body = (await res.json()) as FileMeta | { error?: string }
-        if (body && !('error' in body)) {
-          onProgress?.(100)
-          return body as FileMeta
-        }
-      }
-      if (res.status === 410) throw new DriveError('notFound', 'Upload session expired — restarting', 410)
-    } catch (e) {
-      if (e instanceof DriveError) throw e
-    }
-    await new Promise((r) => setTimeout(r, 1200))
-  }
-  throw new DriveError('api', 'Upload could not be completed — try again')
-}
 
-  let offset = 0
-  let failures = 0
-  let partRetries = 0
-  let consecutiveFails = 0
-  let useDirect = Array.isArray(direct) && direct.length > 0
-  const nPartsTotal = Math.ceil(total / partSize)
-  let signedParts = useDirect ? direct!.length : 0
-  // Lazy presigning: big files get 16 URLs at init and replenish windows of
-  // 16 whenever ≤4 remain, keeping every init (and replenish) request far
-  // under the worker's CPU budget. The array stays index-aligned with parts.
-  const replenish = async (): Promise<boolean> => {
-    if (!presignMoreUrl || !direct) return false
-    try {
-      const res = await fetch(`${presignMoreUrl}&next=${signedParts + 1}`, { method: 'POST' })
-      if (!res.ok) return false
-      const body = (await res.json()) as { direct?: string[] }
-      if (!Array.isArray(body.direct) || body.direct.length === 0) return false
-      for (let k = 0; k < body.direct.length && signedParts + k < nPartsTotal; k++) direct[signedParts + k] = body.direct[k]
-      signedParts += body.direct.length
-      return true
-    } catch {
-      return false
-    }
-  }
-  // Terminal escape for ANY retry loop: without a global budget a persistent
-  // failure mode retried one part forever (the tile hung at some % — this
-  // was the "fails partway and never finishes" live symptom).
-  const budgetDead = (): DriveError | null =>
-    consecutiveFails > MAX_CONSECUTIVE_FAILURES
-      ? new DriveError('api', 'Upload keeps failing — stopped after repeated errors')
-      : null
-  while (offset < total) {
-    const end = Math.min(offset + partSize, total)
-    // ---- direct path: browser PUT straight to storage, Worker untouched ----
-    if (useDirect && direct) {
-      const idx = offset / partSize
-      if (idx >= signedParts) {
-        const ok = await replenish()
-        if (!ok || !direct[idx]) {
-          useDirect = false // lazy presigning failed — finish via the relay
-          partRetries = 0
-          continue
+    // ---- single-shot: one presigned PutObject, then POST the completion ----
+    if (single && direct && direct.length === 1 && completeUrl) {
+      const put = () => xhrPut(direct[0], file, { 'Content-Type': contentType }, (loaded) => onProgress?.(Math.round((loaded / total) * 95)), false, partTimeoutMs(total), signal)
+      let last: { status: number; error: string | null } | null = null
+      for (let i = 0; i < 3; i++) {
+        try {
+          const res = await put()
+          if (res.status === 200 || res.status === 201) {
+            last = null
+            break
+          }
+          last = { status: res.status, error: res.error }
+        } catch (e) {
+          if (abortedNow(e, signal)) throw cancelled()
+          last = { status: 0, error: 'network error' }
         }
+        if (i < 2) await sleep(Math.min(2 ** (i + 1) * 700, 4_000), signal)
       }
-      try {
-        const res = await xhrPut(direct[idx], file.slice(offset, end), { 'Content-Type': contentType }, undefined, false, partTimeoutMs(end - offset))
-        if (res.status === 200 || res.status === 201) {
-          partRetries = 0
-          consecutiveFails = 0
-          offset = end
-          onProgress?.(Math.round((offset / total) * 100))
-          continue
+      if (last) throw new DriveError(mapStatus(last.status) === 'rateLimit' ? 'rateLimit' : 'api', `Upload failed (${last.status || 'network'})${last.error ? ` — ${last.error}` : ''}`, last.status || undefined)
+      onProgress?.(96)
+      // Completion: HEAD-verify at storage, link the doc server-side, meta.
+      for (let i = 0; i < 3; i++) {
+        try {
+          const res = await fetch(completeUrl, { method: 'POST', signal })
+          if (res.ok) {
+            const body = (await res.json()) as FileMeta | { error?: string }
+            if (body && !('error' in body)) {
+              onProgress?.(100)
+              return body as FileMeta
+            }
+          }
+          if (res.status === 410) throw new DriveError('notFound', 'Upload session expired — restarting', 410)
+        } catch (e) {
+          if (abortedNow(e, signal)) throw cancelled()
+          if (e instanceof DriveError) throw e
         }
-        // storage edge flake — retry the direct PUT before falling back
-        if (res.status === 403 || res.status === 429 || res.status >= 500) {
-          if (partRetries < 2) {
-            partRetries++
-            consecutiveFails++
-            await new Promise((r) => setTimeout(r, Math.min(2 ** partRetries * 700, 4_000)))
-            continue // same part, same URL
+        await sleep(1200, signal)
+      }
+      throw new DriveError('api', 'Upload could not be completed — try again')
+    }
+
+    let offset = 0
+    let failures = 0
+    let partRetries = 0
+    let consecutiveFails = 0
+    let useDirect = Array.isArray(direct) && direct.length > 0
+    const nPartsTotal = Math.ceil(total / partSize)
+    let signedParts = useDirect ? direct!.length : 0
+    // Lazy presigning: big files get 16 URLs at init and replenish windows of
+    // 16 whenever ≤4 remain, keeping every init (and replenish) request far
+    // under the worker's CPU budget. The array stays index-aligned with parts.
+    const replenish = async (): Promise<boolean> => {
+      if (!presignMoreUrl || !direct) return false
+      try {
+        const res = await fetch(`${presignMoreUrl}&next=${signedParts + 1}`, { method: 'POST', signal })
+        if (!res.ok) return false
+        const body = (await res.json()) as { direct?: string[] }
+        if (!Array.isArray(body.direct) || body.direct.length === 0) return false
+        for (let k = 0; k < body.direct.length && signedParts + k < nPartsTotal; k++) direct[signedParts + k] = body.direct[k]
+        signedParts += body.direct.length
+        return true
+      } catch (e) {
+        if (abortedNow(e, signal)) throw cancelled()
+        return false
+      }
+    }
+    // Terminal escape for ANY retry loop: without a global budget a persistent
+    // failure mode retried one part forever (the tile hung at some % — this
+    // was the "fails partway and never finishes" live symptom).
+    const budgetDead = (): DriveError | null =>
+      consecutiveFails > MAX_CONSECUTIVE_FAILURES
+        ? new DriveError('api', 'Upload keeps failing — stopped after repeated errors')
+        : null
+    while (offset < total) {
+      if (signal?.aborted) throw cancelled()
+      const end = Math.min(offset + partSize, total)
+      // ---- direct path: browser PUT straight to storage, Worker untouched ----
+      if (useDirect && direct) {
+        const idx = offset / partSize
+        if (idx >= signedParts) {
+          const ok = await replenish()
+          if (!ok || !direct[idx]) {
+            useDirect = false // lazy presigning failed — finish via the relay
+            partRetries = 0
+            continue
           }
         }
-        useDirect = false // anything else (or retries spent): finish via the relay
-        partRetries = 0 // the relay has its own failure domain — don't inherit the direct path's spent budget
-        continue
-      } catch (e) {
-        if (e instanceof DriveError && e.kind === 'network' && partRetries < 2) {
-          partRetries++
-          consecutiveFails++
-          await new Promise((r) => setTimeout(r, Math.min(2 ** partRetries * 700, 4_000)))
+        try {
+          const res = await xhrPut(direct[idx], file.slice(offset, end), { 'Content-Type': contentType }, undefined, false, partTimeoutMs(end - offset), signal)
+          if (res.status === 200 || res.status === 201) {
+            partRetries = 0
+            consecutiveFails = 0
+            offset = end
+            onProgress?.(Math.round((offset / total) * 100))
+            continue
+          }
+          // storage edge flake — retry the direct PUT before falling back
+          if (res.status === 403 || res.status === 429 || res.status >= 500) {
+            if (partRetries < 2) {
+              partRetries++
+              consecutiveFails++
+              await sleep(Math.min(2 ** partRetries * 700, 4_000), signal)
+              continue // same part, same URL
+            }
+          }
+          useDirect = false // anything else (or retries spent): finish via the relay
+          partRetries = 0 // the relay has its own failure domain — don't inherit the direct path's spent budget
+          continue
+        } catch (e) {
+          if (abortedNow(e, signal)) throw cancelled()
+          if (e instanceof DriveError && e.kind === 'network' && partRetries < 2) {
+            partRetries++
+            consecutiveFails++
+            await sleep(Math.min(2 ** partRetries * 700, 4_000), signal)
+            continue
+          }
+          useDirect = false
+          partRetries = 0 // same — fresh retry budget for the relay
           continue
         }
-        useDirect = false
-        partRetries = 0 // same — fresh retry budget for the relay
-        continue
       }
-    }
-    // ---- relay path: bytes pass through the Worker (Content-Range protocol) ----
-    try {
-      const res = await xhrPut(
-        sessionUrl,
-        file.slice(offset, end),
-        { 'Content-Type': contentType, 'Content-Range': `bytes ${offset}-${end - 1}/${total}` },
-        (loaded) => onProgress?.(Math.round(((offset + loaded) / total) * 100)),
-        true,
-        partTimeoutMs(end - offset),
-      )
-      failures = 0
-      if (res.status === 200 || res.status === 201) {
-        if (res.json) {
-          onProgress?.(100)
-          return res.json
+      // ---- relay path: bytes pass through the Worker (Content-Range protocol) ----
+      try {
+        const res = await xhrPut(
+          sessionUrl,
+          file.slice(offset, end),
+          { 'Content-Type': contentType, 'Content-Range': `bytes ${offset}-${end - 1}/${total}` },
+          (loaded) => onProgress?.(Math.round(((offset + loaded) / total) * 100)),
+          true,
+          partTimeoutMs(end - offset),
+          signal,
+        )
+        failures = 0
+        if (res.status === 200 || res.status === 201) {
+          if (res.json) {
+            onProgress?.(100)
+            return res.json
+          }
+          throw new DriveError('api', 'Upload finished but the server sent no metadata')
         }
-        throw new DriveError('api', 'Upload finished but the server sent no metadata')
-      }
-      if (res.status === 308) {
-        partRetries = 0
-        consecutiveFails = 0
-        const m = res.range?.match(/bytes=0-(\d+)/)
-        offset = m ? Number(m[1]) + 1 : offset
-        continue
-      }
-      // Server-side hiccup (429 throttle, 5xx): retry this part a few times
-      // before giving up — one bad moment at storage shouldn't kill a big
-      // upload. The server's own error text rides along for the UI.
-      if ((res.status === 429 || res.status >= 500) && partRetries < PART_RETRIES) {
-        partRetries++
-        throw new DriveError('rateLimit', `Upload part failed (${res.status})${res.error ? ` — ${res.error}` : ''} — retrying`, res.status)
-      }
-      // Terminal (retries spent or non-retryable status): no "retrying" in
-      // the message — the tile must not promise a retry that won't happen.
-      throw new DriveError(mapStatus(res.status), `Upload failed (${res.status})${res.error ? ` — ${res.error}` : ''}`, res.status)
-    } catch (e) {
-      // The strict `<` here pairs with the throw-side increment above: once
-      // PART_RETRIES are spent this is false and a persistent 429/5xx
-      // TERMINATES instead of looping forever (the old `<=` made every 5xx
-      // retryable indefinitely because mapStatus maps 5xx → 'rateLimit').
-      if (e instanceof DriveError && e.kind === 'rateLimit' && partRetries < PART_RETRIES) {
+        if (res.status === 308) {
+          partRetries = 0
+          consecutiveFails = 0
+          const m = res.range?.match(/bytes=0-(\d+)/)
+          offset = m ? Number(m[1]) + 1 : offset
+          continue
+        }
+        // Server-side hiccup (429 throttle, 5xx): retry this part a few times
+        // before giving up — one bad moment at storage shouldn't kill a big
+        // upload. The server's own error text rides along for the UI.
+        if ((res.status === 429 || res.status >= 500) && partRetries < PART_RETRIES) {
+          partRetries++
+          throw new DriveError('rateLimit', `Upload part failed (${res.status})${res.error ? ` — ${res.error}` : ''} — retrying`, res.status)
+        }
+        // Terminal (retries spent or non-retryable status): no "retrying" in
+        // the message — the tile must not promise a retry that won't happen.
+        throw new DriveError(mapStatus(res.status), `Upload failed (${res.status})${res.error ? ` — ${res.error}` : ''}`, res.status)
+      } catch (e) {
+        if (abortedNow(e, signal)) throw cancelled()
+        // The strict `<` here pairs with the throw-side increment above: once
+        // PART_RETRIES are spent this is false and a persistent 429/5xx
+        // TERMINATES instead of looping forever (the old `<=` made every 5xx
+        // retryable indefinitely because mapStatus maps 5xx → 'rateLimit').
+        if (e instanceof DriveError && e.kind === 'rateLimit' && partRetries < PART_RETRIES) {
+          consecutiveFails++
+          const dead = budgetDead()
+          if (dead) throw dead
+          await sleep(Math.min(2 ** partRetries * 1500, 12_000), signal)
+          continue // same offset — the part never landed
+        }
+        if (e instanceof DriveError && e.kind !== 'network') {
+          abortSession(sessionUrl)
+          throw e
+        }
+        failures++
         consecutiveFails++
+        if (failures > UPLOAD_RETRIES) {
+          abortSession(sessionUrl)
+          throw e instanceof DriveError ? e : new DriveError('network', 'Upload network error')
+        }
         const dead = budgetDead()
-        if (dead) throw dead
-        await new Promise((r) => setTimeout(r, Math.min(2 ** partRetries * 1500, 12_000)))
-        continue // same offset — the part never landed
-      }
-      if (e instanceof DriveError && e.kind !== 'network') {
-        abortSession(sessionUrl)
-        throw e
-      }
-      failures++
-      consecutiveFails++
-      if (failures > UPLOAD_RETRIES) {
-        abortSession(sessionUrl)
-        throw e instanceof DriveError ? e : new DriveError('network', 'Upload network error')
-      }
-      const dead = budgetDead()
-      if (dead) {
-        abortSession(sessionUrl)
-        throw dead
-      }
-      // Ask the server how much it already holds, then resume from that byte.
-      const status = await xhrPut(sessionUrl, null, { 'Content-Range': `bytes */${total}` }, undefined, true, 30_000).catch(() => null)
-      if (status && (status.status === 200 || status.status === 201)) {
-        onProgress?.(100)
-        if (status.json) return status.json
-      }
-      const m = status?.range?.match(/bytes=0-(\d+)/)
-      if (m) offset = Number(m[1]) + 1
-      onProgress?.(Math.round((offset / total) * 100))
-      await new Promise((r) => setTimeout(r, Math.min(2 ** failures * 1000, 15_000)))
-    }
-  }
-
-  // All parts landed — the status probe (a PUT, same shape the relay uses)
-  // tells the server to assemble the file. A lost completion self-verifies
-  // server-side; a dead session (410) re-inits via the outer loop; if the
-  // probes still can't finish it, the POST complete route is one more
-  // independent attempt before the whole session is aborted. A probe that
-  // flat-out REJECTS (network error/timeout) is just another failed probe —
-  // it must not bypass the fallback: the server may complete the session on
-  // its own, and reporting failure here makes the client's retry a duplicate.
-  for (let i = 0; i < 3; i++) {
-    const status = await xhrPut(sessionUrl, null, { 'Content-Range': `bytes */${total}` }, undefined, true, 30_000).catch(() => null)
-    if (status && (status.status === 200 || status.status === 201)) {
-      if (status.json) {
-        onProgress?.(100)
-        return status.json
-      }
-    }
-    if (status && status.status === 410) throw new DriveError('notFound', 'Upload session expired — restarting', 410)
-    await new Promise((r) => setTimeout(r, 1200))
-  }
-  if (completeUrl) {
-    try {
-      const res = await fetch(completeUrl, { method: 'POST' })
-      if (res.ok) {
-        const body = (await res.json()) as FileMeta | { error?: string }
-        if (body && !('error' in body)) {
+        if (dead) {
+          abortSession(sessionUrl)
+          throw dead
+        }
+        // Ask the server how much it already holds, then resume from that byte.
+        const status = await statusProbe()
+        if (status && (status.status === 200 || status.status === 201)) {
           onProgress?.(100)
-          return body as FileMeta
+          if (status.json) return status.json
+        }
+        const m = status?.range?.match(/bytes=0-(\d+)/)
+        if (m) offset = Number(m[1]) + 1
+        onProgress?.(Math.round((offset / total) * 100))
+        await sleep(Math.min(2 ** failures * 1000, 15_000), signal)
+      }
+    }
+
+    // All parts landed — the status probe (a PUT, same shape the relay uses)
+    // tells the server to assemble the file. A lost completion self-verifies
+    // server-side; a dead session (410) re-inits via the outer loop; if the
+    // probes still can't finish it, the POST complete route is one more
+    // independent attempt before the whole session is aborted. A probe that
+    // flat-out REJECTS (network error/timeout) is just another failed probe —
+    // it must not bypass the fallback: the server may complete the session on
+    // its own, and reporting failure here makes the client's retry a duplicate.
+    for (let i = 0; i < 3; i++) {
+      const status = await statusProbe()
+      if (status && (status.status === 200 || status.status === 201)) {
+        if (status.json) {
+          onProgress?.(100)
+          return status.json
         }
       }
-    } catch { /* fall through to the terminal error */ }
+      if (status && status.status === 410) throw new DriveError('notFound', 'Upload session expired — restarting', 410)
+      await sleep(1200, signal)
+    }
+    if (completeUrl) {
+      try {
+        const res = await fetch(completeUrl, { method: 'POST', signal })
+        if (res.ok) {
+          const body = (await res.json()) as FileMeta | { error?: string }
+          if (body && !('error' in body)) {
+            onProgress?.(100)
+            return body as FileMeta
+          }
+        }
+      } catch (e) {
+        if (abortedNow(e, signal)) throw cancelled()
+        /* fall through to the terminal error */
+      }
+    }
+    abortSession(sessionUrl)
+    throw new DriveError('api', 'Upload could not be completed — try again')
+  } catch (e) {
+    if (isCancelled(e)) abortSession(sessionUrl)
+    throw e
   }
-  abortSession(sessionUrl)
-  throw new DriveError('api', 'Upload could not be completed — try again')
 }
 
 // ---------------------------------------------------------------------------

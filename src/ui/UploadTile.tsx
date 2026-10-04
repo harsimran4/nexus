@@ -1,10 +1,17 @@
 // Floating bottom-right tile for uploads running in the background. Mounted
-// app-wide (App.tsx) so progress stays visible on any page; the batch lives
-// in state/uploads.ts. Up to UPLOAD_CONCURRENCY files transfer at once; the
-// roster shows EVERY file in the batch with its state (queued / percent /
-// ✓ / ✗) so a big drop stays legible.
+// app-wide (Shell) so progress stays visible on any page; the batch lives
+// in state/uploads.ts. Rows render through the shared UploadRoster; the
+// footer wires cancel (mid-run) and retry-all/dismiss (finished).
 
-import { dismissUploads, uploadsBusy, useUploadBatch } from '../state/uploads'
+import {
+  cancelUploadBatch,
+  dismissUploads,
+  retryFailedUploads,
+  retryUploadEntry,
+  useUploadBatch,
+  uploadsBusy,
+} from '../state/uploads'
+import { UploadRoster } from './components/UploadRoster'
 
 export function UploadTile(): React.JSX.Element | null {
   const batch = useUploadBatch()
@@ -14,40 +21,43 @@ export function UploadTile(): React.JSX.Element | null {
   const done = batch.files.filter((f) => f.done).length
   const inFlight = batch.files.filter((f) => f.started && !f.done).length
   const busy = uploadsBusy()
-  const pct = total > 0 ? Math.round(batch.files.reduce((acc, f) => acc + (f.done ? 100 : f.pct), 0) / total) : 0
+  const failedIdx = batch.files.flatMap((f, i) => (f.done && f.ok === false ? [i] : []))
+  // Same sniff retryFailedUploads makes: a cancel writes 'Cancelled'/'Upload
+  // cancelled' into err — the headline should say so rather than claim victory.
+  const cancelled = failedIdx.some((i) => /cancel/i.test(batch.files[i].err ?? ''))
 
   return (
-    <div className="upload-tile" role="status">
+    <div className="upload-tile" role="status" aria-live="polite">
       <div className="spread">
         <span className="small" style={{ fontWeight: 600 }}>
-          {busy ? `Uploading ${done}/${total} · ${inFlight} parallel` : 'Uploads finished'}
+          {busy ? `Uploading ${done}/${total} · ${inFlight} parallel` : cancelled ? 'Uploads cancelled' : 'Uploads finished'}
         </span>
-        {!busy && (
-          <button className="btn small ghost" aria-label="Dismiss" title="Dismiss" onClick={dismissUploads}>
-            ✕
-          </button>
-        )}
       </div>
       <div className="upload-tile-list">
-        {batch.files.map((f, i) => (
-          <div key={i} className="upload-tile-row">
-            <div className="spread small">
-              <span className={`upload-tile-file${f.done && !f.ok ? ' upload-tile-fail' : ''}`} title={f.err ?? f.name}>
-                {f.done ? (f.ok ? '✓ ' : '✗ ') : !f.started ? '· ' : ''}
-                {f.name}
-              </span>
-              <span className="muted">{f.done ? (f.ok ? 'done' : 'failed') : f.started ? `${f.pct}%` : 'queued'}</span>
-            </div>
-            {f.started && !f.done && (
-              <div className="progress">
-                <div style={{ width: `${f.pct}%` }} />
-              </div>
-            )}
-          </div>
-        ))}
+        <UploadRoster compact entries={batch.files} onRetry={retryUploadEntry} maxHeight={176} />
       </div>
-      <div className="progress">
-        <div style={{ width: `${busy ? pct : 100}%` }} />
+      <div className="row mt8" style={{ justifyContent: 'flex-end' }}>
+        {busy ? (
+          <button className="btn small" onClick={cancelUploadBatch}>
+            Cancel
+          </button>
+        ) : failedIdx.length > 0 ? (
+          <>
+            {/* retryFailedUploads walks the failed entries one run at a time
+                and honours a mid-walk cancel; the store's emits re-render
+                the headline between runs. */}
+            <button className="btn small" onClick={() => void retryFailedUploads()}>
+              Retry failed
+            </button>
+            <button className="btn small ghost" onClick={dismissUploads}>
+              Dismiss
+            </button>
+          </>
+        ) : (
+          <button className="btn small ghost" onClick={dismissUploads}>
+            Dismiss
+          </button>
+        )}
       </div>
     </div>
   )

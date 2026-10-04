@@ -5,7 +5,9 @@
       "Bash(python scripts/parse_review.py)",
       "Bash(python -c ' *)",
       "Bash(npx tsc *)",
-      "Bash(echo \"EXIT:$?\")"
+      "Bash(echo \"EXIT:$?\")",
+      "Bash(curl -s \"http://localhost:5173/files/master/nexus.json\")",
+      "Bash(node -e ' *)"
     ]
   }
 }

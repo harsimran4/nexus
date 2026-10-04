@@ -379,12 +379,32 @@ export function moveMediaToSection(projectId: string, fileIds: string[], section
   })
 }
 
-/** Upload a file into the project's own Drive subfolder, then link it. */
+/** Reorder sections by one slot (mediaSections order IS the display order).
+ *  Doc-only array swap — storage prefixes don't encode section order, and the
+ *  LWW merge applies to the whole array, so a concurrent rename of a sibling
+ *  section resolves last-writer-wins without corruption. */
+export function reorderMediaSections(projectId: string, sectionId: string, dir: -1 | 1): void {
+  assertWrite()
+  commit((doc) => {
+    const p = doc.projects[projectId]
+    if (!p) return
+    const i = p.mediaSections.findIndex((s) => s.id === sectionId)
+    const j = i + dir
+    if (i === -1 || j < 0 || j >= p.mediaSections.length) return
+    const next = [...p.mediaSections]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    p.mediaSections = next
+    touch('projects', p)
+  })
+}
+
+/** Upload a file into the project's own Drive subfolder, then link it.
+ *  `opts.signal` cancels the transfer — the batch store aborts it. */
 export async function uploadToProject(
   projectId: string,
   file: File,
   onProgress?: (pct: number) => void,
-  opts: { sectionId?: string | null } = {},
+  opts: { sectionId?: string | null; signal?: AbortSignal } = {},
 ): Promise<{ ok: true; fileId: string } | { ok: false; error: string }> {
   const { storeGet } = await import('../sync/store')
   const doc = storeGet().doc
@@ -397,7 +417,7 @@ export async function uploadToProject(
     // doc at completion — the commit below is only instant UI feedback; the
     // sync kernel's replay/discard/re-assert behaviors can roll a client-side
     // link back after a successful upload (files kept vanishing from Media).
-    const meta = await uploadFile(folderId, file, onProgress, { projectId, sectionId: opts.sectionId ?? null })
+    const meta = await uploadFile(folderId, file, onProgress, { projectId, sectionId: opts.sectionId ?? null, signal: opts.signal })
     // The project may have MOVED to another group while the bytes were in
     // flight — the object sits under the old prefix and the doc already
     // references the new one. Copy the object across, then link the copy.
@@ -433,6 +453,8 @@ export async function uploadToProject(
     })
     return { ok: true, fileId: linked.id }
   } catch (e) {
+    // A cancel is user intent, not a failure — one clean line, no kind suffix.
+    if (e instanceof DriveError && e.aborted) return { ok: false, error: 'Upload cancelled' }
     if (e instanceof DriveError && e.kind === 'auth')
       return { ok: false, error: 'Your session expired — sign in again to upload' }
     if (e instanceof DriveError) return { ok: false, error: `${e.message} — ${e.kind}` }

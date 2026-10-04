@@ -6,9 +6,11 @@ import {
   KIND_GLYPH,
   UNSORTED,
   buildItems,
+  extFromKey,
   fileSizeBytes,
   filterAndSort,
   formatBytes,
+  formatRelative,
   kindFromMime,
   totalSize,
   type MediaItem,
@@ -20,6 +22,7 @@ const item = (over: Partial<MediaItem> & { fileId: string }): MediaItem => ({
   mime: undefined,
   size: null,
   index: 0,
+  pending: false,
   ...over,
 })
 
@@ -72,9 +75,92 @@ describe('buildItems', () => {
       a: { id: 'a', name: 'shot.mp4', mimeType: 'video/mp4', size: '2048' },
     }
     const items = buildItems(['a', 'b'], meta)
-    expect(items[0]).toEqual({ fileId: 'a', name: 'shot.mp4', mime: 'video/mp4', size: 2048, index: 0 })
-    // missing meta falls back to the id as name, null size
-    expect(items[1]).toEqual({ fileId: 'b', name: 'b', mime: undefined, size: null, index: 1 })
+    expect(items[0]).toEqual({ fileId: 'a', name: 'shot.mp4', mime: 'video/mp4', size: 2048, index: 0, pending: false })
+    // missing meta → pending (cards skeleton; the raw key never shows as a name)
+    expect(items[1]).toEqual({ fileId: 'b', name: 'b', mime: undefined, size: null, index: 1, pending: true })
+  })
+
+  it('carries modifiedTime as epoch ms when parseable', () => {
+    const meta: Record<string, FileMeta> = {
+      a: { id: 'a', name: 'a.png', modifiedTime: '2026-01-02T03:04:05.000Z' },
+      b: { id: 'b', name: 'b.png', modifiedTime: 'not a date' },
+    }
+    const items = buildItems(['a', 'b'], meta)
+    expect(items[0].modified).toBe(Date.parse('2026-01-02T03:04:05.000Z'))
+    expect(items[1].modified).toBeUndefined()
+  })
+})
+
+describe('date sorts', () => {
+  const T = (iso: string) => Date.parse(iso)
+  const items: MediaItem[] = [
+    item({ fileId: 'old', name: 'old.png', index: 0, modified: T('2026-01-01T00:00:00Z') }),
+    item({ fileId: 'new', name: 'new.png', index: 1, modified: T('2026-03-01T00:00:00Z') }),
+    item({ fileId: 'mid', name: 'mid.png', index: 2, modified: T('2026-02-01T00:00:00Z') }),
+  ]
+  const view = (sort: string) =>
+    filterAndSort(items, { search: '', kind: 'all', section: 'all', sectionOf: {}, sort: sort as 'date-desc' })
+      .map((i) => i.fileId)
+
+  it('date sorts by modifiedTime', () => {
+    expect(view('date-desc')).toEqual(['new', 'mid', 'old'])
+    expect(view('date-asc')).toEqual(['old', 'mid', 'new'])
+  })
+
+  it('items without meta count as oldest; index breaks ties', () => {
+    const mixed: MediaItem[] = [
+      item({ fileId: 'known', name: 'known.png', index: 0, modified: T('2026-01-01T00:00:00Z') }),
+      item({ fileId: 'pending-b', name: 'b', index: 1 }),
+      item({ fileId: 'pending-a', name: 'a', index: 2 }),
+    ]
+    const got = (sort: string) =>
+      filterAndSort(mixed, { search: '', kind: 'all', section: 'all', sectionOf: {}, sort: sort as 'date-desc' })
+        .map((i) => i.fileId)
+    expect(got('date-desc')).toEqual(['known', 'pending-a', 'pending-b'])
+    expect(got('date-asc')).toEqual(['pending-b', 'pending-a', 'known'])
+  })
+
+  it('all-pending behaves like the old index order', () => {
+    const pending: MediaItem[] = [
+      item({ fileId: 'a', name: 'a', index: 0 }),
+      item({ fileId: 'b', name: 'b', index: 1 }),
+    ]
+    const got = (sort: string) =>
+      filterAndSort(pending, { search: '', kind: 'all', section: 'all', sectionOf: {}, sort: sort as 'date-desc' })
+        .map((i) => i.fileId)
+    expect(got('date-desc')).toEqual(['b', 'a'])
+    expect(got('date-asc')).toEqual(['a', 'b'])
+  })
+})
+
+describe('formatRelative', () => {
+  const now = Date.parse('2026-03-15T12:00:00Z')
+  const ago = (s: number) => new Date(now - s * 1000).getTime()
+  it('buckets seconds→minutes→hours→days→weeks→months→years', () => {
+    expect(formatRelative(now, now)).toBe('now')
+    expect(formatRelative(ago(30), now)).toBe('now')
+    expect(formatRelative(ago(5 * 60), now)).toBe('5m')
+    expect(formatRelative(ago(3 * 3600), now)).toBe('3h')
+    expect(formatRelative(ago(2 * 86400), now)).toBe('2d')
+    expect(formatRelative(ago(2 * 7 * 86400), now)).toBe('2w')
+    expect(formatRelative(ago(4 * 30 * 86400), now)).toBe('4mo')
+    expect(formatRelative(ago(2 * 365 * 86400), now)).toBe('2y')
+  })
+  it('clamps future timestamps to now', () => {
+    expect(formatRelative(now + 60_000, now)).toBe('now')
+  })
+})
+
+describe('extFromKey', () => {
+  it('reads the extension from the name segment of a media key', () => {
+    expect(extFromKey('groups/g1/p1/f_ab12__clip.mp4')).toBe('MP4')
+    expect(extFromKey('groups/g1/p1/f_ab12__Photo Final.JPG')).toBe('JPG')
+  })
+  it('handles keys without the id__name shape or extension', () => {
+    expect(extFromKey('snapshots/plainname')).toBe('')
+    expect(extFromKey('groups/g/p/f_ab12__noext')).toBe('')
+    // dotfile-style names read as extensionless
+    expect(extFromKey('groups/g/p/f_ab12__.hidden')).toBe('')
   })
 })
 

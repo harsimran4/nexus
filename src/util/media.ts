@@ -64,22 +64,66 @@ export interface MediaItem {
   size: number | null
   /** Position in the project's fileIds — proxy for "date added". */
   index: number
+  /** No meta yet — the card renders a skeleton until it lands (never the raw key). */
+  pending: boolean
+  /** meta.modifiedTime as epoch ms, when known. */
+  modified?: number
 }
 
 export function buildItems(fileIds: string[], meta: Record<string, FileMeta>): MediaItem[] {
   return fileIds.map((fileId, index) => {
     const m = meta[fileId]
+    const modified = m?.modifiedTime !== undefined ? Date.parse(m.modifiedTime) : NaN
     return {
       fileId,
       name: m?.name ?? fileId,
       mime: m?.mimeType,
       size: fileSizeBytes(m?.size),
       index,
+      pending: m === undefined,
+      ...(Number.isFinite(modified) ? { modified } : {}),
     }
   })
 }
 
-export type MediaSort = 'name-asc' | 'name-desc' | 'added-desc' | 'added-asc' | 'size-desc' | 'size-asc'
+/** Extension in upper case from a storage key's name segment ('MP4'), or ''
+ *  when the name has none. */
+export function extFromKey(key: string): string {
+  const name = key.slice(key.lastIndexOf('/') + 1)
+  const base = name.includes('__') ? name.slice(name.indexOf('__') + 2) : name
+  const dot = base.lastIndexOf('.')
+  return dot > 0 ? base.slice(dot + 1).toUpperCase().slice(0, 5) : ''
+}
+
+/** Compact relative age ('now', '35m', '2h', '3d', '5w', '4mo', '1y').
+ *  `now` is injectable for tests; future timestamps clamp to 'now'. */
+export function formatRelative(ms: number, now = Date.now()): string {
+  const s = Math.max(0, Math.floor((now - ms) / 1000))
+  if (s < 45) return 'now'
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h`
+  const d = Math.floor(h / 24)
+  if (d < 7) return `${d}d`
+  const w = Math.floor(d / 7)
+  if (d < 30) return `${w}w`
+  const mo = Math.floor(d / 30)
+  if (d < 365) return `${mo}mo`
+  return `${Math.floor(d / 365)}y`
+}
+
+export type MediaSort =
+  | 'date-desc'
+  | 'date-asc'
+  | 'name-asc'
+  | 'name-desc'
+  | 'size-desc'
+  | 'size-asc'
+  // legacy names kept until the Media tab switches over (accepted as aliases
+  // by the URL parser); date-* replaces them.
+  | 'added-desc'
+  | 'added-asc'
 
 /** The implicit pseudo-section for files without a mediaSectionOf entry. */
 export const UNSORTED = 'unsorted'
@@ -106,6 +150,9 @@ export function filterAndSort(
     return true
   })
   const byName = (a: MediaItem, b: MediaItem) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
+  // "Added" time: meta.modifiedTime when known; items without meta yet count
+  // as oldest (index breaks ties) — never mix epoch-ms with array positions.
+  const added = (it: MediaItem): number => it.modified ?? -1
   const sorted = [...filtered]
   switch (view.sort) {
     case 'name-asc':
@@ -114,11 +161,13 @@ export function filterAndSort(
     case 'name-desc':
       sorted.sort((a, b) => byName(b, a))
       break
+    case 'date-desc':
     case 'added-desc':
-      sorted.sort((a, b) => b.index - a.index)
+      sorted.sort((a, b) => added(b) - added(a) || b.index - a.index)
       break
+    case 'date-asc':
     case 'added-asc':
-      sorted.sort((a, b) => a.index - b.index)
+      sorted.sort((a, b) => added(a) - added(b) || a.index - b.index)
       break
     case 'size-desc':
       // Unknown sizes trail in BOTH size directions; name breaks ties.

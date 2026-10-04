@@ -7,6 +7,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { uploadFile } from '../../drive/client'
 import { UPLOAD_CONCURRENCY } from '../../state/uploads'
+import { UploadRoster } from '../components/UploadRoster'
 
 interface LinkInfo {
   projectName: string
@@ -152,25 +153,7 @@ export function UploadLinkPage({ token }: { token: string }): React.JSX.Element 
           </div>
         ) : roster ? (
           <div style={{ marginTop: 14 }}>
-            <div style={{ maxHeight: 240, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {roster.map((r, i) => (
-                <div key={i}>
-                  <div className="spread small">
-                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: r.done && !r.ok ? 'var(--red)' : undefined }} title={r.err ?? r.name}>
-                      {r.done ? (r.ok ? '✓ ' : '✗ ') : !r.started ? '· ' : ''}
-                      {r.name}
-                    </span>
-                    <span className="muted">{r.done ? (r.ok ? 'done' : 'failed') : r.started ? `${r.pct}%` : 'queued'}</span>
-                  </div>
-                  {r.started && !r.done && <div className="progress" style={{ marginTop: 3 }}><div style={{ width: `${r.pct}%` }} /></div>}
-                  {r.done && !r.ok && (
-                    <button className="btn small ghost" style={{ marginTop: 2 }} onClick={() => retry(i)}>
-                      Retry
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
+            <UploadRoster entries={roster} onRetry={retry} maxHeight={240} />
           </div>
         ) : (
           <div

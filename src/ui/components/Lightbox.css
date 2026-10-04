@@ -1,0 +1,133 @@
+/* ---------------------------------------------------------------------------
+   Lightbox — full-screen media viewer.
+
+   The ground is --scrim (near-black in both themes), so the lightbox draws
+   all of its own chrome in one fixed light ink (#f2f0e8); theme switches
+   don't apply out here. Media sits in an absolute stage that centers every
+   kind and clips a zoomed image's overflow; clicks on the stage's empty
+   ground close, clicks on media or chrome don't.
+-------------------------------------------------------------------------- */
+
+.lightbox {
+  --lb-ink: #f2f0e8;
+  position: fixed; inset: 0;
+  z-index: var(--z-lightbox);
+  background: var(--scrim);
+  animation: lightbox-fade var(--dur) var(--ease-out);
+}
+@keyframes lightbox-fade { from { opacity: 0; } }
+
+/* media stage — the whole ground under the chrome */
+.lightbox-stage {
+  position: absolute; inset: 0;
+  overflow: hidden;   /* a zoomed image must not spill over the chrome */
+  animation: lightbox-pop var(--dur) var(--ease-out);
+}
+@keyframes lightbox-pop { from { opacity: 0; transform: scale(0.98); } }
+
+/* Images (incl. hidden neighbors) share one centered slot: absolute + auto
+   margins shrink the box to the fitted content and center it. The transform
+   transition eases the zoom toggle; panning turns it off to track 1:1. */
+.lightbox-img {
+  position: absolute; inset: 0; margin: auto;
+  max-width: 100%; max-height: 100%;
+  user-select: none;
+  transition: transform var(--dur) var(--ease-out);
+}
+.lightbox-img.zoomed { cursor: grab; touch-action: none; }
+.lightbox-img.panning { transition: none; cursor: grabbing; }
+
+.lightbox-video {
+  position: absolute; inset: 0; margin: auto;
+  max-width: 92vw; max-height: 82vh;
+  background: #000;
+}
+
+.lightbox-pdf {
+  position: absolute; inset: 0; margin: auto;
+  width: 90vw; height: 86vh;
+  background: #fff;
+  border: none;
+  border-radius: var(--radius-lg);
+}
+
+/* Paper card for audio + no-inline-preview kinds — the one warm surface on
+   the dark ground. */
+.lightbox-card {
+  position: absolute; inset: 0; margin: auto;
+  width: min(420px, calc(100vw - 2 * var(--space-6)));
+  height: fit-content;
+  display: flex; flex-direction: column; align-items: center; gap: var(--space-3);
+  padding: var(--space-5);
+  background: var(--card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  color: var(--text);
+  text-align: center;
+}
+.lightbox-card-name {
+  font-weight: var(--fw-medium);
+  word-break: break-word;
+}
+.lightbox-card audio { width: 100%; }
+.lightbox-hint { color: var(--muted); font-size: var(--fs-sm); }
+
+/* ---- chrome: top bar + side arrows (light ink on the scrim, both themes) -- */
+
+.lightbox-bar {
+  position: absolute; top: 0; left: 0; right: 0;
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: linear-gradient(rgba(0, 0, 0, 0.45), transparent);
+  color: var(--lb-ink);
+}
+.lightbox-name {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: var(--fs-md);
+}
+.lightbox-count {
+  flex: none;
+  color: rgba(242, 240, 232, 0.55);
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+}
+
+.lightbox-btn {
+  flex: none;
+  display: inline-flex; align-items: center; gap: 7px;
+  height: 34px; min-width: 34px; padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-pill);
+  background: rgba(20, 18, 12, 0.35);
+  color: var(--lb-ink);
+  font: inherit; font-size: var(--fs-sm); font-weight: var(--fw-medium);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--dur-fast) ease;
+}
+.lightbox-btn:hover { background: rgba(255, 255, 255, 0.12); }
+.lightbox-btn:disabled { opacity: 0.55; cursor: default; }
+.lightbox-btn.icon { padding: 0; justify-content: center; }
+
+/* visible ring over the dark ground — brighter than the page's accent ring */
+.lightbox button:focus-visible,
+.lightbox a:focus-visible {
+  outline: 2px solid var(--lb-ink);
+  outline-offset: 2px;
+}
+
+.lightbox-nav {
+  position: absolute; top: 50%;
+  transform: translateY(-50%);
+}
+.lightbox-nav.prev { left: var(--space-4); }
+.lightbox-nav.next { right: var(--space-4); }
+
+@media (max-width: 640px) {
+  .lightbox-bar { padding: var(--space-2) var(--space-3); }
+  .lightbox-name { font-size: var(--fs-sm); }
+  .lightbox-pdf { width: 96vw; height: 72vh; }
+  .lightbox-nav.prev { left: var(--space-2); }
+  .lightbox-nav.next { right: var(--space-2); }
+}

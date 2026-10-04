@@ -6,6 +6,7 @@
 import { useState } from 'react'
 import { useStore } from '../sync/store'
 import { createUploadLink, revokeUploadLink } from '../state/actions'
+import { confirmDialog } from './components/ConfirmDialog'
 import { CopyButton, Modal } from './components'
 
 const SIZE_CHIPS: { label: string; bytes: number }[] = [
@@ -106,10 +107,14 @@ export function UploadLinksModal({ projectId, onClose }: { projectId: string; on
                       {st.label === 'active' ? (
                         <button
                           className="btn small danger"
-                          onClick={() => {
-                            if (confirm('Revoke this link? New uploads with it stop immediately.')) {
-                              void revokeUploadLink(l.id).catch((e) => setError(e instanceof Error ? e.message : 'Revoke failed'))
-                            }
+                          onClick={async () => {
+                            const ok = await confirmDialog({
+                              title: 'Revoke this link?',
+                              body: 'New uploads with it stop immediately. Links already sent stop working.',
+                              confirmLabel: 'Revoke link',
+                              tone: 'danger',
+                            })
+                            if (ok) void revokeUploadLink(l.id).catch((e) => setError(e instanceof Error ? e.message : 'Revoke failed'))
                           }}
                         >
                           Revoke

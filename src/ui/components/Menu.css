@@ -1,0 +1,64 @@
+/* ---------------------------------------------------------------------------
+   Dropdown menu (Menu.tsx) — card overflow actions. The panel portals to
+   body with position:fixed coordinates computed from the trigger (Menu.tsx
+   owns them as inline styles) so no ancestor's overflow clipping can hide
+   it; this file only the look.
+-------------------------------------------------------------------------- */
+
+.menu {
+  display: inline-block;
+}
+
+.menu-panel {
+  position: fixed;         /* coordinates are inline styles from Menu.tsx */
+  min-width: 176px;
+  z-index: var(--z-modal); /* overlays inside modals, above grid cards */
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  padding: 5px;
+  --menu-slide: 2px;
+  animation: menu-in var(--dur) var(--ease-out);
+}
+
+/* align="start" — left edges flush (position still inline from Menu.tsx) */
+.menu-panel.menu-start { }
+
+/* flipped above the trigger — not enough floor left under it */
+.menu-panel.menu-up { --menu-slide: -2px; }
+
+@keyframes menu-in {
+  from { opacity: 0; transform: translateY(var(--menu-slide)); }
+}
+
+.menu-item {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  font: inherit; font-size: var(--fs-md);
+  color: var(--text);
+  background: none; border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+}
+.menu-item:not(:disabled):hover,
+.menu-item:not(:disabled):active { background: var(--panel-2); }
+.menu-item:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.menu-item-icon { flex: none; display: inline-flex; color: var(--muted); }
+
+.menu-item.danger { color: var(--red); }
+.menu-item.danger .menu-item-icon { color: var(--red); }
+.menu-item.danger:not(:disabled):hover,
+.menu-item.danger:not(:disabled):active { background: var(--red-dim); }
+
+/* section header inside a panel — plain child, not a MenuItem */
+.menu-label {
+  padding: 6px 10px 3px;
+  font-size: var(--fs-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+}

@@ -1,0 +1,87 @@
+/* UploadRoster — shared per-file rows for upload progress. Colors come from
+   the semantic tokens (dark mode needs no overrides); the bar is the .progress
+   pattern from styles.css at 3px, restated here so this component owns its
+   own classes. */
+
+.upload-roster {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  overflow-y: auto;
+}
+
+.upload-roster-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.upload-roster-line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.upload-roster-icon { flex: none; }
+.upload-roster-icon.ok { color: var(--green); }
+.upload-roster-icon.bad { color: var(--red); }
+.upload-roster-icon.wait { color: var(--muted); }
+.upload-roster-icon.run {
+  color: var(--accent);
+  animation: roster-spin 1.2s linear infinite;
+}
+
+.upload-roster-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upload-roster-word {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+.upload-roster-word.bad { color: var(--red); }
+
+.upload-roster-err {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.upload-roster-bar {
+  height: 3px;
+  background: var(--panel-2);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.upload-roster-bar > div {
+  height: 100%;
+  background: var(--accent);
+  transition: width var(--dur-fast) linear;
+}
+
+.upload-roster-retry {
+  align-self: flex-start;
+  gap: 5px;
+}
+
+/* compact: the corner tile's tighter rows */
+.upload-roster.compact { gap: var(--space-1); }
+.upload-roster.compact .upload-roster-row { gap: 3px; }
+.upload-roster.compact .upload-roster-name { font-size: var(--fs-xs); }
+
+@keyframes roster-spin {
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .upload-roster-icon.run { animation: none; }
+}

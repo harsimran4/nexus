@@ -9,7 +9,7 @@ import { boot } from '../boot'
 import { logout, currentSession } from '../auth/session'
 import { checkDraftRecovery, recommitDraft, discardDraft } from '../sync/writer'
 import { runHealthChecks, type HealthIssue } from '../diagnostics/health'
-import { IssueBanner, Modal, StatusBanners, SyncPill } from '../ui/components'
+import { ConfirmHost, Icon, IssueBanner, Modal, StatusBanners, SyncPill, ToastViewport } from '../ui/components'
 import { config } from '../config'
 import { WelcomeGate } from '../ui/WelcomeGate'
 import { Init } from '../ui/pages/Init'
@@ -38,9 +38,11 @@ export const Route = createRootRoute({
     ],
     scripts: [
       {
-        // Apply the stored theme before first paint (no flash of the wrong theme).
+        // Apply the stored theme before first paint (no flash of the wrong
+        // theme) — and tell the UA, so native controls (select popups, date
+        // pickers, scrollbars) style for the dark theme too.
         children:
-          'try{if(localStorage.getItem("nexus.theme")==="dark"){document.documentElement.dataset.theme="dark"}}catch(e){}',
+          'try{if(localStorage.getItem("nexus.theme")==="dark"){document.documentElement.dataset.theme="dark";document.querySelector(\'meta[name="color-scheme"]\')?.setAttribute("content","dark")}}catch(e){}',
       },
     ],
   }),
@@ -289,8 +291,8 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
       aria-label="Toggle light/dark theme"
       onClick={setTheme}
     >
-      <span className="theme-ic-sun" aria-hidden>☀️</span>
-      <span className="theme-ic-moon" aria-hidden>🌙</span>
+      <Icon name="sun" className="theme-ic-sun" />
+      <Icon name="moon" className="theme-ic-moon" />
     </button>
   )
   return (
@@ -302,7 +304,7 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
             <span className="brand-dot" /> Nexus
           </div>
           <button className="icon-btn drawer-close" aria-label="Close menu" onClick={() => setMenuOpen(false)}>
-            ✕
+            <Icon name="x" />
           </button>
         </div>
         {nav.map((n) => (
@@ -344,7 +346,7 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
       <main className="content">
         <div className="mobile-topbar">
           <button className="icon-btn hamburger" aria-label="Open menu" onClick={() => setMenuOpen(true)}>
-            ☰
+            <Icon name="menu" />
           </button>
           <div className="mobile-brand">
             <span className="brand-dot" /> Nexus
@@ -359,6 +361,8 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
         </div>
         {children}
         <UploadTile />
+        <ToastViewport />
+        <ConfirmHost />
       </main>
     </div>
   )
