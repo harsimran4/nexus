@@ -23,13 +23,6 @@ export function kindFromMime(mime: string | undefined): MediaKind {
   return 'other'
 }
 
-export const KIND_GLYPH: Record<MediaKind, string> = {
-  image: '🖼',
-  video: '🎬',
-  audio: '🎧',
-  other: '📄',
-}
-
 export const KIND_LABEL: Record<MediaKind, string> = {
   image: 'Images',
   video: 'Videos',

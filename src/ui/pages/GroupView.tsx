@@ -1,19 +1,17 @@
 import { useState } from 'react'
 import { useStore } from '../../sync/store'
-import type { Group } from '../../types/schema'
 import { compareHlc, decodeHlc } from '../../util/hlc'
-import { Empty, Modal, StatusBadge, banner } from '../components'
+import { Empty, Icon, Modal, StatusBadge, banner } from '../components'
 import { canWrite } from '../../auth/session'
-import { createProject, deleteGroupCascade, renameGroup } from '../../state/actions'
+import { createProject } from '../../state/actions'
 import { navigate } from '../../nav'
 import { MediaThumb } from '../MediaThumb'
+import { GroupDeleteModal, GroupRenameModal } from './GroupDialogs'
 
 export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
   const doc = useStore((s) => s.doc)
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
-  const [deleting, setDeleting] = useState(false)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
   const [newOpen, setNewOpen] = useState(false)
   const writable = canWrite()
 
@@ -21,7 +19,8 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
   if (!doc || !group || group.deleted !== null) {
     return (
       <Empty icon="▦">
-        This group doesn't exist or has been deleted. <a href="/">Back to dashboard</a>
+        This group doesn't exist or has been deleted.{' '}
+        <a href="/" onClick={(e) => { e.preventDefault(); navigate('dash') }}>Back to dashboard</a>
       </Empty>
     )
   }
@@ -35,6 +34,8 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
     if (s.deleted !== null || s.projectId === null) return false
     return doc.projects[s.projectId]?.groupId === groupId
   })
+
+  const openProject = (id: string) => navigate('project/' + id)
 
   return (
     <div>
@@ -61,7 +62,7 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
         <div className="spread mb8">
           <h3 style={{ margin: 0 }}>Projects in this group</h3>
           <button className="btn primary small" disabled={!writable} onClick={() => setNewOpen(true)}>
-            + New project
+            <Icon name="plus" size={13} /> New project
           </button>
         </div>
         {projects.length === 0 ? (
@@ -73,13 +74,33 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
             </thead>
             <tbody>
               {projects.map((p) => (
-                <tr key={p.id} className="clickable" onClick={() => navigate('project/' + p.id)}>
-                  <td style={{ fontWeight: 570 }}>
-                    <span className="row" style={{ gap: 9 }}>
+                <tr
+                  key={p.id}
+                  className="clickable"
+                  onClick={() => openProject(p.id)}
+                >
+                  <td className="group-project-name">
+                    <span className="row">
                       {p.fileIds[0] && (
-                        <MediaThumb fileKey={p.fileIds[0]} style={{ width: 42, height: 30, borderRadius: 4, background: 'var(--panel-2)' }} />
+                        <MediaThumb
+                          fileKey={p.fileIds[0]}
+                          style={{ width: 42, height: 30, borderRadius: 'var(--radius-xs)', background: 'var(--panel-2)' }}
+                        />
                       )}
-                      {p.name}
+                      {/* The name link is the row's keyboard + screen-reader
+                          stop; the row-level onClick is a mouse shortcut.
+                          Keeping the tr plain preserves table semantics so
+                          Status/Files/Due stay navigable cells. */}
+                      <a
+                        href={`/project/${p.id}`}
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          openProject(p.id)
+                        }}
+                      >
+                        {p.name}
+                      </a>
                     </span>
                   </td>
                   <td><StatusBadge doc={doc} status={p.status} /></td>
@@ -100,98 +121,26 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
           <h3>Scripts linked to this group</h3>
           <div className="chips mt8">
             {scriptsOfGroup.map((s) => (
-              <a key={s.id} className="chip" href="/scripts">{s.title}</a>
+              <a key={s.id} className="chip" href="/scripts" onClick={(e) => { e.preventDefault(); navigate('scripts') }}>{s.title}</a>
             ))}
           </div>
         </div>
       )}
 
-      {renameOpen && <RenameGroupModal group={group} onClose={() => setRenameOpen(false)} />}
+      {renameOpen && <GroupRenameModal group={group} onClose={() => setRenameOpen(false)} />}
 
       {newOpen && (
         <NewProjectInGroupModal groupId={groupId} onClose={() => setNewOpen(false)} onCreated={(id) => { setNewOpen(false); navigate('project/' + id) }} />
       )}
 
       {deleteOpen && (
-        <Modal title={`Delete group "${group.name}"?`} onClose={() => setDeleteOpen(false)} wide>
-          {banner('warn', 'Everything inside moves to trash/', 'The group prefix (with every project and file) moves to the trash/ prefix of the bucket. All projects in the group are also removed from the board.')}
-          <div className="field">
-            <label>What will be trashed:</label>
-            <div style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
-              <div className="row spread" style={{ padding: '7px 10px', background: 'var(--bg-raised)' }}>
-                <span style={{ fontWeight: 600 }}>📁 {group.name}/</span>
-                <span className="faint small">group folder</span>
-              </div>
-              {projects.map((p) => (
-                <div key={p.id} style={{ padding: '6px 10px 6px 26px' }} className="small">
-                  {p.fileIds.length > 0 ? '📄' : '▫'} {p.name}
-                  <span className="faint"> · {p.fileIds.length} file{p.fileIds.length === 1 ? '' : 's'}</span>
-                </div>
-              ))}
-              {projects.length === 0 && <div className="faint small" style={{ padding: '8px 10px' }}>No projects inside.</div>}
-            </div>
-            <div className="muted small mt8">{projects.length} project{projects.length === 1 ? '' : 's'} will be removed from the board.</div>
-          </div>
-          {deleteError && banner('error', 'Delete failed', deleteError)}
-          <div className="row" style={{ justifyContent: 'flex-end' }}>
-            <button className="btn" onClick={() => setDeleteOpen(false)}>Cancel</button>
-            <button
-              className="btn danger"
-              disabled={deleting}
-              onClick={async () => {
-                setDeleting(true)
-                try {
-                  await deleteGroupCascade(groupId)
-                  setDeleteOpen(false)
-                  navigate('dash')
-                } catch (e) {
-                  setDeleteError(e instanceof Error ? e.message : 'Delete failed')
-                  setDeleting(false)
-                }
-              }}
-            >
-              {deleting ? 'Deleting…' : 'Move everything to trash'}
-            </button>
-          </div>
-        </Modal>
+        <GroupDeleteModal
+          groupId={groupId}
+          onClose={() => setDeleteOpen(false)}
+          onDeleted={() => navigate('dash')}
+        />
       )}
     </div>
-  )
-}
-
-function RenameGroupModal({ group, onClose }: { group: Group; onClose: () => void }): React.JSX.Element {
-  const [name, setName] = useState(group.name)
-  const [error, setError] = useState<string | null>(null)
-
-  const save = (): void => {
-    const n = name.trim()
-    if (!n || n === group.name) return
-    try {
-      renameGroup(group.id, n)
-      onClose()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not rename the group')
-    }
-  }
-
-  return (
-    <Modal title="Rename group" onClose={onClose}>
-      <div className="field">
-        <label>Group name</label>
-        <input
-          className="input"
-          value={name}
-          autoFocus
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && save()}
-        />
-      </div>
-      {error && banner('error', 'Could not rename', error)}
-      <div className="row mt16" style={{ justifyContent: 'flex-end' }}>
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" disabled={!name.trim() || name.trim() === group.name} onClick={save}>Save</button>
-      </div>
-    </Modal>
   )
 }
 

@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { Modal } from './Modal'
 
 /** Promise-based confirm that replaces native confirm() — themed, blocking
@@ -62,6 +62,7 @@ const getServerSnapshot = (): PendingConfirm | null => null
 export function ConfirmHost(): React.JSX.Element | null {
   const p = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
   const [typed, setTyped] = useState<string | null>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
   if (!p) {
     // Reset the typed guard once the dialog is gone.
     if (typed !== null) setTyped(null)
@@ -70,15 +71,26 @@ export function ConfirmHost(): React.JSX.Element | null {
   const danger = p.opts.tone === 'danger'
   const blocked = p.opts.typeToConfirm !== undefined && typed !== p.opts.typeToConfirm
   return (
-    <Modal title={p.opts.title} onClose={() => settle(false)}>
+    // ownsEscape: the confirm closes on Escape — Modal's guard stands every
+    // OTHER modal down while this one is up, so one keypress closes the
+    // confirm alone no matter what re-rendered underneath it.
+    <Modal
+      title={p.opts.title}
+      onClose={() => settle(false)}
+      ownsEscape
+      initialFocusRef={p.opts.typeToConfirm !== undefined ? inputRef : undefined}
+    >
       {p.opts.body && <div className="confirm-body">{p.opts.body}</div>}
       {p.opts.typeToConfirm !== undefined && (
         <input
+          ref={inputRef}
           className="input mt8"
           placeholder={`Type “${p.opts.typeToConfirm}” to confirm`}
           value={typed ?? ''}
           onChange={(e) => setTyped(e.target.value)}
           spellCheck={false}
+          autoCapitalize="none"
+          autoComplete="off"
         />
       )}
       <div className="row mt8" style={{ justifyContent: 'flex-end' }}>

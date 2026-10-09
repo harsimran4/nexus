@@ -8,12 +8,17 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), selec
  *  close. Renders through a portal with a focus trap (Tab cycles inside),
  *  initial focus, focus restore to the opener, and body scroll-lock — additively:
  *  existing call sites keep the same props. */
-export function Modal({ title, onClose, children, wide, initialFocusRef }: {
+export function Modal({ title, onClose, children, wide, initialFocusRef, ownsEscape }: {
   title: string
   onClose: () => void
   children: ReactNode
   wide?: boolean
   initialFocusRef?: React.RefObject<HTMLElement | null>
+  /** The confirm dialog's own instance: it acts on Escape even while
+   *  confirmIsOpen(), because it IS the confirm. Every other modal stands
+   *  down so a stacked confirm closes alone. Order-independent by design —
+   *  no reliance on listener registration order. */
+  ownsEscape?: boolean
 }): React.JSX.Element | null {
   const dialogRef = useRef<HTMLDivElement>(null)
 
@@ -43,13 +48,13 @@ export function Modal({ title, onClose, children, wide, initialFocusRef }: {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      // A confirm dialog stacked on top owns this Escape — it closes alone,
-      // not the dialog beneath it (every Modal listens on window).
-      if (e.key === 'Escape' && !confirmIsOpen()) onClose()
+      // A confirm dialog stacked on top owns this Escape — other modals close
+      // alone, never together with it. The confirm's own modal is the actor.
+      if (e.key === 'Escape' && (ownsEscape || !confirmIsOpen())) onClose()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose])
+  }, [onClose, ownsEscape])
 
   // Tab cycles inside the dialog.
   const trapTab = (e: React.KeyboardEvent) => {

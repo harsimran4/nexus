@@ -1,5 +1,5 @@
 import { useStore } from '../../sync/store'
-import { Empty, PageQuote, StatusBadge } from '../components'
+import { Empty, PageQuote } from '../components'
 import { canWrite } from '../../auth/session'
 import { setProjectStatus, updateProject } from '../../state/actions'
 import { useMediaView } from './project/mediaView'
@@ -30,27 +30,27 @@ export function ProjectPage({ projectId }: { projectId: string }): React.JSX.Ele
 
   return (
     <div>
-      <div className="content-header">
-        <div style={{ minWidth: 0 }}>
-          <div className="row" style={{ gap: 8 }}>
-            <a href="/" className="faint small">← board</a>
-            {group && <a href={`/group/${group.id}`} className="faint small">{group.name} /</a>}
-          </div>
-          <NameEditor projectId={projectId} name={project.name} />
-          <div className="row wrap" style={{ marginTop: 6 }}>
-            <select
-              className="input"
-              style={{ maxWidth: 170, padding: '4px 9px', fontSize: 13 }}
-              value={project.status}
-              disabled={!canWrite()}
-              onChange={(e) => setProjectStatus(projectId, e.target.value)}
-            >
-              {doc.settings.pipeline.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
-            </select>
-            <StatusBadge doc={doc} status={project.status} />
-          </div>
-        </div>
-        <div className="row">
+      {/* One line: back · group › nameplate · status · tabs. The select IS
+          the status display (the old select+badge pair said it twice). */}
+      <div className="content-header project-head">
+        <a href="/" className="faint small project-head-back">← board</a>
+        {group && (
+          <>
+            <a href={`/group/${group.id}`} className="faint small project-head-crumb">{group.name}</a>
+            <span className="project-head-sep faint" aria-hidden="true">›</span>
+          </>
+        )}
+        <NameEditor projectId={projectId} name={project.name} />
+        <select
+          className="input project-head-status"
+          value={project.status}
+          disabled={!canWrite()}
+          onChange={(e) => setProjectStatus(projectId, e.target.value)}
+          aria-label="Project status"
+        >
+          {doc.settings.pipeline.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+        </select>
+        <div className="row project-head-tabs">
           {TABS.map((t) => (
             <button key={t.id} className={`chip ${view.tab === t.id ? 'on' : ''}`} onClick={() => setTab(t.id)}>
               {t.label}
@@ -69,16 +69,19 @@ export function ProjectPage({ projectId }: { projectId: string }): React.JSX.Ele
 }
 
 /** Inline-editable project name — renames the Drive subfolder to match. The
- *  name sits in a manila folder tab: a project IS a folder on Drive. */
+ *  name sits in a compact manila nameplate: a project IS a folder on Drive.
+ *  `size` (not CSS) gives the input its intrinsic width so the plate hugs
+ *  short names and gives up space gracefully when the row gets tight. */
 function NameEditor({ projectId, name }: { projectId: string; name: string }): React.JSX.Element {
   const writable = canWrite()
   return (
     <div className="project-tab">
       <input
         className="input"
-        style={{ fontSize: 20, fontWeight: 650, background: 'none', border: 'none', padding: '2px 0', maxWidth: 620 }}
+        size={Math.min(42, Math.max(6, name.length + 1))}
         defaultValue={name}
         disabled={!writable}
+        aria-label="Project name"
         onBlur={(e) => {
           const v = e.target.value.trim()
           if (!v || v === name) {

@@ -12,7 +12,8 @@
      base · layout (shell/sidebar/content/mobile) · primitives (btn/input/
      card/badge/banner/pill/chips/modal/empty/dropzone/progress/quote) ·
      board (kanban/stickies) · table · media (tabs/tray/cards/upload tile) ·
-     page themes (groups folders, scripts manuscript, archive, project tab,
+     page themes (groups folders, scripts typewriter, archive cabinet, admin
+     back office, project tab,
      legal pad, tickets, stamps) · small screens · dark patches
 -------------------------------------------------------------------------- */
 
@@ -209,8 +210,6 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 .field label { font-size: 12.5px; color: var(--muted); font-weight: 550; }
 
 .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
-.folder-card { cursor: pointer; transition: border-color .12s; }
-.folder-card:hover { border-color: var(--accent); }
 .card + .card { margin-top: 12px; }
 
 .row { display: flex; align-items: center; gap: 10px; }
@@ -282,8 +281,16 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 .kanban-col-head h3 { font-family: var(--font); font-size: 13px; font-weight: 650; letter-spacing: 0.01em; margin: 0; }
 .kanban-col-head .count { font-size: 12px; color: var(--faint); font-weight: 600; }
 
+/* board filters: the desk tray above the wall */
+.board-search { max-width: 240px; }
+.board-group-select { max-width: 180px; }
+.board-assignee-select { max-width: 160px; }
+.chip.overdue:not(.on) { color: var(--red); }
+.chip.overdue.on { background: var(--red-dim); color: var(--red); }
+
 /* Sticky notes: slight per-card tilt, a tape strip, hover straightens. Color
-   comes from --sticky (set per group) so a group reads as one paper shade. */
+   comes from --sticky (sticky-1..5 — one shade per group, straight from
+   tokens.css) so a group reads as one paper shade. */
 .item-card {
   position: relative;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 26px), var(--sticky, var(--card));
@@ -293,6 +300,11 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
   box-shadow: 0 1px 3px rgba(60, 54, 38, 0.16);
   transition: transform 0.12s, box-shadow 0.12s;
 }
+.item-card.sticky-1 { --sticky: var(--sticky-1); }
+.item-card.sticky-2 { --sticky: var(--sticky-2); }
+.item-card.sticky-3 { --sticky: var(--sticky-3); }
+.item-card.sticky-4 { --sticky: var(--sticky-4); }
+.item-card.sticky-5 { --sticky: var(--sticky-5); }
 .item-card::before {
   content: '';
   position: absolute;
@@ -307,10 +319,38 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 .item-card:nth-child(4n + 3) { rotate: -0.35deg; }
 .item-card:nth-child(4n) { rotate: 0.65deg; }
 .item-card:hover { rotate: 0deg; transform: translateY(-2px); box-shadow: 0 5px 16px rgba(60, 54, 38, 0.22); z-index: var(--z-card-hover); }
-.item-card .title { font-weight: 570; font-size: 13.5px; margin-bottom: 5px; word-break: break-word; }
+.item-card.dragging { opacity: 0.45; }
+.item-card .title { font-weight: var(--fw-medium); font-size: 13.5px; margin-bottom: 5px; word-break: break-word; }
+.item-card .title a { color: inherit; text-decoration: none; }
 .item-card .meta { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 11.5px; color: var(--muted); }
+.item-card .meta .row { gap: 3px; }
+
+/* move menu: revealed like the folder-card actions, always out on touch —
+   HTML5 drag never fires on phones, so this is the only way to move there */
+.item-card-menu { position: absolute; top: 8px; right: 6px; opacity: 0; pointer-events: none; transition: opacity var(--dur-fast); }
+.item-card:hover .item-card-menu,
+.item-card:focus-within .item-card-menu { opacity: 1; pointer-events: auto; }
+.item-card-menu-btn {
+  display: grid; place-items: center;
+  width: 24px; height: 24px; padding: 0;
+  background: var(--card); color: var(--muted);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.item-card-menu-btn:hover { color: var(--text); background: var(--panel-2); }
+@media (hover: none), (any-pointer: coarse) {
+  .item-card-menu { opacity: 1; pointer-events: auto; }
+  .item-card-menu-btn { width: 32px; height: 32px; }
+}
+
 .item-card.overdue .title { color: var(--red); }
 .item-card.overdue::before { background: rgba(226, 160, 150, 0.7); }
+
+[data-theme='dark'] .kanban-col { box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.35); }
+[data-theme='dark'] .kanban-col-head { background: rgba(58, 54, 40, 0.55); }
+[data-theme='dark'] .item-card { background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 26px), var(--sticky, var(--card)); border-color: rgba(0, 0, 0, 0.45); }
+[data-theme='dark'] .item-card::before { background: rgba(62, 58, 42, 0.8); border-left-color: rgba(255, 255, 255, 0.12); border-right-color: rgba(255, 255, 255, 0.12); }
+[data-theme='dark'] .item-card.overdue::before { background: rgba(90, 48, 42, 0.8); }
 
 /* ---- table ---- */
 
@@ -498,18 +538,9 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 
 /* ---- dark mode: component patches -----------------------------------------
    (Dark TOKENS live in tokens.css. These are per-component patches that don't
-   fall out of the tokens; media-area ones are co-located with their light
-   rules below. Board/Groups patches move there when those pages get their
-   design pass.) ---------------------------------------------------------------- */
+   fall out of the tokens; media-area, Groups and Board ones are co-located
+   with their light rules below.) ---------------------------------------------------------------- */
 
-[data-theme='dark'] .kanban-col { box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.35); }
-[data-theme='dark'] .kanban-col-head { background: rgba(58, 54, 40, 0.55); }
-[data-theme='dark'] .item-card { background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), rgba(255, 255, 255, 0) 26px), var(--sticky, var(--card)); border-color: rgba(0, 0, 0, 0.45); }
-[data-theme='dark'] .item-card::before { background: rgba(62, 58, 42, 0.8); border-left-color: rgba(255, 255, 255, 0.12); border-right-color: rgba(255, 255, 255, 0.12); }
-[data-theme='dark'] .item-card.overdue::before { background: rgba(90, 48, 42, 0.8); }
-[data-theme='dark'] .folder-card { background: linear-gradient(180deg, #2a2721, #242119); border-color: #4a4535; }
-[data-theme='dark'] .folder-card::before { background: #373227; border-color: #4a4535; }
-[data-theme='dark'] .folder-card:hover::before { background: #3f3a2d; }
 [data-theme='dark'] .code, [data-theme='dark'] code { background: var(--panel-2); }
 
 /* ---- small screens: vertical board, compact controls, zero horizontal scroll */
@@ -544,7 +575,7 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
   /* media folder tabs become a horizontal scroll strip; the tray goes
      full-width and drops its tilt + tape */
   .media-tabs { overflow-x: auto; flex-wrap: nowrap; padding-bottom: 2px; }
-  .media-tab { flex: none; padding: 5px 10px; }
+  .media-tab { flex: none; } /* padding owned by the base rule + touch bump */
   .media-tray {
     left: 12px; right: 12px; transform: none;
     border-radius: var(--radius); bottom: 12px;
@@ -572,11 +603,15 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
   .media-card-hover-btn { width: 34px; height: 34px; }
   .toast-x { width: 32px; height: 32px; }
   .media-toolbar-clear { width: 28px; height: 28px; }
-  .media-toolbar-foot .media-count { margin-left: 0; }
-  .media-toolbar-actions { margin-left: 0; width: 100%; }
-  .media-toolbar-actions .btn { flex: 1 1 auto; }
-  .media-toolbar-sort { max-width: none; flex: 1; }
-  .project-tab { display: block; }
+  .media-toolbar .media-toolbar-search { flex-basis: 100%; min-width: 0; }
+  .media-toolbar .media-toolbar-kind,
+  .media-toolbar .media-toolbar-sort { flex: 1 1 auto; max-width: none; }
+  .media-toolbar .media-count { margin-left: 0; }
+  .media-toolbar .media-toolbar-actions { margin-left: 0; flex: 1 1 100%; }
+  .media-toolbar .media-toolbar-actions .btn { flex: 1 1 auto; }
+  .content-header.project-head { flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .project-head .project-tab { flex: 1 1 140px; max-width: none; }
+  .project-head .project-head-tabs { flex-basis: 100%; margin-left: 0; }
   .modal { padding: 14px; max-height: 86vh; overflow-y: auto; }
   .modal-backdrop { padding: 12px 10px; }
   .ticket-grid { grid-template-columns: 1fr; }
@@ -584,30 +619,212 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
   .footer { font-size: 12px; gap: 10px; }
 }
 
-/* ---- Groups page: manila folders ---- */
+/* ---- Groups page: manila folders -----------------------------------------
+   Folder cards in a drawer grid. The manila is page personality (like
+   --media-tape), so it lives here as component props with the dark patch
+   right below — the shared surfaces still come from tokens.css. */
+
+.group-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  padding-top: 12px; /* headroom so the first row's folder tabs clear the header */
+}
 
 .folder-card {
+  --folder-face: #f7efd9;
+  --folder-face-2: #f2e8cd;
+  --folder-edge: #d9ccaa;
+  --folder-tab: #efe3c4;
+  --folder-tab-hover: #f6ecd2;
   position: relative;
-  background: linear-gradient(180deg, #f7efd9, #f2e8cd);
-  border: 1px solid #d9ccaa;
-  border-radius: 4px;
-  padding: 26px 16px 14px;
+  cursor: pointer;
+  background: linear-gradient(180deg, var(--folder-face), var(--folder-face-2));
+  border: 1px solid var(--folder-edge);
+  border-radius: var(--radius-xs);
+  padding: 24px 16px 14px;
   margin-top: 12px;
+  transition: border-color var(--dur-fast), box-shadow var(--dur), transform var(--dur-fast);
 }
 .folder-card::before {
   content: '';
   position: absolute;
   top: -11px; left: -1px;
   width: 116px; height: 12px;
-  background: #efe3c4;
-  border: 1px solid #d9ccaa;
+  background: var(--folder-tab);
+  border: 1px solid var(--folder-edge);
   border-bottom: none;
   border-radius: 6px 8px 0 0;
+  transition: background var(--dur-fast);
 }
+.folder-card h3 { margin: 0; }
+.folder-card h3 a { color: inherit; text-decoration: none; }
 .folder-card:hover { border-color: var(--accent); }
-.folder-card:hover::before { background: #f6ecd2; }
+.folder-card:hover,
+.folder-card:focus-within {
+  box-shadow: var(--shadow); transform: translateY(-1px);
+  z-index: var(--z-card-hover); /* lift above neighbors so the shadow isn't clipped */
+}
+.folder-card:hover::before { background: var(--folder-tab-hover); }
 
-/* ---- Scripts: ruled manuscript paper ---- */
+/* pencil + trash: revealed on hover / keyboard focus, always out on touch.
+   pointer-events off while hidden so a tap on a hybrid (touch + mouse)
+   device can't land on buttons it can't see. */
+.folder-card-actions { display: inline-flex; gap: 6px; opacity: 0; pointer-events: none; transition: opacity var(--dur-fast); }
+.folder-card:hover .folder-card-actions,
+.folder-card:focus-within .folder-card-actions { opacity: 1; pointer-events: auto; }
+.folder-card-btn {
+  display: grid; place-items: center;
+  width: 26px; height: 26px; padding: 0;
+  background: var(--card); color: var(--muted);
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast), border-color var(--dur-fast);
+}
+.folder-card-btn:hover { color: var(--text); background: var(--panel-2); }
+.folder-card-btn.danger:hover { color: var(--red); border-color: var(--red); background: var(--red-dim); }
+@media (hover: none), (any-pointer: coarse) {
+  .folder-card-actions { opacity: 1; pointer-events: auto; }
+  .folder-card-btn { width: 32px; height: 32px; }
+}
+
+.folder-card-desc {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* the delete-preview tree: what goes to the curb */
+.trash-tree {
+  max-height: 240px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+.trash-tree-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 7px 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  font-weight: var(--fw-medium);
+}
+.trash-tree-row {
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 10px 6px 26px;
+}
+.trash-tree-row svg { flex: none; color: var(--faint); }
+.trash-tree-empty { padding: 8px 10px; }
+
+/* the projects table on the group page */
+.group-project-name { font-weight: var(--fw-medium); }
+.group-project-name a { color: inherit; text-decoration: none; }
+
+[data-theme='dark'] .folder-card {
+  --folder-face: #2a2721;
+  --folder-face-2: #242119;
+  --folder-edge: #4a4535;
+  --folder-tab: #373227;
+  --folder-tab-hover: #3f3a2d;
+}
+
+/* ---- Scripts: typewriter pages -------------------------------------------
+   The list is a stack of paper slips on the desk; the editor is the sheet
+   you're typing on. Ruled lines behind the body come from .manuscript. */
+
+.script-split {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 14px;
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .script-split { grid-template-columns: 1fr; }
+}
+
+.script-list { display: grid; gap: 6px; padding: 8px; }
+
+/* the tools row: search + status chips — the list column's answer to scale */
+.script-tools {
+  display: grid; gap: 8px;
+  padding: 2px 2px 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.script-search { position: relative; }
+.script-search-input { padding: 6px 26px; }
+.script-search > svg {
+  position: absolute; left: 8px; top: 50%; transform: translateY(-50%);
+  color: var(--faint); pointer-events: none;
+}
+.script-search-clear {
+  position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+  display: grid; place-items: center;
+  width: 26px; height: 26px; padding: 0;
+  background: none; border: none; border-radius: var(--radius-sm);
+  color: var(--muted); cursor: pointer;
+}
+.script-search-clear:hover { color: var(--text); background: var(--panel-2); }
+.script-count { padding: 6px 4px 0; font-size: var(--fs-xs); color: var(--faint); font-style: italic; }
+.script-none {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 4px;
+  color: var(--muted); font-size: var(--fs-sm);
+}
+
+/* a slip: one script as a strip of paper with a spine */
+.script-slip {
+  display: block; width: 100%; text-align: left; font: inherit; color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-xs);
+  padding: 8px 10px 8px 12px;
+  cursor: pointer;
+  transition: background var(--dur-fast), border-color var(--dur-fast);
+}
+.script-slip:hover { background: var(--panel-2); }
+.script-slip.on {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  border-left-color: var(--accent);
+}
+.script-slip-title { font-weight: var(--fw-medium); word-break: break-word; }
+.script-slip-sub { display: block; }
+
+/* the sheet: a serif headline instead of a boxed input (Fraunces ships 600) */
+.script-title {
+  font-family: var(--serif);
+  font-size: var(--fs-2xl);
+  font-weight: 600;
+  color: var(--text);
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding: 0 0 6px;
+  margin-bottom: 10px;
+}
+.script-title:focus { border-bottom-color: var(--accent); }
+/* text inputs always match :focus-visible (even for mouse focus), so the
+   title gets the same outline + .input ring as every other field, plus the
+   accent underline */
+
+.script-status { max-width: 160px; }
+.script-project { max-width: 260px; }
+.md-preview { min-height: 120px; }
+
+/* milestone copies: stamped receipt lines */
+.script-copy {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 7px 10px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.script-copy + .script-copy { margin-top: 6px; }
+
+/* the editor's closing rule */
+.script-foot { border-top: 1px solid var(--border); padding-top: 12px; }
 
 .manuscript {
   background:
@@ -616,10 +833,51 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
   background-attachment: local;
 }
 
-/* ---- Archive: faded papers ---- */
+/* ---- Archive: the back-room cabinet --------------------------------------
+   Deleted projects are faded papers in a ledger; archived ones are sealed
+   boxes on a shelf. */
 
-.archived-paper { opacity: 0.88; }
+.archived-paper { opacity: 0.9; }
 .archived-paper .table td { color: var(--muted); }
+.archived-paper tbody tr:hover td { color: var(--text); } /* the row you're reading un-fades */
+.archive-name { font-weight: var(--fw-medium); }
+.archive-move-select { max-width: 150px; padding: 3px 8px; font-size: 12px; }
+
+/* boxed for storage */
+.box-shelf {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: var(--space-4);
+  padding-top: 6px; /* headroom for the tape */
+}
+.box-card {
+  --box-face: #efe7d2;
+  --box-edge: #d8cbaa;
+  --box-tape: rgba(233, 223, 192, 0.85);
+  position: relative;
+  background: var(--box-face);
+  border: 1px solid var(--box-edge);
+  border-radius: var(--radius-sm);
+  padding: 14px;
+}
+.box-card::before {
+  content: '';
+  position: absolute;
+  top: -7px; left: 50%;
+  transform: translateX(-50%) rotate(-1.6deg);
+  width: 76px; height: 14px;
+  background: var(--box-tape);
+  box-shadow: 0 1px 2px rgba(60, 54, 38, 0.14);
+}
+.box-card-name { display: flex; align-items: center; gap: 6px; font-weight: var(--fw-medium); }
+.box-card-name svg { flex: none; color: var(--faint); }
+.box-card-meta { margin-top: 6px; }
+
+[data-theme='dark'] .box-card {
+  --box-face: #26241d;
+  --box-edge: #3e3a2d;
+  --box-tape: rgba(72, 66, 46, 0.9);
+}
 
 /* ---------------------------------------------------------------------------
    Artistic details — every surface dresses for its function
@@ -635,46 +893,64 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 
 /* Board: hand-drawn pen circle around overdue due dates */
 .due-wrap { position: relative; display: inline-block; }
+.due-wrap.overdue { color: var(--red); font-weight: var(--fw-semibold); }
 .scribble {
   position: absolute; inset: -5px -8px -4px;
   width: calc(100% + 16px); height: calc(100% + 9px);
   color: var(--red); pointer-events: none;
 }
 
-/* Project page: the page IS a folder — the name lives in the tab */
+/* Project page: one-line head — back · group › nameplate · status · tabs.
+   The name still lives in manila (a project IS a Drive folder), compact and
+   first to shrink; the select IS the status display (no badge pair). */
+.project-head { align-items: baseline; }
+.project-head-back { flex: none; text-decoration: none; }
+.project-head-crumb { flex: 0 1 auto; min-width: 0; text-decoration: none; }
+.project-head-back:hover, .project-head-crumb:hover { color: var(--muted); }
+.project-head-sep { flex: none; user-select: none; }
 .project-tab {
-  display: inline-block;
+  flex: 0 1 auto; min-width: 0; max-width: 420px;
   background: linear-gradient(180deg, #f7efd9, #f4e9cf);
   border: 1px solid #d9ccaa;
-  border-bottom: none;
-  border-radius: 8px 10px 0 0;
-  padding: 7px 16px 5px;
-  margin-bottom: -1px;
-  box-shadow: 0 -1px 3px rgba(60, 54, 38, 0.08);
+  border-radius: 6px 8px 3px 3px;
+  padding: 1px 10px;
 }
-.project-tab .input { background: transparent; border: none; box-shadow: none !important; padding: 2px 4px; }
+.project-tab .input {
+  background: transparent; border: none; box-shadow: none !important;
+  width: 100%; min-width: 0; padding: 3px 2px;
+  font-size: 16px; font-weight: 600; text-overflow: ellipsis;
+}
+/* .input:focus's outline:none outranks the global :focus-visible rule, which
+   leaves the nameplate with NO keyboard indicator (the suppressed box-shadow
+   was its only other signal) — restore the outline on the plate */
+.project-tab .input:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.project-head .project-head-status {
+  flex: none; width: auto; max-width: 210px;
+  padding: 3px 10px; font-size: var(--fs-sm); font-weight: var(--fw-medium);
+  border-radius: var(--radius-pill);
+}
+.project-head-tabs { margin-left: auto; flex: none; }
 [data-theme='dark'] .project-tab { background: linear-gradient(180deg, #2a2721, #252219); border-color: #4a4535; }
+@media (hover: none), (any-pointer: coarse) {
+  .project-head .chip { padding: 6px 13px; } /* chips are ~23px tall otherwise */
+}
 
-/* Media tab: sections as manila folder tabs — folders inside the folder */
+/* Media tab: sections as a quiet strip — folders inside the folder. Active
+   is an accent underline sitting on the rail, not a manila block. */
 .media-tabs {
   display: flex; align-items: flex-end; gap: 4px;
   border-bottom: 1px solid var(--border-strong);
   margin: 2px 0 14px;
 }
 .media-tab {
-  border: 1px solid transparent; border-bottom: none;
-  border-radius: 8px 10px 0 0;
-  padding: 6px 14px 5px; margin-bottom: -1px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 6px 10px 5px; margin-bottom: -1px;
   background: none; font: inherit; font-size: 13px;
   color: var(--faint); cursor: pointer;
 }
 .media-tab:hover { background: var(--paper-raised); color: var(--muted); }
-.media-tab.on {
-  background: linear-gradient(180deg, #f7efd9, #f4e9cf);
-  border-color: #d9ccaa;
-  color: var(--text); font-weight: 600;
-  box-shadow: 0 -1px 3px rgba(60, 54, 38, 0.08);
-}
+.media-tab.on { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
 .media-tab .count { color: var(--faint); font-weight: 500; font-size: 12px; margin-left: 5px; }
 .media-tab.on .count { color: var(--muted); }
 .media-tab-new {
@@ -687,8 +963,10 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
   color: var(--muted); font-family: var(--serif); font-style: italic; font-size: 12.5px;
 }
 .media-tab-manage:hover { color: var(--accent-strong); }
-[data-theme='dark'] .media-tab.on { background: linear-gradient(180deg, #2a2721, #252219); border-color: #4a4535; }
 [data-theme='dark'] .media-tab:hover { background: var(--panel-2); }
+@media (hover: none), (any-pointer: coarse) {
+  .media-tab { padding: 8px 12px; } /* ≥32px touch target */
+}
 
 /* Project notes: a yellow legal pad with a red margin rule */
 .legal-pad {
@@ -823,13 +1101,15 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 .media-card-line.short { width: 55%; }
 .media-meta { font-size: 12px; color: var(--faint); margin-top: 2px; }
 
-/* toolbar — three tidy rows instead of the one-row squeeze */
+/* toolbar — one quiet row on paper (no card box): search · kind · sort ·
+   count · actions. Wraps naturally when tight; the 640 block plans phones.
+   The section rail above already draws the horizontal rule, so this row
+   borrows structure instead of adding a second hairline. */
 .media-toolbar {
-  display: grid; gap: var(--space-2);
-  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius);
-  padding: var(--space-3); margin-bottom: var(--space-3);
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2);
+  margin: 0 0 var(--space-3);
 }
-.media-toolbar-search { position: relative; display: flex; align-items: center; }
+.media-toolbar-search { position: relative; display: flex; align-items: center; flex: 1 1 240px; min-width: 200px; }
 .media-toolbar-search-ic { position: absolute; left: 10px; color: var(--faint); pointer-events: none; }
 .media-toolbar-input { padding-left: 30px; padding-right: 30px; }
 .media-toolbar-clear {
@@ -845,10 +1125,24 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
   font-family: var(--serif); font-style: italic; font-size: var(--fs-xs);
   color: var(--faint); pointer-events: none;
 }
-.media-toolbar-row { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; }
-.media-toolbar-sort { max-width: 190px; }
+.media-toolbar .media-toolbar-kind {
+  width: auto; flex: none; max-width: 160px;
+  padding-top: 5px; padding-bottom: 5px; font-size: var(--fs-sm);
+}
+.media-toolbar .media-toolbar-sort {
+  width: auto; flex: none; max-width: 190px;
+  padding-top: 5px; padding-bottom: 5px; font-size: var(--fs-sm);
+}
 .media-toolbar-note { font-size: var(--fs-xs); font-style: italic; color: var(--faint); }
 .media-toolbar-actions { margin-left: auto; display: flex; gap: var(--space-2); }
+.media-toolbar .media-count { margin-left: 0; }
+
+/* phones: kind + sort grow to share a row with the count — declared after
+   the section so the two-class prefixes win the file-order race */
+@media (max-width: 640px) {
+  .media-toolbar .media-toolbar-kind,
+  .media-toolbar .media-toolbar-sort { flex: 1 1 auto; max-width: none; }
+}
 
 /* page-level drop veil — the whole board awaits the print */
 .drop-veil {
@@ -970,7 +1264,57 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 .stamp-red { color: var(--red); }
 .stamp-ink { color: var(--muted); }
 
-/* Admin page: intentionally unadorned — the clipboard clip tested poorly. */
+/* ---- Admin: the back office ----------------------------------------------
+   Ledgers and ticket stubs were already here. Rows get filed tidy; the
+   manager signs off on the dangerous moves — a typed word, and a red stamp
+   on the card that wipes the room. */
+
+.admin-stamp-danger {
+  display: inline-block;
+  transform: rotate(-2deg);
+  border: 1.5px solid var(--red);
+  color: var(--red);
+  border-radius: var(--radius-xs);
+  padding: 1px 8px;
+  font-family: var(--font);
+  font-size: var(--fs-xs);
+  font-weight: var(--fw-semibold);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.85;
+  vertical-align: 2px;
+  margin-left: 8px;
+}
+
+/* filed rows: pipeline stages, workspace ids, snapshots */
+.admin-row {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+}
+select.input.admin-role-select { max-width: 120px; padding: 3px 8px; font-size: 12.5px; }
+.admin-stage-label { max-width: 220px; }
+.admin-stage-id { max-width: 170px; }
+.admin-stage-bucket { max-width: 130px; }
+.admin-id-label { min-width: 130px; }
+.admin-id-value { word-break: break-all; flex: 1; }
+
+.admin-label-chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 6px 3px 11px; }
+.admin-label-x {
+  display: grid; place-items: center;
+  border: none; background: none; padding: 0 3px;
+  color: inherit; line-height: 1; cursor: pointer;
+  border-radius: var(--radius-xs);
+}
+.admin-label-x:hover { color: var(--red); }
+.admin-label-input { max-width: 200px; }
+.admin-check-row { display: flex; align-items: center; gap: 8px; font-size: var(--fs-md); cursor: pointer; }
+
+.admin-storage-facts { white-space: pre-line; word-break: break-all; }
+.admin-role-input { max-width: 200px; }
+.admin-pw-input { max-width: 260px; }
 
 /* Theme toggle: the active icon follows html[data-theme] (prerender-safe,
    hydration-safe — no JS reads document during render). */

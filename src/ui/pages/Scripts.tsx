@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useStore } from '../../sync/store'
+import { useStore, storeGet } from '../../sync/store'
 import { SCRIPT_STATUSES, type Script, type ScriptStatus } from '../../types/schema'
 import { compareHlc, decodeHlc } from '../../util/hlc'
 import { canWrite } from '../../auth/session'
 import { createScript, deleteScript, readScriptBody, saveScriptBody, setScriptStatus, updateScript } from '../../state/actions'
 import { clearScriptDraft, loadScriptDraft, saveScriptDraft } from '../../sync/drafts'
 import { renderMarkdown } from '../../util/markdown'
-import { downloadToBrowser } from '../../drive/preview'
-import { Empty, Modal, banner, PageQuote } from '../components'
+import { downloadToBrowser, describeError } from '../../drive/preview'
+import { Empty, Icon, Modal, banner, PageQuote, confirmDialog, confirmIsOpen, toast } from '../components'
 
 // Scripts run on their own draft → review → final ladder (not the item
 // pipeline). Badges reuse the bucket palette: muted / amber / green.
@@ -23,19 +23,6 @@ const STATUS_LABEL: Record<ScriptStatus, string> = {
   final: 'Final',
 }
 
-const NARROW_QUERY = '(max-width: 900px)'
-
-function useNarrow(): boolean {
-  const [narrow, setNarrow] = useState(() => window.matchMedia(NARROW_QUERY).matches)
-  useEffect(() => {
-    const mq = window.matchMedia(NARROW_QUERY)
-    const onChange = () => setNarrow(mq.matches)
-    mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
-  }, [])
-  return narrow
-}
-
 /** HLC stamps render as local wall-clock time. */
 const fmt = (stamp: string): string => new Date(decodeHlc(stamp).ms).toLocaleString()
 
@@ -43,7 +30,10 @@ export function Scripts(): React.JSX.Element {
   const doc = useStore((s) => s.doc)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
-  const narrow = useNarrow()
+  const [query, setQuery] = useState('')
+  const [statusFilter, setStatusFilter] = useState<ScriptStatus | 'all'>('all')
+  const listRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
 
   const scripts = useMemo(() => {
     if (!doc) return []
@@ -52,11 +42,32 @@ export function Scripts(): React.JSX.Element {
       .sort((a, b) => compareHlc(b.updatedAt, a.updatedAt))
   }, [doc])
 
+  // The list is searchable and status-filtered; the editor keeps showing the
+  // selected script even when filters hide it — filtering is for finding the
+  // next one, not for closing the current one.
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q && statusFilter === 'all') return scripts
+    return scripts.filter((s) => {
+      if (statusFilter !== 'all' && s.status !== statusFilter) return false
+      if (!q) return true
+      const project = s.projectId ? doc?.projects[s.projectId]?.name ?? '' : ''
+      return s.title.toLowerCase().includes(q) || project.toLowerCase().includes(q)
+    })
+  }, [scripts, doc, query, statusFilter])
+
+  const counts = useMemo(() => {
+    const c: Record<ScriptStatus | 'all', number> = { all: scripts.length, draft: 0, review: 0, final: 0 }
+    for (const s of scripts) c[s.status]++
+    return c
+  }, [scripts])
+
   if (!doc) return <></>
 
   const writable = canWrite()
   const active =
     selectedId !== null && doc.scripts[selectedId]?.deleted === null ? doc.scripts[selectedId] : null
+  const isFiltering = query.trim() !== '' || statusFilter !== 'all'
 
   return (
     <div>
@@ -69,7 +80,7 @@ export function Scripts(): React.JSX.Element {
           </div>
         </div>
         <button className="btn primary" disabled={!writable} onClick={() => setCreating(true)}>
-          + New script
+          <Icon name="plus" size={14} /> New script
         </button>
       </div>
 
@@ -82,32 +93,100 @@ export function Scripts(): React.JSX.Element {
         <Empty icon="✎">
           No scripts yet.{' '}
           {writable
-            ? 'Click "+ New script" to draft the first one — it saves to Drive instantly.'
+            ? 'Click “+ New script” to draft the first one — it saves to Drive instantly.'
             : 'Editors will add scripts here.'}
         </Empty>
       ) : (
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: narrow ? '1fr' : '300px minmax(0, 1fr)',
-            gap: 14,
-            alignItems: 'start',
-          }}
-        >
-          <div className="card" style={{ padding: 8 }}>
-            {scripts.map((s) => (
-              <ScriptRow
-                key={s.id}
-                script={s}
-                projectName={s.projectId ? doc.projects[s.projectId]?.name ?? null : null}
-                selected={s.id === selectedId}
-                onOpen={() => setSelectedId(s.id)}
-              />
-            ))}
+        <div className="script-split">
+          <div
+            className="card script-list"
+            role="group"
+            aria-label="Scripts"
+            ref={listRef}
+            tabIndex={-1}
+          >
+            <div className="script-tools">
+              <div className="script-search">
+                <Icon name="search" size={13} />
+                <input
+                  className="input script-search-input"
+                  ref={searchRef}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search scripts…"
+                  aria-label="Search scripts by title or project"
+                />
+                {query && (
+                  <button
+                    className="script-search-clear"
+                    onClick={() => {
+                      setQuery('')
+                      searchRef.current?.focus() // the button unmounts — keep focus in the input
+                    }}
+                    aria-label="Clear search"
+                  >
+                    <Icon name="x" size={12} />
+                  </button>
+                )}
+              </div>
+              <div className="chips" role="group" aria-label="Filter by status">
+                <button className={`chip${statusFilter === 'all' ? ' on' : ''}`} aria-pressed={statusFilter === 'all'} onClick={() => setStatusFilter('all')}>
+                  All {counts.all}
+                </button>
+                {SCRIPT_STATUSES.map((st) => (
+                  <button key={st} className={`chip${statusFilter === st ? ' on' : ''}`} aria-pressed={statusFilter === st} onClick={() => setStatusFilter(st)}>
+                    {STATUS_LABEL[st]} {counts[st]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {filtered.length === 0 ? (
+              <div className="script-none">
+                <span>No scripts match.</span>
+                <button
+                  className="btn ghost small"
+                  onClick={() => {
+                    setQuery('')
+                    setStatusFilter('all')
+                    searchRef.current?.focus() // this row unmounts — focus lands back in search
+                  }}
+                >
+                  Clear filters
+                </button>
+              </div>
+            ) : (
+              filtered.map((s) => (
+                <ScriptRow
+                  key={s.id}
+                  script={s}
+                  projectName={s.projectId ? doc.projects[s.projectId]?.name ?? null : null}
+                  selected={s.id === selectedId}
+                  onOpen={() => setSelectedId(s.id)}
+                />
+              ))
+            )}
+            {/* Live region for the whole filtering period — mounted at 0
+                results too, so "0 of N shown" actually gets announced (a
+                region that unmounts at zero announces nothing). */}
+            {isFiltering && (
+              <div className="script-count" aria-live="polite">
+                {filtered.length} of {scripts.length} shown
+              </div>
+            )}
           </div>
           <div>
             {active ? (
-              <ScriptEditor key={active.id} script={active} onDeleted={() => setSelectedId(null)} />
+              <ScriptEditor
+                key={active.id}
+                script={active}
+                onDeleted={() => {
+                  setSelectedId(null)
+                  // keyboard lands back in the list — unless this was the
+                  // last script, in which case the list is gone and focus
+                  // falls to <body>
+                  listRef.current?.focus()
+                }}
+              />
             ) : (
               <div className="card" style={{ display: 'grid', placeItems: 'center', minHeight: 220 }}>
                 <Empty icon="✎">Select a script on the left to view and edit it.</Empty>
@@ -142,27 +221,12 @@ function ScriptRow({
   onOpen: () => void
 }): React.JSX.Element {
   return (
-    <button
-      onClick={onOpen}
-      style={{
-        display: 'block',
-        width: '100%',
-        textAlign: 'left',
-        font: 'inherit',
-        color: 'inherit',
-        background: selected ? 'var(--accent-dim)' : 'none',
-        border: 'none',
-        borderRadius: 'var(--radius-sm)',
-        padding: '8px 10px',
-        cursor: 'pointer',
-        marginBottom: 2,
-      }}
-    >
+    <button className={`script-slip${selected ? ' on' : ''}`} aria-current={selected ? 'true' : undefined} onClick={onOpen}>
       <span className="spread">
-        <span style={{ fontWeight: 570, fontSize: 13.5, wordBreak: 'break-word' }}>{script.title}</span>
+        <span className="script-slip-title">{script.title}</span>
         <span className={STATUS_BADGE[script.status]}>{STATUS_LABEL[script.status]}</span>
       </span>
-      <span className="small faint" style={{ display: 'block' }}>
+      <span className="script-slip-sub small faint">
         {projectName ?? 'No project'}
         {script.storage.type === 'drive-doc' ? ' · Drive doc' : ''}
       </span>
@@ -173,6 +237,10 @@ function ScriptRow({
 // Unsaved drafts survive switching between scripts within this session
 // (in-memory map, instant) AND tab closes (IndexedDB mirror, written debounced).
 const bodyDrafts = new Map<string, string>()
+
+// One download-failure toast at a time — a retry replaces the old receipt
+// instead of stacking five sticky errors.
+let downloadErrToast: number | null = null
 
 function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => void }): React.JSX.Element {
   const doc = useStore((s) => s.doc)
@@ -245,9 +313,11 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
     }
   }
 
-  // Ctrl+S / Cmd+S saves from anywhere in the editor.
+  // Ctrl+S / Cmd+S saves from anywhere in the editor — but stands down while
+  // a confirm dialog is up (same convention as Modal / MediaTab's Escape).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (confirmIsOpen()) return
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault()
         save()
@@ -298,11 +368,38 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
     updateScript(id, { projectId: pid })
   }
 
+  const removeScript = async (): Promise<void> => {
+    const ok = await confirmDialog({
+      title: `Delete “${script.title}”?`,
+      body: (
+        <div className="confirm-body">
+          <div className="confirm-what">It moves to the Archive.</div>
+          You can restore it from there — nothing is erased.
+        </div>
+      ),
+      confirmLabel: 'Delete script',
+      tone: 'danger',
+    })
+    if (!ok) return
+    // The dialog can sit open while another device deletes the script — the
+    // editor unmounts behind the modal but this async flow keeps running.
+    // Don't re-tombstone someone else's delete or claim it as our own.
+    if (storeGet().doc?.scripts[id]?.deleted !== null) {
+      bodyDrafts.delete(id) // a restored copy must not resurface with a stale dirty draft
+      void clearScriptDraft(id)
+      onDeleted()
+      return
+    }
+    bodyDrafts.delete(id)
+    deleteScript(id)
+    toast.success(`“${script.title}” moved to the Archive`)
+    onDeleted()
+  }
+
   return (
     <div className="card">
       <input
-        className="input"
-        style={{ fontSize: 16, fontWeight: 600, marginBottom: 10 }}
+        className="input script-title"
         defaultValue={script.title}
         disabled={!writable}
         placeholder="Script title"
@@ -318,8 +415,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
 
       <div className="row wrap mb8">
         <select
-          className="input"
-          style={{ maxWidth: 160 }}
+          className="input script-status"
           value={script.status}
           disabled={!writable || statusBusy}
           onChange={(e) => changeStatus(e.target.value as ScriptStatus)}
@@ -331,8 +427,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
           ))}
         </select>
         <select
-          className="input"
-          style={{ maxWidth: 260 }}
+          className="input script-project"
           value={script.projectId ?? ''}
           disabled={!writable}
           onChange={(e) => setProject(e.target.value)}
@@ -364,10 +459,10 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
               {dirty && saveState !== 'saving' ? '· unsaved changes' : saveState === 'saving' ? '· saving…' : saveState === 'saved' ? '· saved ✓' : saveState === 'error' ? '· save failed — press Save again' : ''}
             </label>
             <div className="row" style={{ gap: 6 }}>
-              <button className={`chip ${preview ? '' : 'on'}`} onClick={() => setPreview(false)} title="Edit the markdown">
+              <button className={`chip ${preview ? '' : 'on'}`} aria-pressed={!preview} onClick={() => setPreview(false)} title="Edit the markdown">
                 Edit
               </button>
-              <button className={`chip ${preview ? 'on' : ''}`} onClick={() => setPreview(true)} title="Rendered preview">
+              <button className={`chip ${preview ? 'on' : ''}`} aria-pressed={preview} onClick={() => setPreview(true)} title="Rendered preview">
                 Preview
               </button>
               {writable && (
@@ -380,7 +475,6 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
           {preview ? (
             <div
               className="input manuscript md-preview"
-              style={{ minHeight: 120 }}
               dangerouslySetInnerHTML={{ __html: renderMarkdown(body) }}
             />
           ) : (
@@ -397,7 +491,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
             />
           )}
           <span className="faint small">
-            Press Save (or Ctrl+S) to write this script to its own markdown file in the bucket (scripts/) — milestone copies at Review/Final give you restore points.
+            Press Save (or Ctrl+S) to write your text to the script's markdown file — milestone copies at Review/Final give you restore points.
           </span>
           {saveState === 'error' && saveError && banner('error', 'Could not save the script', saveError)}
         </div>
@@ -411,17 +505,17 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
           </span>
         )}
         {script.copies.map((c) => (
-          <div
-            key={`${c.fileId}-${c.at}`}
-            className="row spread small"
-            style={{ background: 'var(--bg-raised)', padding: '7px 10px', borderRadius: 8 }}
-          >
+          <div key={`${c.fileId}-${c.at}`} className="script-copy small">
             <span className="row">
               <span className={`badge ${c.label === 'final' ? 'done' : 'doing'}`}>{c.label}</span>
               <button
                 className="btn ghost small"
                 onClick={() =>
-                  void downloadToBrowser(c.fileId, `${script.title || 'script'}-${c.label}.md`).catch(() => {})
+                  void downloadToBrowser(c.fileId, `${script.title || 'script'}-${c.label}.md`).catch((e) => {
+                    if (downloadErrToast !== null) toast.dismiss(downloadErrToast)
+                    const d = describeError(e)
+                    downloadErrToast = toast.error(d.message, d.fix)
+                  })
                 }
               >
                 Download copy
@@ -432,19 +526,10 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
         ))}
       </div>
 
-      <div className="row spread mt16" style={{ borderTop: '1px solid var(--border)', paddingTop: 12 }}>
+      <div className="row spread mt16 script-foot">
         <span className="small muted">Updated {fmt(script.updatedAt)}</span>
         {writable && (
-          <button
-            className="btn danger"
-            onClick={() => {
-              if (confirm(`Delete "${script.title}"? It can be restored from the Archive.`)) {
-                bodyDrafts.delete(id)
-                deleteScript(id)
-                onDeleted()
-              }
-            }}
-          >
+          <button className="btn danger" onClick={() => void removeScript()}>
             Delete
           </button>
         )}

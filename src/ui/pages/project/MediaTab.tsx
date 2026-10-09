@@ -403,7 +403,7 @@ export function MediaTab({ projectId }: { projectId: string }): React.JSX.Elemen
       />
 
       <MediaToolbar
-        view={{ ...view, section: activeSection }}
+        view={view}
         setView={setView}
         items={items}
         shownCount={shown.length}

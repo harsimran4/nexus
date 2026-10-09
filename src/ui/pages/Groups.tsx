@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useStore } from '../../sync/store'
 import { compareHlc } from '../../util/hlc'
-import { Empty, Modal, banner, PageQuote } from '../components'
+import { Empty, Icon, Modal, PageQuote, banner } from '../components'
 import { canWrite } from '../../auth/session'
-import { createGroup, deleteGroupCascade, renameGroup } from '../../state/actions'
+import { createGroup } from '../../state/actions'
 import { navigate } from '../../nav'
+import { GroupDeleteModal, GroupRenameModal } from './GroupDialogs'
 
 export function Groups(): React.JSX.Element {
   const doc = useStore((s) => s.doc)
@@ -31,7 +32,9 @@ export function Groups(): React.JSX.Element {
           </div>
         </div>
         {writable && (
-          <button className="btn primary" onClick={() => setCreating(true)}>+ New group</button>
+          <button className="btn primary" onClick={() => setCreating(true)}>
+            <Icon name="plus" size={14} /> New group
+          </button>
         )}
       </div>
 
@@ -40,45 +43,68 @@ export function Groups(): React.JSX.Element {
       {groups.length === 0 ? (
         <Empty icon="▦">
           No groups yet.{' '}
-          {writable ? 'Create your first group — e.g. "Personal" or "Client Work" — then add projects inside it.' : ''}
+          {writable ? 'Create your first group — e.g. “Personal” or “Client Work” — then add projects inside it.' : ''}
         </Empty>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 14 }}>
-          {groups.map((g) => (
-            <div
-              key={g.id}
-              className="card folder-card"
-              onClick={() => navigate('group/' + g.id)}
-            >
-              <div className="spread">
-                <h3 style={{ margin: 0 }}>{g.name}</h3>
-                <span className="badge">{projectCount(g.id)} project{projectCount(g.id) === 1 ? '' : 's'}</span>
+        <div className="group-grid">
+          {groups.map((g) => {
+            const n = projectCount(g.id)
+            return (
+              <div
+                key={g.id}
+                className="card folder-card"
+                onClick={() => navigate('group/' + g.id)}
+              >
+                <div className="spread">
+                  {/* The name is the real control: keyboard + screen-reader
+                      activation live here, and the h3 keeps heading semantics.
+                      The card-level onClick is only a mouse convenience. */}
+                  <h3>
+                    <a
+                      href={`/group/${g.id}`}
+                      onClick={(e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        navigate('group/' + g.id)
+                      }}
+                    >
+                      {g.name}
+                    </a>
+                  </h3>
+                  {writable && (
+                    <span className="folder-card-actions">
+                      <button
+                        className="folder-card-btn"
+                        title={`Rename ${g.name}`}
+                        aria-label={`Rename ${g.name}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setRenaming(g.id)
+                        }}
+                      >
+                        <Icon name="pencil" size={13} />
+                      </button>
+                      <button
+                        className="folder-card-btn danger"
+                        title={`Delete ${g.name}`}
+                        aria-label={`Delete ${g.name}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setDeleting(g.id)
+                        }}
+                      >
+                        <Icon name="trash" size={13} />
+                      </button>
+                    </span>
+                  )}
+                </div>
+                {g.description && <div className="muted small mt8 folder-card-desc">{g.description}</div>}
+                <div className="mt8">
+                  <span className="badge">{n} project{n === 1 ? '' : 's'}</span>
+                </div>
               </div>
-              {g.description && <div className="muted small mt8">{g.description}</div>}
-              <div className="row wrap mt8">
-                <button
-                  className="btn small"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setRenaming(g.id)
-                  }}
-                  disabled={!writable}
-                >
-                  Rename
-                </button>
-                <button
-                  className="btn small danger"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setDeleting(g.id)
-                  }}
-                  disabled={!writable}
-                >
-                  Delete
-                </button>
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
 
@@ -91,7 +117,9 @@ export function Groups(): React.JSX.Element {
           }}
         />
       )}
-      {renaming && doc && <GroupRenameModal groupId={renaming} onClose={() => setRenaming(null)} />}
+      {renaming && doc?.groups[renaming] && (
+        <GroupRenameModal group={doc.groups[renaming]} onClose={() => setRenaming(null)} />
+      )}
       {deleting && doc && <GroupDeleteModal groupId={deleting} onClose={() => setDeleting(null)} />}
     </div>
   )
@@ -117,7 +145,7 @@ function GroupCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
 
   return (
     <Modal title="New group" onClose={onClose}>
-      {banner('info', 'One storage prefix per group', 'groups/<groupId>/ — every project inside gets its own prefix. Folder names live in the app, not the keys.')}
+      {banner('info', 'One folder per group', 'Every group gets its own folder on Drive — renaming the group never moves anything.')}
       <div className="field">
         <label>Group name</label>
         <input
@@ -143,105 +171,6 @@ function GroupCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <button className="btn" onClick={onClose}>Cancel</button>
         <button className="btn primary" disabled={!name.trim()} onClick={create}>Create group</button>
-      </div>
-    </Modal>
-  )
-}
-
-function GroupRenameModal({ groupId, onClose }: { groupId: string; onClose: () => void }): React.JSX.Element {
-  const group = useStore((s) => s.doc?.groups[groupId])
-  const [name, setName] = useState(group?.name ?? '')
-  const [error, setError] = useState<string | null>(null)
-
-  if (!group) return <></>
-
-  const save = (): void => {
-    const n = name.trim()
-    if (!n || n === group.name) return
-    try {
-      renameGroup(group.id, n)
-      onClose()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not rename the group')
-    }
-  }
-
-  return (
-    <Modal title={`Rename "${group.name}"`} onClose={onClose}>
-      <p className="muted small" style={{ marginTop: 0 }}>
-        Storage keys never change — the name lives in the app only.
-      </p>
-      <div className="field">
-        <label>Group name</label>
-        <input
-          className="input"
-          value={name}
-          autoFocus
-          onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && save()}
-        />
-      </div>
-      {error && banner('error', 'Could not rename', error)}
-      <div className="row mt16" style={{ justifyContent: 'flex-end' }}>
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" disabled={!name.trim() || name.trim() === group.name} onClick={save}>Save</button>
-      </div>
-    </Modal>
-  )
-}
-
-function GroupDeleteModal({ groupId, onClose }: { groupId: string; onClose: () => void }): React.JSX.Element {
-  const doc = useStore((s) => s.doc)
-  const group = doc?.groups[groupId]
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  if (!doc || !group) return <></>
-
-  const projects = Object.values(doc.projects).filter((p) => p.groupId === groupId && p.deleted === null)
-  const fileCount = projects.reduce((n, p) => n + p.fileIds.length, 0)
-
-  return (
-    <Modal title={`Delete group "${group.name}"?`} onClose={onClose} wide>
-      {banner('warn', 'Everything inside moves to trash/', 'The group prefix (with every project and file) moves to the trash/ prefix of the bucket. All projects in the group are also removed from the board.')}
-      <div className="field">
-        <label>What will be trashed:</label>
-        <div style={{ maxHeight: 240, overflowY: 'auto', border: '1px solid var(--border)', borderRadius: 8 }}>
-          <div className="row spread" style={{ padding: '7px 10px', background: 'var(--bg-raised)' }}>
-            <span style={{ fontWeight: 600 }}>📁 {group.name}/</span>
-            <span className="faint small">group folder</span>
-          </div>
-          {projects.map((p) => (
-            <div key={p.id} className="small" style={{ padding: '6px 10px 6px 26px' }}>
-              {p.fileIds.length > 0 ? '📄' : '▫'} {p.name}
-              <span className="faint"> · {p.fileIds.length} file{p.fileIds.length === 1 ? '' : 's'}</span>
-            </div>
-          ))}
-          {projects.length === 0 && <div className="faint small" style={{ padding: '8px 10px' }}>No projects inside.</div>}
-        </div>
-        <div className="muted small mt8">
-          {projects.length} project{projects.length === 1 ? '' : 's'} · {fileCount} file{fileCount === 1 ? '' : 's'}
-        </div>
-      </div>
-      {error && banner('error', 'Delete failed', error)}
-      <div className="row" style={{ justifyContent: 'flex-end' }}>
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button
-          className="btn danger"
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true)
-            try {
-              await deleteGroupCascade(groupId)
-              onClose()
-            } catch (e) {
-              setError(e instanceof Error ? e.message : 'Delete failed')
-              setBusy(false)
-            }
-          }}
-        >
-          {busy ? 'Deleting…' : 'Move everything to trash'}
-        </button>
       </div>
     </Modal>
   )

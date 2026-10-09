@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { useStore } from '../../sync/store'
 import type { Project } from '../../types/schema'
 import { compareHlc } from '../../util/hlc'
-import { Empty, Modal, banner, PageQuote } from '../components'
+import { Empty, Icon, Menu, MenuItem, Modal, banner, PageQuote } from '../components'
 import { ActivityFeed } from '../ActivityFeed'
 import { createProject, setProjectStatus } from '../../state/actions'
 import { canWrite } from '../../auth/session'
@@ -67,10 +67,10 @@ export function Dashboard(): React.JSX.Element {
 
   const groups = Object.values(doc.groups).filter((g) => g.deleted === null)
   const labels = [...new Set(Object.values(doc.projects).flatMap((p) => p.labels))].sort()
-  // Sticky-note shade per group — a group reads as one paper color on the wall.
-  const STICKY = ['#fcf2cd', '#e3efd8', '#fae3dc', '#dfeaf2', '#e9e2f4']
-  const stickyByGroup: Record<string, string> = {}
-  groups.forEach((g, i) => { stickyByGroup[g.id] = STICKY[i % STICKY.length] })
+  // Sticky-note shade per group — a group reads as one paper color on the
+  // wall. Indexes map to the --sticky-N tokens via the sticky-N classes.
+  const stickyByGroup: Record<string, number> = {}
+  groups.forEach((g, i) => { stickyByGroup[g.id] = (i % 5) + 1 })
 
   const drop = (status: string) => {
     if (dragId && writable) {
@@ -88,7 +88,9 @@ export function Dashboard(): React.JSX.Element {
           <h1>Board</h1>
           <div className="sub">
             {projects.length} project{projects.length === 1 ? '' : 's'} on the board ·{' '}
-            <a href="/groups">manage groups</a> · <a href="/scripts">scripts</a>
+            <a href="/groups" onClick={(e) => { e.preventDefault(); navigate('groups') }}>manage groups</a>
+            {' · '}
+            <a href="/scripts" onClick={(e) => { e.preventDefault(); navigate('scripts') }}>scripts</a>
           </div>
         </div>
         <div className="row">
@@ -97,7 +99,7 @@ export function Dashboard(): React.JSX.Element {
           </button>
           {writable && (
             <button className="btn primary" onClick={() => setQuickAdd({ status: doc.settings.pipeline[0]?.id ?? 'pending' })}>
-              + New project
+              <Icon name="plus" size={14} /> New project
             </button>
           )}
         </div>
@@ -107,30 +109,30 @@ export function Dashboard(): React.JSX.Element {
       <div className="card mb8 board-filters">
         <div className="row wrap">
           <input
-            className="input"
-            style={{ maxWidth: 240 }}
+            className="input board-search"
+            aria-label="Search projects"
             placeholder="Search…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          <select className="input" style={{ maxWidth: 180 }} value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
+          <select className="input board-group-select" aria-label="Filter by group" value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
             <option value="">All groups</option>
             {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
           </select>
-          <select className="input" style={{ maxWidth: 160 }} value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
+          <select className="input board-assignee-select" aria-label="Filter by assignee" value={assigneeFilter} onChange={(e) => setAssigneeFilter(e.target.value)}>
             <option value="">Anyone</option>
             {doc.users.app.filter((u) => !u.disabled).map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
           {labels.length > 0 && (
             <div className="chips">
               {labels.map((l) => (
-                <button key={l} className={`chip ${labelFilter === l ? 'on' : ''}`} onClick={() => setLabelFilter(labelFilter === l ? '' : l)}>
+                <button key={l} className={`chip ${labelFilter === l ? 'on' : ''}`} aria-pressed={labelFilter === l} onClick={() => setLabelFilter(labelFilter === l ? '' : l)}>
                   {l}
                 </button>
               ))}
             </div>
           )}
-          <button className={`chip ${overdueOnly ? 'on' : ''}`} style={overdueOnly ? undefined : { color: 'var(--red)' }} onClick={() => setOverdueOnly(!overdueOnly)}>
+          <button className={`chip ${overdueOnly ? 'on' : ''} overdue`} aria-pressed={overdueOnly} onClick={() => setOverdueOnly(!overdueOnly)}>
             Overdue
           </button>
         </div>
@@ -139,7 +141,9 @@ export function Dashboard(): React.JSX.Element {
       {projects.length === 0 ? (
         <Empty icon="▦">
           No projects on the board yet.{' '}
-          {writable ? 'Create one with "+ New project" — or drag cards between columns once you have a few.' : ''}
+          {writable
+            ? 'Create one with “+ New project” — then drag cards between columns, or use a card’s ⋮ menu (that one works on touch too).'
+            : ''}
         </Empty>
       ) : (
         <div className="kanban">
@@ -168,9 +172,10 @@ export function Dashboard(): React.JSX.Element {
                       <button
                         className="btn ghost small"
                         title={`Add a project in ${col.label}`}
+                        aria-label={`Add a project in ${col.label}`}
                         onClick={() => setQuickAdd({ status: col.id })}
                       >
-                        +
+                        <Icon name="plus" size={12} />
                       </button>
                     )}
                   </span>
@@ -180,7 +185,7 @@ export function Dashboard(): React.JSX.Element {
                     key={project.id}
                     project={project}
                     groupName={doc.groups[project.groupId]?.name ?? null}
-                    sticky={stickyByGroup[project.groupId] ?? '#fdfcf8'}
+                    stickyIndex={stickyByGroup[project.groupId]}
                     draggable={writable}
                     dragging={dragId === project.id}
                     onDragStart={() => setDragId(project.id)}
@@ -222,7 +227,7 @@ export function Dashboard(): React.JSX.Element {
 function ProjectCard({
   project,
   groupName,
-  sticky,
+  stickyIndex,
   draggable,
   dragging,
   onDragStart,
@@ -231,7 +236,9 @@ function ProjectCard({
 }: {
   project: Project
   groupName: string | null
-  sticky: string
+  /** Undefined for sync-lag orphans — the card then falls back to the
+   *  neutral --card shade instead of pretending to be group 1's color. */
+  stickyIndex?: number
   draggable: boolean
   dragging: boolean
   onDragStart: () => void
@@ -243,10 +250,10 @@ function ProjectCard({
   const overdue = due?.overdue ?? false
   const assignee = project.assigneeAppId ? doc?.users.app.find((u) => u.id === project.assigneeAppId)?.name : null
   const cover = project.fileIds[0]
+  const otherStages = doc?.settings.pipeline.filter((st) => st.id !== project.status) ?? []
   return (
     <div
-      className={`item-card ${overdue ? 'overdue' : ''}`}
-      style={{ ...( { '--sticky': sticky } as React.CSSProperties), ...(dragging ? { opacity: 0.45 } : {}) }}
+      className={`item-card${stickyIndex ? ` sticky-${stickyIndex}` : ''}${overdue ? ' overdue' : ''}${dragging ? ' dragging' : ''}`}
       draggable={draggable}
       onDragStart={(e) => {
         e.dataTransfer.setData('text/plain', project.id)
@@ -259,25 +266,73 @@ function ProjectCard({
       {cover && (
         <MediaThumb
           fileKey={cover}
-          style={{ height: 64, borderRadius: 2, marginBottom: 7, background: 'rgba(255,255,255,0.4)' }}
+          style={{ height: 64, borderRadius: 'var(--radius-xs)', marginBottom: 7, background: 'rgba(255,255,255,0.4)' }}
         />
       )}
-      <div className="title">{project.name}</div>
+      <div className="title">
+        {/* The title link is the card's keyboard + screen-reader open; the
+            card-level onClick stays as the mouse shortcut. */}
+        <a
+          href={`/project/${project.id}`}
+          onClick={(e) => {
+            e.preventDefault()
+            e.stopPropagation()
+            onOpen()
+          }}
+        >
+          {project.name}
+        </a>
+      </div>
       <div className="meta">
         {groupName && <span>{groupName}</span>}
         {assignee && <span>· {assignee}</span>}
         {due && (
-          <span className="due-wrap" style={overdue ? { color: 'var(--red)', fontWeight: 650 } : undefined}>
+          <span className={`due-wrap${overdue ? ' overdue' : ''}`}>
             {overdue && <ScribbleCircle />}
             · {due.text}
           </span>
         )}
-        {project.fileIds.length > 0 && <span>· 📎{project.fileIds.length}</span>}
+        {project.fileIds.length > 0 && (
+          <span className="row">
+            · <Icon name="paperclip" size={11} />
+            {project.fileIds.length}
+          </span>
+        )}
       </div>
       {project.labels.length > 0 && (
         <div className="chips mt8">
           {project.labels.map((l) => <span key={l} className="badge label">{l}</span>)}
         </div>
+      )}
+      {draggable && otherStages.length > 0 && (
+        <span className="item-card-menu">
+          <Menu
+            label={`Move ${project.name}`}
+            trigger={({ ref, onClick, 'aria-expanded': expanded, 'aria-haspopup': popup }) => (
+              <button
+                ref={ref}
+                draggable={false}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onClick(e)
+                }}
+                aria-expanded={expanded}
+                aria-haspopup={popup}
+                className="item-card-menu-btn"
+                title="Move to another stage"
+                aria-label={`Move ${project.name} to another stage`}
+              >
+                <Icon name="dots" size={13} />
+              </button>
+            )}
+          >
+            {otherStages.map((st) => (
+              <MenuItem key={st.id} icon="move" onSelect={() => setProjectStatus(project.id, st.id)}>
+                Move to {st.label}
+              </MenuItem>
+            ))}
+          </Menu>
+        </span>
       )}
     </div>
   )

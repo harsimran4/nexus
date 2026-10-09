@@ -3,7 +3,6 @@
 
 import { describe, expect, it } from 'vitest'
 import {
-  KIND_GLYPH,
   UNSORTED,
   buildItems,
   extFromKey,
@@ -37,12 +36,6 @@ describe('kindFromMime', () => {
 
   it('treats missing mime as other', () => {
     expect(kindFromMime(undefined)).toBe('other')
-  })
-
-  it('glyphs exist for every kind', () => {
-    for (const k of ['image', 'video', 'audio', 'other'] as const) {
-      expect(KIND_GLYPH[k].length).toBeGreaterThan(0)
-    }
   })
 })
 
