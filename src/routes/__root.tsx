@@ -51,7 +51,12 @@ export const Route = createRootRoute({
 
 function RootComponent(): ReactNode {
   return (
-    <html lang="en">
+    // suppressHydrationWarning: the head script sets html[data-theme] before
+    // paint from localStorage — without this, hydration reconciles <html>
+    // back to the server's attribute-less render and dark mode flips off on
+    // every full load. React only allows this suppression one level deep,
+    // which is exactly the html element's own attributes.
+    <html lang="en" suppressHydrationWarning>
       <head>
         <HeadContent />
       </head>
