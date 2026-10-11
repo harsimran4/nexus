@@ -306,9 +306,100 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 .chip.overdue:not(.on) { color: var(--red); }
 .chip.overdue.on { background: var(--red-dim); color: var(--red); }
 
+/* ---- board views: the switcher + the alternate layouts ------------------
+   Columns is the classic kanban (above). Lanes/Shelves/Wall re-plot the
+   same cards so a giant stage (Finished!) stops being one endless column;
+   Ledger trades the wall for an account book. */
+
+.board-views { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.board-sort { margin-left: auto; gap: 7px; align-items: center; }
+.board-sort-select { max-width: 200px; }
+
+/* lanes: full-width status bands, stacked; cards wrap into a dense grid */
+.lanes { display: flex; flex-direction: column; gap: 18px; }
+.lane {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0)),
+    var(--paper-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: inset 0 1px 4px rgba(60, 54, 38, 0.07);
+  padding: 12px;
+}
+.lane.drag-over { border: 1px dashed var(--accent); background: var(--accent-dim); }
+.lane-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px; padding: 3px 8px;
+  background: rgba(222, 210, 160, 0.55);
+  transform: rotate(-0.6deg);
+  border-radius: 2px;
+}
+.lane-head h3 { font-family: var(--font); font-size: 13px; font-weight: 650; letter-spacing: 0.01em; margin: 0; }
+.lane-head .count { font-size: 12px; color: var(--faint); font-weight: 600; }
+.lane-empty { padding: 4px 8px; }
+
+/* shelves: one band per group; the head strip wears the group's shade */
+.shelves { display: flex; flex-direction: column; gap: 16px; }
+.shelf {
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0)),
+    var(--paper-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: inset 0 1px 4px rgba(60, 54, 38, 0.07);
+  padding: 12px;
+}
+.shelf-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 10px; padding: 4px 10px;
+  background: var(--sticky, rgba(222, 210, 160, 0.55));
+  border: 1px solid rgba(60, 54, 38, 0.18);
+  transform: rotate(-0.6deg);
+  border-radius: 2px;
+}
+.shelf-title { color: inherit; text-decoration: none; font-weight: 650; font-size: 13.5px; }
+.shelf-title:hover { text-decoration: underline; }
+.shelf-head .count { font-size: 12px; color: var(--muted); font-weight: 600; }
+.shelf-empty-note { padding: 2px 8px 4px; }
+
+/* the shared card grid inside lanes / shelves / wall */
+.lane-grid,
+.wall-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(216px, 1fr));
+  gap: 12px 14px;
+  align-items: start;
+}
+.wall-grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+.lane-grid .item-card,
+.wall-grid .item-card { margin: 9px 2px 5px; }
+
+/* wall cards: the tape strip announces the status bucket */
+.item-card.st-doing::before { background: #ecd9a8; }
+.item-card.st-done::before { background: #cfe0bd; }
+.item-card-status { margin-bottom: 5px; }
+
+/* ledger: the account-book board */
+.board-ledger-card { padding: 4px 12px; overflow-x: auto; }
+.board-ledger-card .ledger-name a { color: inherit; text-decoration: none; }
+.board-ledger-card .ledger-name a:hover { text-decoration: underline; }
+.ledger-overdue { color: var(--red); }
+
+[data-theme='dark'] .lane,
+[data-theme='dark'] .shelf { box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.35); }
+[data-theme='dark'] .lane-head { background: rgba(58, 54, 40, 0.55); }
+[data-theme='dark'] .shelf-head {
+  border-color: rgba(0, 0, 0, 0.5);
+  background: var(--sticky, rgba(58, 54, 40, 0.55));
+}
+[data-theme='dark'] .item-card.st-doing::before { background: #453a20; }
+[data-theme='dark'] .item-card.st-done::before { background: #2c3526; }
+
 /* Sticky notes: slight per-card tilt, a tape strip, hover straightens. Color
-   comes from --sticky (sticky-1..5 — one shade per group, straight from
-   tokens.css) so a group reads as one paper shade. */
+   comes from --sticky (sticky-1..8 — one shade per group, straight from
+   tokens.css, chosen per group in the group dialog) so a group reads as one
+   paper shade. The .sticky-N mapping is a generic utility: cards, folder
+   tabs and the project-crumb dot all consume var(--sticky, <fallback>). */
 .item-card {
   position: relative;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0) 26px), var(--sticky, var(--card));
@@ -318,11 +409,14 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
   box-shadow: 0 1px 3px rgba(60, 54, 38, 0.16);
   transition: transform 0.12s, box-shadow 0.12s;
 }
-.item-card.sticky-1 { --sticky: var(--sticky-1); }
-.item-card.sticky-2 { --sticky: var(--sticky-2); }
-.item-card.sticky-3 { --sticky: var(--sticky-3); }
-.item-card.sticky-4 { --sticky: var(--sticky-4); }
-.item-card.sticky-5 { --sticky: var(--sticky-5); }
+.sticky-1 { --sticky: var(--sticky-1); }
+.sticky-2 { --sticky: var(--sticky-2); }
+.sticky-3 { --sticky: var(--sticky-3); }
+.sticky-4 { --sticky: var(--sticky-4); }
+.sticky-5 { --sticky: var(--sticky-5); }
+.sticky-6 { --sticky: var(--sticky-6); }
+.sticky-7 { --sticky: var(--sticky-7); }
+.sticky-8 { --sticky: var(--sticky-8); }
 .item-card::before {
   content: '';
   position: absolute;
@@ -605,6 +699,11 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
   .kanban { display: flex; flex-direction: column; gap: 12px; }
   .kanban-col { min-height: auto; padding: 10px; }
   .kanban-col-head { transform: none; margin-bottom: 10px; padding: 2px 8px; }
+  /* alternate board views: tighter grids, straight heads */
+  .board-views .board-sort { margin-left: 0; flex-basis: 100%; }
+  .lane, .shelf { padding: 10px; }
+  .lane-head, .shelf-head { transform: none; }
+  .lane-grid, .wall-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 10px; }
   .item-card, .media-card { rotate: 0deg; }
   .item-card:hover { rotate: 0deg; transform: none; }
   .item-card { margin: 8px 2px; }
@@ -685,6 +784,14 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 }
 .folder-card:hover::before { background: var(--folder-tab-hover); }
 
+/* a group's chosen shade tints its folder tab (the face stays manila) */
+.folder-card.sticky-1::before, .folder-card.sticky-2::before,
+.folder-card.sticky-3::before, .folder-card.sticky-4::before,
+.folder-card.sticky-5::before, .folder-card.sticky-6::before,
+.folder-card.sticky-7::before, .folder-card.sticky-8::before {
+  background: var(--sticky, var(--folder-tab));
+}
+
 /* pencil + trash: revealed on hover / keyboard focus, always out on touch.
    pointer-events off while hidden so a tap on a hybrid (touch + mouse)
    device can't land on buttons it can't see. */
@@ -743,6 +850,28 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
   --folder-edge: #4a4535;
   --folder-tab: #373227;
   --folder-tab-hover: #3f3a2d;
+}
+
+/* group color dot (project-page crumb) + the group-color swatch picker */
+.group-dot {
+  display: inline-block; width: 10px; height: 10px;
+  border-radius: 999px; margin-right: 5px; vertical-align: 1px;
+  background: var(--sticky, var(--border-strong));
+  border: 1px solid var(--border-strong);
+}
+.swatch-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.swatch {
+  width: 26px; height: 26px; padding: 0; flex: none;
+  border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  cursor: pointer; transition: transform var(--dur-fast);
+}
+.swatch:hover { transform: translateY(-1px); }
+.swatch.on { outline: 2px solid var(--accent); outline-offset: 1px; }
+.swatch.auto { background: repeating-linear-gradient(45deg, var(--panel-2) 0 4px, var(--panel) 4px 8px); }
+.swatch.none {
+  background:
+    linear-gradient(135deg, transparent 45%, var(--red) 45% 55%, transparent 55%),
+    var(--card);
 }
 
 /* ---- Scripts: typewriter pages -------------------------------------------

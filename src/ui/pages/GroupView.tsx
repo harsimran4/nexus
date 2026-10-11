@@ -51,7 +51,7 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
           )}
         </div>
         <div className="row wrap">
-          <button className="btn" disabled={!writable} onClick={() => setRenameOpen(true)}>Rename</button>
+          <button className="btn" disabled={!writable} onClick={() => setRenameOpen(true)}>Edit</button>
           <button className="btn danger" disabled={!writable} onClick={() => setDeleteOpen(true)}>Delete</button>
         </div>
       </div>

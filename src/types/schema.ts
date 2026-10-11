@@ -81,6 +81,11 @@ export const groupSchema = stampsSchema.extend({
   name: z.string().min(1),
   description: z.string().default(''),
   folderId: z.string().nullable().default(null),
+  /** '' = Auto (least-used shade), 'none' = plain paper, else a
+   *  src/util/groups.ts GROUP_COLOR_KEYS name ('sticky-1'…). Deliberately a
+   *  plain string, NOT an enum — a newer client's 'sticky-9' must never
+   *  fail this client's parseDoc (the whole doc would quarantine). */
+  color: z.string().default(''),
 })
 export type Group = z.infer<typeof groupSchema>
 

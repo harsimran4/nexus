@@ -32,6 +32,7 @@ function describe(doc: NexusDoc, e: ActivityEvent): string {
   switch (e.verb) {
     case 'group.create': return `created group ${quoted}`
     case 'group.rename': return `renamed a group to "${String(meta.name ?? '')}"`
+    case 'group.color': return `changed a group's color${quoted ? ` (${quoted})` : ''}`
     case 'group.delete': return `deleted group ${quoted}`
     case 'project.create': return `created project ${quoted}`
     case 'project.update': {

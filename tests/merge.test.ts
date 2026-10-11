@@ -64,6 +64,7 @@ function makeGroup(id: string, name: string, ms: number, writer: string, deleted
     name,
     description: '',
     folderId: null,
+    color: '',
     createdAt: encodeHlc(BASE_MS, 0),
     updatedAt: encodeHlc(ms, 0),
     writerId: writer,

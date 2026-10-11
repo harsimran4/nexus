@@ -51,7 +51,7 @@ function sessionModule(): { getSession: () => { appUserId: string } | null } {
 // Groups (containers: "Personal", "Client Work" — one Drive folder each)
 // ---------------------------------------------------------------------------
 
-export async function createGroup(name: string, description = ''): Promise<string> {
+export async function createGroup(name: string, description = '', color = ''): Promise<string> {
   assertWrite()
   const id = newGroupId()
   commit((doc) => {
@@ -60,6 +60,7 @@ export async function createGroup(name: string, description = ''): Promise<strin
       name,
       description,
       folderId: null,
+      color,
       createdAt: hlcNow(),
       updatedAt: hlcNow(),
       writerId: 'pending',
@@ -105,6 +106,17 @@ export function renameGroup(groupId: string, name: string): void {
   })
   // Folder names live in the doc — the storage prefix (groups/<id>/) never
   // changes, so there is nothing to rename on the storage side.
+}
+
+export function setGroupColor(groupId: string, color: string): void {
+  assertWrite()
+  commit((doc) => {
+    const g = doc.groups[groupId]
+    if (!g) return
+    g.color = color
+    touch('groups', g)
+    appendActivity(doc, 'group.color', groupId, { color })
+  })
 }
 
 /**

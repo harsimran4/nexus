@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { useStore } from '../../sync/store'
 import { compareHlc } from '../../util/hlc'
+import { groupColorMap } from '../../util/groups'
 import { Empty, Icon, Modal, PageQuote, banner } from '../components'
 import { canWrite } from '../../auth/session'
 import { createGroup } from '../../state/actions'
 import { navigate } from '../../nav'
-import { GroupDeleteModal, GroupRenameModal } from './GroupDialogs'
+import { GroupColorPicker, GroupDeleteModal, GroupRenameModal } from './GroupDialogs'
 
 export function Groups(): React.JSX.Element {
   const doc = useStore((s) => s.doc)
@@ -17,6 +18,7 @@ export function Groups(): React.JSX.Element {
   const groups = Object.values(doc?.groups ?? {})
     .filter((g) => g.deleted === null)
     .sort((a, b) => compareHlc(b.updatedAt, a.updatedAt))
+  const colorMap = groupColorMap(groups)
 
   const projectCount = (groupId: string) =>
     Object.values(doc?.projects ?? {}).filter((p) => p.groupId === groupId && p.deleted === null).length
@@ -52,7 +54,7 @@ export function Groups(): React.JSX.Element {
             return (
               <div
                 key={g.id}
-                className="card folder-card"
+                className={`card folder-card ${colorMap[g.id] ?? ''}`}
                 onClick={() => navigate('group/' + g.id)}
               >
                 <div className="spread">
@@ -75,8 +77,8 @@ export function Groups(): React.JSX.Element {
                     <span className="folder-card-actions">
                       <button
                         className="folder-card-btn"
-                        title={`Rename ${g.name}`}
-                        aria-label={`Rename ${g.name}`}
+                        title={`Edit ${g.name}`}
+                        aria-label={`Edit ${g.name}`}
                         onClick={(e) => {
                           e.stopPropagation()
                           setRenaming(g.id)
@@ -128,6 +130,7 @@ export function Groups(): React.JSX.Element {
 function GroupCreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }): React.JSX.Element {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [color, setColor] = useState('')
   const [error, setError] = useState<string | null>(null)
 
   const create = () => {
@@ -135,7 +138,7 @@ function GroupCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
     if (!n) return
     void (async () => {
       try {
-        const id = await createGroup(n, description.trim())
+        const id = await createGroup(n, description.trim(), color)
         onCreated(id)
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Could not create the group')
@@ -167,6 +170,7 @@ function GroupCreateModal({ onClose, onCreated }: { onClose: () => void; onCreat
           onKeyDown={(e) => e.key === 'Enter' && create()}
         />
       </div>
+      <GroupColorPicker value={color} onChange={setColor} />
       {error && banner('error', error)}
       <div className="row" style={{ justifyContent: 'flex-end' }}>
         <button className="btn" onClick={onClose}>Cancel</button>

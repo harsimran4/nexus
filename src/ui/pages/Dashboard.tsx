@@ -1,51 +1,72 @@
 import { useMemo, useState } from 'react'
 import { useStore } from '../../sync/store'
-import type { Project } from '../../types/schema'
 import { compareHlc } from '../../util/hlc'
-import { Empty, Icon, Menu, MenuItem, Modal, banner, PageQuote } from '../components'
+import { groupColorMap } from '../../util/groups'
+import { Empty, Icon, Modal, banner, PageQuote } from '../components'
 import { ActivityFeed } from '../ActivityFeed'
-import { createProject, setProjectStatus } from '../../state/actions'
+import { createProject } from '../../state/actions'
 import { canWrite } from '../../auth/session'
 import { navigate } from '../../nav'
-import { MediaThumb } from '../MediaThumb'
+import { ColumnsView } from './board/ColumnsView'
+import { LanesView } from './board/LanesView'
+import { ShelvesView } from './board/ShelvesView'
+import { WallView } from './board/WallView'
+import { LedgerView } from './board/LedgerView'
 
-/** Humanized due text: "due today", "due in 3d", "2d overdue". */
-export function dueInfo(dueAt: string): { text: string; overdue: boolean } {
-  const due = new Date(dueAt)
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
-  const days = Math.round((due.getTime() - today.getTime()) / 86400000)
-  if (days < 0) return { text: `${-days}d overdue`, overdue: true }
-  if (days === 0) return { text: 'due today', overdue: false }
-  if (days === 1) return { text: 'due tomorrow', overdue: false }
-  if (days <= 7) return { text: `due in ${days}d`, overdue: false }
-  return { text: `due ${due.toLocaleDateString()}`, overdue: false }
+/** The board layouts. Pick per browser — persisted like nexus.theme. */
+const VIEWS = [
+  { id: 'columns', label: 'Columns' },
+  { id: 'lanes', label: 'Lanes' },
+  { id: 'shelves', label: 'Shelves' },
+  { id: 'wall', label: 'Wall' },
+  { id: 'ledger', label: 'Ledger' },
+] as const
+type BoardView = (typeof VIEWS)[number]['id']
+const VIEW_KEY = 'nexus.board.view'
+
+function readBoardView(): BoardView {
+  try {
+    if (typeof window === 'undefined') return 'columns'
+    const v = localStorage.getItem(VIEW_KEY)
+    return VIEWS.some((x) => x.id === v) ? (v as BoardView) : 'columns'
+  } catch {
+    return 'columns'
+  }
 }
 
-/** Wobbly hand-drawn ellipse, like someone circled the date in red pen. */
-function ScribbleCircle(): React.JSX.Element {
-  return (
-    <svg className="scribble" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true">
-      <path
-        d="M10 22 C 20 8, 55 5, 78 11 C 97 16, 99 28, 74 33 C 48 38, 14 37, 6 27 C 1 21, 14 11, 34 8"
-        fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" opacity="0.5"
-      />
-    </svg>
-  )
+/** Card order inside the views (wall uses it directly; lanes/shelves/columns
+ *  within each band). Due sorts soonest-first, undated last. */
+const SORTS = [
+  { id: 'recent', label: 'Recently updated' },
+  { id: 'due', label: 'Due date' },
+  { id: 'name', label: 'Name' },
+] as const
+type BoardSort = (typeof SORTS)[number]['id']
+const SORT_KEY = 'nexus.board.sort'
+
+function readBoardSort(): BoardSort {
+  try {
+    if (typeof window === 'undefined') return 'recent'
+    const s = localStorage.getItem(SORT_KEY)
+    return SORTS.some((x) => x.id === s) ? (s as BoardSort) : 'recent'
+  } catch {
+    return 'recent'
+  }
 }
 
 export function Dashboard(): React.JSX.Element {
   const doc = useStore((s) => s.doc)
+  const [view, setView] = useState<BoardView>(readBoardView)
+  const [sort, setSort] = useState<BoardSort>(readBoardSort)
   const [search, setSearch] = useState('')
   const [groupFilter, setGroupFilter] = useState<string>('')
   const [labelFilter, setLabelFilter] = useState<string>('')
   const [assigneeFilter, setAssigneeFilter] = useState<string>('')
   const [overdueOnly, setOverdueOnly] = useState(false)
-  // Quick-add: launched from the header (status = first column) or a column "+".
-  const [quickAdd, setQuickAdd] = useState<{ status: string } | null>(null)
+  // Quick-add: launched from the header (first column), a column/lanes "+"
+  // (status preset) or a shelf "+" (group preset).
+  const [quickAdd, setQuickAdd] = useState<{ status?: string; groupId?: string } | null>(null)
   const [activityOpen, setActivityOpen] = useState(false)
-  const [dragId, setDragId] = useState<string | null>(null)
-  const [dragOverCol, setDragOverCol] = useState<string | null>(null)
   const writable = canWrite()
 
   const projects = useMemo(() => {
@@ -60,25 +81,58 @@ export function Dashboard(): React.JSX.Element {
       .filter((p) => (assigneeFilter ? p.assigneeAppId === assigneeFilter : true))
       .filter((p) => (overdueOnly ? p.dueAt !== null && new Date(p.dueAt) < today : true))
       .filter((p) => (q ? p.name.toLowerCase().includes(q) || p.notes.toLowerCase().includes(q) : true))
-      .sort((a, b) => compareHlc(b.updatedAt, a.updatedAt))
-  }, [doc, search, groupFilter, labelFilter, assigneeFilter, overdueOnly])
+      .sort((a, b) => {
+        if (sort === 'name') return a.name.localeCompare(b.name)
+        if (sort === 'due') {
+          if (a.dueAt === null && b.dueAt === null) return compareHlc(b.updatedAt, a.updatedAt)
+          if (a.dueAt === null) return 1
+          if (b.dueAt === null) return -1
+          return new Date(a.dueAt).getTime() - new Date(b.dueAt).getTime()
+        }
+        return compareHlc(b.updatedAt, a.updatedAt)
+      })
+  }, [doc, search, groupFilter, labelFilter, assigneeFilter, overdueOnly, sort])
+
+  // Group shade per card — explicit group colors win, the rest share what's
+  // left (see groupColorMap). Hooks stay above the doc early-return.
+  const colorByGroup = useMemo(() => {
+    if (!doc) return {}
+    return groupColorMap(Object.values(doc.groups).filter((g) => g.deleted === null))
+  }, [doc])
 
   if (!doc) return <></>
 
   const groups = Object.values(doc.groups).filter((g) => g.deleted === null)
   const labels = [...new Set(Object.values(doc.projects).flatMap((p) => p.labels))].sort()
-  // Sticky-note shade per group — a group reads as one paper color on the
-  // wall. Indexes map to the --sticky-N tokens via the sticky-N classes.
-  const stickyByGroup: Record<string, number> = {}
-  groups.forEach((g, i) => { stickyByGroup[g.id] = (i % 5) + 1 })
 
-  const drop = (status: string) => {
-    if (dragId && writable) {
-      const p = doc.projects[dragId]
-      if (p && p.status !== status) setProjectStatus(dragId, status)
+  const openProject = (id: string): void => navigate('project/' + id)
+  const openGroup = (id: string): void => navigate('group/' + id)
+  const pickView = (v: BoardView): void => {
+    setView(v)
+    try {
+      localStorage.setItem(VIEW_KEY, v)
+    } catch {
+      /* private mode — the switch just won't persist */
     }
-    setDragId(null)
-    setDragOverCol(null)
+  }
+  const pickSort = (s: BoardSort): void => {
+    setSort(s)
+    try {
+      localStorage.setItem(SORT_KEY, s)
+    } catch {
+      /* same */
+    }
+  }
+
+  const viewProps = {
+    doc,
+    projects,
+    groups,
+    colorByGroup,
+    writable,
+    onQuickAdd: (status?: string, groupId?: string) => setQuickAdd({ status, groupId }),
+    onOpen: openProject,
+    onOpenGroup: openGroup,
   }
 
   return (
@@ -98,7 +152,10 @@ export function Dashboard(): React.JSX.Element {
             Activity
           </button>
           {writable && (
-            <button className="btn primary" onClick={() => setQuickAdd({ status: doc.settings.pipeline[0]?.id ?? 'pending' })}>
+            <button
+              className="btn primary"
+              onClick={() => setQuickAdd({ status: doc.settings.pipeline[0]?.id })}
+            >
               <Icon name="plus" size={14} /> New project
             </button>
           )}
@@ -106,6 +163,32 @@ export function Dashboard(): React.JSX.Element {
       </div>
 
       <PageQuote topic="board" />
+
+      <div className="board-views" role="group" aria-label="Board layout">
+        {VIEWS.map((v) => (
+          <button
+            key={v.id}
+            className={`chip ${view === v.id ? 'on' : ''}`}
+            aria-pressed={view === v.id}
+            title={VIEW_TITLES[v.id]}
+            onClick={() => pickView(v.id)}
+          >
+            {v.label}
+          </button>
+        ))}
+        <span className="row board-sort">
+          <label className="faint small" htmlFor="board-sort">Sort</label>
+          <select
+            id="board-sort"
+            className="input board-sort-select"
+            value={sort}
+            onChange={(e) => pickSort(e.target.value as BoardSort)}
+          >
+            {SORTS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+          </select>
+        </span>
+      </div>
+
       <div className="card mb8 board-filters">
         <div className="row wrap">
           <input
@@ -145,68 +228,22 @@ export function Dashboard(): React.JSX.Element {
             ? 'Create one with “+ New project” — then drag cards between columns, or use a card’s ⋮ menu (that one works on touch too).'
             : ''}
         </Empty>
+      ) : view === 'columns' ? (
+        <ColumnsView {...viewProps} />
+      ) : view === 'lanes' ? (
+        <LanesView {...viewProps} />
+      ) : view === 'shelves' ? (
+        <ShelvesView {...viewProps} />
+      ) : view === 'wall' ? (
+        <WallView {...viewProps} />
       ) : (
-        <div className="kanban">
-          {doc.settings.pipeline.map((col) => {
-            const colProjects = projects.filter((p) => p.status === col.id)
-            return (
-              <div
-                key={col.id}
-                className={`kanban-col ${dragOverCol === col.id ? 'drag-over' : ''}`}
-                onDragOver={(e) => {
-                  if (!writable || dragId === null) return
-                  e.preventDefault()
-                  setDragOverCol(col.id)
-                }}
-                onDragLeave={() => setDragOverCol((c) => (c === col.id ? null : c))}
-                onDrop={(e) => {
-                  e.preventDefault()
-                  drop(col.id)
-                }}
-              >
-                <div className="kanban-col-head">
-                  <h3>{col.label}</h3>
-                  <span className="row">
-                    <span className="count">{colProjects.length}</span>
-                    {writable && (
-                      <button
-                        className="btn ghost small"
-                        title={`Add a project in ${col.label}`}
-                        aria-label={`Add a project in ${col.label}`}
-                        onClick={() => setQuickAdd({ status: col.id })}
-                      >
-                        <Icon name="plus" size={12} />
-                      </button>
-                    )}
-                  </span>
-                </div>
-                {colProjects.map((project) => (
-                  <ProjectCard
-                    key={project.id}
-                    project={project}
-                    groupName={doc.groups[project.groupId]?.name ?? null}
-                    stickyIndex={stickyByGroup[project.groupId]}
-                    draggable={writable}
-                    dragging={dragId === project.id}
-                    onDragStart={() => setDragId(project.id)}
-                    onDragEnd={() => {
-                      setDragId(null)
-                      setDragOverCol(null)
-                    }}
-                    onOpen={() => navigate('project/' + project.id)}
-                  />
-                ))}
-                {colProjects.length === 0 && <div className="faint small">{writable ? 'Drag a card here' : '—'}</div>}
-              </div>
-            )
-          })}
-        </div>
+        <LedgerView {...viewProps} />
       )}
 
       {quickAdd && (
         <QuickAddModal
-          presetStatus={quickAdd.status}
-          defaultGroup={groupFilter}
+          presetStatus={quickAdd.status ?? doc.settings.pipeline[0]?.id ?? 'pending'}
+          defaultGroup={quickAdd.groupId ?? groupFilter}
           onClose={() => setQuickAdd(null)}
           onCreated={(id) => {
             setQuickAdd(null)
@@ -224,118 +261,12 @@ export function Dashboard(): React.JSX.Element {
   )
 }
 
-function ProjectCard({
-  project,
-  groupName,
-  stickyIndex,
-  draggable,
-  dragging,
-  onDragStart,
-  onDragEnd,
-  onOpen,
-}: {
-  project: Project
-  groupName: string | null
-  /** Undefined for sync-lag orphans — the card then falls back to the
-   *  neutral --card shade instead of pretending to be group 1's color. */
-  stickyIndex?: number
-  draggable: boolean
-  dragging: boolean
-  onDragStart: () => void
-  onDragEnd: () => void
-  onOpen: () => void
-}): React.JSX.Element {
-  const doc = useStore((s) => s.doc)
-  const due = project.dueAt !== null ? dueInfo(project.dueAt) : null
-  const overdue = due?.overdue ?? false
-  const assignee = project.assigneeAppId ? doc?.users.app.find((u) => u.id === project.assigneeAppId)?.name : null
-  const cover = project.fileIds[0]
-  const otherStages = doc?.settings.pipeline.filter((st) => st.id !== project.status) ?? []
-  return (
-    <div
-      className={`item-card${stickyIndex ? ` sticky-${stickyIndex}` : ''}${overdue ? ' overdue' : ''}${dragging ? ' dragging' : ''}`}
-      draggable={draggable}
-      onDragStart={(e) => {
-        e.dataTransfer.setData('text/plain', project.id)
-        e.dataTransfer.effectAllowed = 'move'
-        onDragStart()
-      }}
-      onDragEnd={onDragEnd}
-      onClick={onOpen}
-    >
-      {cover && (
-        <MediaThumb
-          fileKey={cover}
-          style={{ height: 64, borderRadius: 'var(--radius-xs)', marginBottom: 7, background: 'rgba(255,255,255,0.4)' }}
-        />
-      )}
-      <div className="title">
-        {/* The title link is the card's keyboard + screen-reader open; the
-            card-level onClick stays as the mouse shortcut. */}
-        <a
-          href={`/project/${project.id}`}
-          onClick={(e) => {
-            e.preventDefault()
-            e.stopPropagation()
-            onOpen()
-          }}
-        >
-          {project.name}
-        </a>
-      </div>
-      <div className="meta">
-        {groupName && <span>{groupName}</span>}
-        {assignee && <span>· {assignee}</span>}
-        {due && (
-          <span className={`due-wrap${overdue ? ' overdue' : ''}`}>
-            {overdue && <ScribbleCircle />}
-            · {due.text}
-          </span>
-        )}
-        {project.fileIds.length > 0 && (
-          <span className="row">
-            · <Icon name="paperclip" size={11} />
-            {project.fileIds.length}
-          </span>
-        )}
-      </div>
-      {project.labels.length > 0 && (
-        <div className="chips mt8">
-          {project.labels.map((l) => <span key={l} className="badge label">{l}</span>)}
-        </div>
-      )}
-      {draggable && otherStages.length > 0 && (
-        <span className="item-card-menu">
-          <Menu
-            label={`Move ${project.name}`}
-            trigger={({ ref, onClick, 'aria-expanded': expanded, 'aria-haspopup': popup }) => (
-              <button
-                ref={ref}
-                draggable={false}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onClick(e)
-                }}
-                aria-expanded={expanded}
-                aria-haspopup={popup}
-                className="item-card-menu-btn"
-                title="Move to another stage"
-                aria-label={`Move ${project.name} to another stage`}
-              >
-                <Icon name="dots" size={13} />
-              </button>
-            )}
-          >
-            {otherStages.map((st) => (
-              <MenuItem key={st.id} icon="move" onSelect={() => setProjectStatus(project.id, st.id)}>
-                Move to {st.label}
-              </MenuItem>
-            ))}
-          </Menu>
-        </span>
-      )}
-    </div>
-  )
+const VIEW_TITLES: Record<BoardView, string> = {
+  columns: 'Classic kanban — one column per stage',
+  lanes: 'Full-width status bands — cards wrap into rows',
+  shelves: 'One band per group, status pills on cards',
+  wall: 'One dense grid of every project — filter with the chips',
+  ledger: 'Account-book rows — densest scan',
 }
 
 function QuickAddModal({

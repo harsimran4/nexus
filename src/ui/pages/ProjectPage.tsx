@@ -2,6 +2,7 @@ import { useStore } from '../../sync/store'
 import { Empty, PageQuote } from '../components'
 import { canWrite } from '../../auth/session'
 import { setProjectStatus, updateProject } from '../../state/actions'
+import { groupColorMap } from '../../util/groups'
 import { useMediaView } from './project/mediaView'
 import { MediaTab } from './project/MediaTab'
 import { ScriptsTab } from './project/ScriptsTab'
@@ -27,6 +28,9 @@ export function ProjectPage({ projectId }: { projectId: string }): React.JSX.Ele
   }
 
   const group = doc.groups[project.groupId]
+  const groupColorKey = group
+    ? groupColorMap(Object.values(doc.groups).filter((g) => g.deleted === null))[group.id] ?? ''
+    : ''
 
   return (
     <div>
@@ -36,7 +40,10 @@ export function ProjectPage({ projectId }: { projectId: string }): React.JSX.Ele
         <a href="/" className="faint small project-head-back">← board</a>
         {group && (
           <>
-            <a href={`/group/${group.id}`} className="faint small project-head-crumb">{group.name}</a>
+            <a href={`/group/${group.id}`} className="faint small project-head-crumb">
+              <span className={`group-dot ${groupColorKey}`} aria-hidden="true" />
+              {group.name}
+            </a>
             <span className="project-head-sep faint" aria-hidden="true">›</span>
           </>
         )}
