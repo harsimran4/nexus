@@ -198,6 +198,87 @@ const s3helpers = async () => {
   console.log('guest over-cap:', capRes.status)
   if (capRes.status !== 413) fail('over-cap should 413')
 
+  // ---- BULK guest burst — the 97-files-lost incident shape: N small files
+  // through 3-parallel completions (each a read-modify-write of the doc),
+  // then the guest page's end-of-batch verify+repair. The production
+  // assertion: EVERY key ends up in the doc exactly once.
+  {
+    const { AwsClient } = await import('aws4fetch')
+    const s3 = new AwsClient({ accessKeyId: dev.OCI_S3_ACCESS_KEY_ID, secretAccessKey: dev.OCI_S3_SECRET_ACCESS_KEY, service: 's3', region: wr.vars.OCI_S3_REGION })
+    const getProgress = async () => {
+      const res = await s3.fetch(`${wr.vars.OCI_S3_ENDPOINT}/${wr.vars.OCI_S3_BUCKET}/progress/${guest.linkId}.json`)
+      return res.ok ? JSON.parse(await res.text()) : null
+    }
+    const N = 12
+    const SIZE = 256 * 1024
+    const metas = []
+    let next = 0
+    const one = async () => {
+      for (;;) {
+        const i = next++
+        if (i >= N) return
+        const initRes = await fetch(`${base}/api/upload/resumable`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${guest.raw}` },
+          body: JSON.stringify({ name: `bulk-${i}.jpg`, parentId, mimeType: 'image/jpeg', size: SIZE }),
+        })
+        if (!initRes.ok) fail(`bulk init ${i} failed: ${initRes.status}`)
+        const b = await initRes.json()
+        const put = await fetch(b.direct[0], { method: 'PUT', headers: { 'Content-Type': 'image/jpeg' }, body: Buffer.alloc(SIZE, i + 1) })
+        if (put.status !== 200 && put.status !== 201) fail(`bulk put ${i} failed: ${put.status}`)
+        const comp = await fetch(`${base}${b.completeUrl}`, { method: 'POST' })
+        if (!comp.ok) fail(`bulk completion ${i} failed: ${comp.status}`)
+        metas.push(await comp.json())
+      }
+    }
+    await Promise.all(Array.from({ length: 3 }, one))
+    console.log(`bulk guest: ${metas.length}/${N} completions (3-parallel)`)
+    if (metas.length !== N) fail('bulk completion count wrong')
+
+    // beacon mid-flight + complete, like the guest page does
+    for (const body of [{ total: N, done: 6, failed: 0, state: 'active' }, { total: N, done: N, failed: 0, state: 'complete' }]) {
+      const bRes = await fetch(`${base}/api/upload/progress`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${guest.raw}` },
+        body: JSON.stringify(body),
+      })
+      if (bRes.status !== 200) fail(`progress beacon failed: ${bRes.status}`)
+    }
+    const prog = await getProgress()
+    console.log('progress object:', JSON.stringify(prog))
+    if (!prog || prog.total !== N || prog.done !== N || prog.state !== 'complete' || prog.linkId !== guest.linkId) {
+      fail('progress object wrong')
+    }
+
+    // end-of-batch verify+repair: whatever the burst dropped must come back
+    const repair = await fetch(`${base}/api/upload/link-batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${guest.raw}` },
+      body: JSON.stringify({ keys: metas.map((m) => m.id) }),
+    })
+    const repairBody = await repair.json()
+    console.log('link-batch:', repair.status, '| outcome:', repairBody.outcome, '| added:', repairBody.added)
+    if (repair.status !== 200) fail('link-batch failed')
+    // link-batch must never move (or invent) files outside the link's project
+    const evil = await fetch(`${base}/api/upload/link-batch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${guest.raw}` },
+      body: JSON.stringify({ keys: ['trash/evil.jpg'] }),
+    })
+    console.log('link-batch foreign key:', evil.status)
+    if (evil.status !== 403) fail('link-batch must 403 keys outside the project')
+    // THE production assertion — every bulk key in the doc exactly once
+    const bd = await fetchDoc()
+    const bp = bd.projects[project.id]
+    for (const m of metas) {
+      const occ = bp.fileIds.filter((f) => f === m.id).length
+      if (occ !== 1) fail(`bulk key not linked exactly once (${occ}): ${m.id}`)
+      if (bp.mediaSectionOf[m.id] !== guest.sectionId) fail(`bulk key not in linked section: ${m.id}`)
+    }
+    console.log(`bulk: all ${N} keys linked exactly once, in section OK`)
+    guest.metaList.push(...metas)
+  }
+
   // lazy presigning (writer session — the guest link's cap is 100 MB): 11 GB
   // -> 16 URLs at init + presignMoreUrl replenish, then abort
   const bigInit = await fetch(`${base}/api/upload/resumable`, {
@@ -283,6 +364,7 @@ const s3helpers = async () => {
     delete p4.mediaSectionOf[m.id]
   }
   fresh.uploadLinks = (fresh.uploadLinks ?? []).filter((l) => l.id !== guest.linkId)
+  await s3.fetch(`${wr.vars.OCI_S3_ENDPOINT}/${wr.vars.OCI_S3_BUCKET}/progress/${guest.linkId}.json`, { method: 'DELETE' })
   if (guest.createdSection) p4.mediaSections = p4.mediaSections.filter((sec) => sec.id !== 'sec_guesttest')
   const docPut = await put('master/nexus.json', JSON.stringify(fresh), 'application/json')
   console.log('doc restore:', docPut.status)

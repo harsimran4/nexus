@@ -10,7 +10,7 @@
 import { createServerFn, createMiddleware } from '@tanstack/react-start'
 import { z } from 'zod'
 import type { Session } from './auth'
-import type { DriveErrorKind, FnResult, FileMeta, ListResult } from '../types/storage'
+import type { DriveErrorKind, FnResult, FileMeta, ListResult, UploadProgressSession } from '../types/storage'
 import { SYSTEM_PREFIXES } from '../types/storage'
 import { DOC_KEY, FOLDER_MARKER } from './keys'
 
@@ -253,6 +253,42 @@ export const docPutFn = createServerFn({ method: 'POST' })
       return { ok: true, data: res }
     } catch (e) {
       return err('api', e instanceof Error ? e.message : 'Write failed')
+    }
+  })
+
+/** Live guest-upload sessions for the owner's pill: read the progress/
+ *  beacon objects (one small overwrite per report — no doc contention).
+ *  Active sessions gone quiet >30min are dead (tab closed) and dropped;
+ *  completed ones linger an hour so the owner sees the outcome. */
+export const uploadProgressFn = createServerFn({ method: 'POST' })
+  .middleware([writerAuth])
+  .handler(async ({ context }): Promise<FnResult<UploadProgressSession[]>> => {
+    if (!context.auth.ok) return err('auth', context.auth.message)
+    try {
+      const s3 = await import('./s3')
+      const auth = await import('./auth')
+      const page = await s3.list({ prefix: 'progress/', maxKeys: 20 })
+      const sessions: UploadProgressSession[] = []
+      const now = Date.now()
+      for (const entry of page.contents) {
+        if (!entry.key.startsWith('progress/') || !entry.key.endsWith('.json')) continue
+        try {
+          const rec = JSON.parse(await s3.getText(entry.key)) as UploadProgressSession
+          if (typeof rec.linkId !== 'string' || typeof rec.at !== 'string') continue
+          const age = now - Date.parse(rec.at)
+          if (rec.state === 'active' ? age > 30 * 60_000 : age > 60 * 60_000) continue
+          sessions.push(rec)
+        } catch {
+          continue // one unreadable beacon never blocks the rest
+        }
+      }
+      if (sessions.length > 0) {
+        const doc = await auth.getCachedDoc()
+        for (const s of sessions) s.projectName = doc?.projects[s.projectId]?.name
+      }
+      return { ok: true, data: sessions }
+    } catch (e) {
+      return err('api', e instanceof Error ? e.message : 'Progress read failed')
     }
   })
 
@@ -504,7 +540,7 @@ export const uploadSmallFn = createServerFn({ method: 'POST' })
       // only a UI mirror (sync-kernel replay/discard/re-assert can undo it).
       try {
         const { linkUploadedFile } = await import('./linking')
-        const outcome = await linkUploadedFile({
+        const { outcome } = await linkUploadedFile({
           key,
           projectId,
           sectionId,

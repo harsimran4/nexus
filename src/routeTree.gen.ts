@@ -24,6 +24,8 @@ import { Route as UploadTokenRouteImport } from './routes/upload.$token'
 import { Route as ApiPublicListRouteImport } from './routes/api/public/list'
 import { Route as ApiPublicMetaRouteImport } from './routes/api/public/meta'
 import { Route as ApiUploadLinkRouteImport } from './routes/api/upload/link'
+import { Route as ApiUploadLinkBatchRouteImport } from './routes/api/upload/link-batch'
+import { Route as ApiUploadProgressRouteImport } from './routes/api/upload/progress'
 import { Route as ApiUploadResumableRouteImport } from './routes/api/upload/resumable'
 
 const IndexRoute = IndexRouteImport.update({
@@ -101,6 +103,16 @@ const ApiUploadLinkRoute = ApiUploadLinkRouteImport.update({
   path: '/api/upload/link',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiUploadLinkBatchRoute = ApiUploadLinkBatchRouteImport.update({
+  id: '/api/upload/link-batch',
+  path: '/api/upload/link-batch',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiUploadProgressRoute = ApiUploadProgressRouteImport.update({
+  id: '/api/upload/progress',
+  path: '/api/upload/progress',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiUploadResumableRoute = ApiUploadResumableRouteImport.update({
   id: '/api/upload/resumable',
   path: '/api/upload/resumable',
@@ -123,6 +135,8 @@ export interface FileRoutesByFullPath {
   '/api/public/list': typeof ApiPublicListRoute
   '/api/public/meta': typeof ApiPublicMetaRoute
   '/api/upload/link': typeof ApiUploadLinkRoute
+  '/api/upload/link-batch': typeof ApiUploadLinkBatchRoute
+  '/api/upload/progress': typeof ApiUploadProgressRoute
   '/api/upload/resumable': typeof ApiUploadResumableRoute
 }
 export interface FileRoutesByTo {
@@ -141,6 +155,8 @@ export interface FileRoutesByTo {
   '/api/public/list': typeof ApiPublicListRoute
   '/api/public/meta': typeof ApiPublicMetaRoute
   '/api/upload/link': typeof ApiUploadLinkRoute
+  '/api/upload/link-batch': typeof ApiUploadLinkBatchRoute
+  '/api/upload/progress': typeof ApiUploadProgressRoute
   '/api/upload/resumable': typeof ApiUploadResumableRoute
 }
 export interface FileRoutesById {
@@ -160,6 +176,8 @@ export interface FileRoutesById {
   '/api/public/list': typeof ApiPublicListRoute
   '/api/public/meta': typeof ApiPublicMetaRoute
   '/api/upload/link': typeof ApiUploadLinkRoute
+  '/api/upload/link-batch': typeof ApiUploadLinkBatchRoute
+  '/api/upload/progress': typeof ApiUploadProgressRoute
   '/api/upload/resumable': typeof ApiUploadResumableRoute
 }
 export interface FileRouteTypes {
@@ -180,6 +198,8 @@ export interface FileRouteTypes {
     | '/api/public/list'
     | '/api/public/meta'
     | '/api/upload/link'
+    | '/api/upload/link-batch'
+    | '/api/upload/progress'
     | '/api/upload/resumable'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -198,6 +218,8 @@ export interface FileRouteTypes {
     | '/api/public/list'
     | '/api/public/meta'
     | '/api/upload/link'
+    | '/api/upload/link-batch'
+    | '/api/upload/progress'
     | '/api/upload/resumable'
   id:
     | '__root__'
@@ -216,6 +238,8 @@ export interface FileRouteTypes {
     | '/api/public/list'
     | '/api/public/meta'
     | '/api/upload/link'
+    | '/api/upload/link-batch'
+    | '/api/upload/progress'
     | '/api/upload/resumable'
   fileRoutesById: FileRoutesById
 }
@@ -235,6 +259,8 @@ export interface RootRouteChildren {
   ApiPublicListRoute: typeof ApiPublicListRoute
   ApiPublicMetaRoute: typeof ApiPublicMetaRoute
   ApiUploadLinkRoute: typeof ApiUploadLinkRoute
+  ApiUploadLinkBatchRoute: typeof ApiUploadLinkBatchRoute
+  ApiUploadProgressRoute: typeof ApiUploadProgressRoute
   ApiUploadResumableRoute: typeof ApiUploadResumableRoute
 }
 
@@ -345,6 +371,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiUploadLinkRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/upload/link-batch': {
+      id: '/api/upload/link-batch'
+      path: '/api/upload/link-batch'
+      fullPath: '/api/upload/link-batch'
+      preLoaderRoute: typeof ApiUploadLinkBatchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/upload/progress': {
+      id: '/api/upload/progress'
+      path: '/api/upload/progress'
+      fullPath: '/api/upload/progress'
+      preLoaderRoute: typeof ApiUploadProgressRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/upload/resumable': {
       id: '/api/upload/resumable'
       path: '/api/upload/resumable'
@@ -371,6 +411,8 @@ const rootRouteChildren: RootRouteChildren = {
   ApiPublicListRoute: ApiPublicListRoute,
   ApiPublicMetaRoute: ApiPublicMetaRoute,
   ApiUploadLinkRoute: ApiUploadLinkRoute,
+  ApiUploadLinkBatchRoute: ApiUploadLinkBatchRoute,
+  ApiUploadProgressRoute: ApiUploadProgressRoute,
   ApiUploadResumableRoute: ApiUploadResumableRoute,
 }
 export const routeTree = rootRouteImport

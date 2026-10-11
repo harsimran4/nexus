@@ -313,13 +313,21 @@ async function authorizeSession(request: Request | URL): Promise<UploadSession |
 
 /** Shared completion tail for EVERY success path (probe-complete, relay
  *  last-part, POST complete): link the file into the project doc
- *  server-side, then return the file's meta. Link failure is logged, never
- *  fatal — the bytes are already stored and the client commit backstops. */
+ *  server-side, then return the file's meta.
+ *
+ *  Link failure policy split (the 97-files-lost incident): app users have
+ *  the kernel mirror commit as backstop, so a link failure here stays
+ *  logged-and-non-fatal for them. GUESTS have no client commit — a swallowed
+ *  failure told them "All done" while the file stayed an orphan. Guests get
+ *  an honest 502: the client's completion loop retries the POST (idempotent —
+ *  head-verify, already-linked no-op), and only a persistent failure reaches
+ *  the roster as a failed tile with Retry. */
 async function finishUpload(payload: UploadSession): Promise<Response> {
+  const guest = payload.uid?.startsWith('ul_') ?? false
   // Guest sessions re-validate their link at completion against a FRESH doc
   // read (not the 60s cache): revocation then stops a file from APPEARING
   // immediately, not within a cache-TTL window.
-  if (payload.uid?.startsWith('ul_')) {
+  if (guest) {
     const auth = await import('../../../server/auth')
     const { linkIsActive } = await import('../../../server/uploadLinks')
     const doc = await auth.loadNexusDoc().catch(() => null)
@@ -331,7 +339,7 @@ async function finishUpload(payload: UploadSession): Promise<Response> {
   }
   try {
     const { linkUploadedFile } = await import('../../../server/linking')
-    const outcome = await linkUploadedFile({
+    const { outcome } = await linkUploadedFile({
       key: payload.key,
       projectId: payload.projectId ?? null,
       sectionId: payload.sectionId ?? null,
@@ -339,10 +347,19 @@ async function finishUpload(payload: UploadSession): Promise<Response> {
       fileName: payload.name ?? null,
     })
     if (outcome === 'no-project') {
+      if (guest) {
+        // The revocation re-check above already covered a deleted project —
+        // reaching here means the doc changed underneath us mid-request.
+        console.error(`[upload-link] ${payload.key}: guest upload lost its project`)
+        return Response.json({ error: 'The destination project is gone — the owner can re-share the link' }, { status: 502 })
+      }
       console.warn(`[upload-link] ${payload.key}: no matching project — link left to the client commit`)
     }
   } catch (e) {
     console.error(`[upload-link] ${payload.key}: ${e instanceof Error ? e.message : e}`)
+    if (guest) {
+      return Response.json({ error: 'The file uploaded but could not be recorded — retrying usually fixes it' }, { status: 502 })
+    }
   }
   const { metaCore } = await import('../../../server/queries')
   return Response.json(await metaCore(payload.key))

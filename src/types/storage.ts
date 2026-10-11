@@ -42,4 +42,19 @@ export const SYSTEM_PREFIXES = {
   groups: 'groups/',
   scripts: 'scripts/',
   thumbs: 'thumbs/',
+  progress: 'progress/',
 } as const
+
+/** One guest upload-link session's coarse progress (progress/<linkId>.json).
+ *  Written by the guest page's beacon, read by the app's live pill. */
+export interface UploadProgressSession {
+  linkId: string
+  projectId: string
+  projectName?: string
+  total: number
+  done: number
+  failed: number
+  repaired?: number
+  state: 'active' | 'complete' | 'failed'
+  at: string
+}

@@ -9,7 +9,7 @@ import { boot } from '../boot'
 import { logout, currentSession } from '../auth/session'
 import { checkDraftRecovery, recommitDraft, discardDraft } from '../sync/writer'
 import { runHealthChecks, type HealthIssue } from '../diagnostics/health'
-import { ConfirmHost, Icon, IssueBanner, Modal, StatusBanners, SyncPill, ToastViewport } from '../ui/components'
+import { ConfirmHost, GuestUploadPill, Icon, IssueBanner, Modal, StatusBanners, SyncPill, ToastViewport } from '../ui/components'
 import { config } from '../config'
 import { WelcomeGate } from '../ui/WelcomeGate'
 import { Init } from '../ui/pages/Init'
@@ -356,10 +356,14 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
           <div className="mobile-brand">
             <span className="brand-dot" /> Nexus
           </div>
-          <div style={{ marginLeft: 'auto' }}>{themeToggle}</div>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+            <GuestUploadPill />
+            {themeToggle}
+          </div>
         </div>
         <div className="content-header">
           <div className="row desktop-tools" style={{ marginLeft: 'auto' }}>
+            <GuestUploadPill />
             {themeToggle}
             <SyncPill />
           </div>

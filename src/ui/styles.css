@@ -257,6 +257,24 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 .pill.readOnly .dot, .pill.blocked .dot, .pill.corrupt .dot { background: var(--red); }
 @keyframes pulse { 50% { opacity: 0.35; } }
 
+/* ---- guest upload pill: the owner's window into a share-link upload ---- */
+
+.guest-pill-wrap { position: relative; }
+.guest-pill.live { color: var(--accent); border-color: var(--accent); }
+.guest-pop {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: var(--z-tray);
+  width: min(88vw, 320px); padding: 12px; text-align: left; cursor: default;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.guest-pop-head { display: flex; align-items: center; justify-content: space-between; }
+.guest-pop-none { padding: 2px 0 4px; }
+.guest-pop-sep { border-top: 1px dashed var(--border); padding-top: 8px; font-style: italic; }
+.guest-row { display: flex; flex-direction: column; gap: 4px; }
+.guest-row-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.guest-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guest-row-bar { height: 4px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.guest-row-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width var(--dur-slow, 0.3s) ease; }
+
 /* ---- kanban: the board is the room ---- */
 
 .kanban { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(252px, 1fr); gap: 18px; overflow-x: auto; padding: 6px 6px 14px; align-items: start; }

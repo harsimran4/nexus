@@ -64,7 +64,7 @@ do {
     const key = decodeURIComponent((block.match(/<Key>([^<]+)<\/Key>/) || [])[1] || '').replace(/\+/g, ' ')
     const size = Number((block.match(/<Size>(\d+)<\/Size>/) || [])[1] || 0)
     scanned++
-    if (key.startsWith('trash/') || key.startsWith('snapshots/') || key.startsWith('scripts/')) continue
+    if (key.startsWith('trash/') || key.startsWith('snapshots/') || key.startsWith('scripts/') || key.startsWith('progress/')) continue
     if (key.endsWith('__folder__')) continue // markers are never swept
     if (!expected.has(key)) orphans.push({ key, size })
   }
