@@ -19,11 +19,20 @@ export function RefsTab({ projectId }: { projectId: string }): React.JSX.Element
   const refs = (doc?.refs ?? [])
     .filter((r) => r.deleted === null && r.projectId === projectId)
     .slice()
-    .sort((a, b) => decodeHlc(b.createdAt).ms - decodeHlc(a.createdAt).ms) // newest first
+    .sort((a, b) => {
+      const A = decodeHlc(a.createdAt)
+      const B = decodeHlc(b.createdAt)
+      return B.ms - A.ms || B.c - A.c || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+    }) // newest first, deterministic on ties
 
   const remove = (r: Ref): void => {
     try {
-      deleteRef(r.id)
+      // A peer may have removed it while we were looking — the action no-ops
+      // then, and an honest toast beats a false receipt.
+      if (!deleteRef(r.id)) {
+        toast.info('Already removed')
+        return
+      }
       toast.success(`Removed “${r.title || r.url}”`)
     } catch (e) {
       toast.error(e instanceof Error ? e.message : 'Delete failed')
@@ -51,16 +60,17 @@ export function RefsTab({ projectId }: { projectId: string }): React.JSX.Element
       ) : (
         refs.map((r) => (
           <div key={r.id} className="card mb8">
-            <div className="spread">
+            <div className="spread refs-row">
               <div style={{ minWidth: 0 }}>
-                <a
-                  href={r.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="refs-title"
-                >
-                  {r.title || r.url}
-                </a>
+                {/* URLs are validated on write, but the doc accepts what a
+                    peer wrote — never render a non-http(s) url as a link. */}
+                {/^https?:\/\//i.test(r.url) ? (
+                  <a href={r.url} target="_blank" rel="noreferrer" className="refs-title">
+                    {r.title || r.url}
+                  </a>
+                ) : (
+                  <span className="refs-title">{r.title || r.url}</span>
+                )}
                 <div className="faint small refs-url">{r.url}</div>
                 {r.note && <div className="muted small mt8" style={{ whiteSpace: 'pre-wrap' }}>{r.note}</div>}
               </div>
@@ -110,7 +120,10 @@ function RefForm({ existing, projectId, onClose }: {
     }
     try {
       if (existing) {
-        updateRef(existing.id, { url, title, note })
+        if (!updateRef(existing.id, { url, title, note })) {
+          setError('This reference was removed by someone else.')
+          return
+        }
         toast.success('Reference updated')
       } else {
         createRef({ projectId, url, title, note })
@@ -138,11 +151,11 @@ function RefForm({ existing, projectId, onClose }: {
       </div>
       <div className="field">
         <label>Title (optional — the link is shown when empty)</label>
-        <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <input className="input" value={title} maxLength={300} onChange={(e) => setTitle(e.target.value)} />
       </div>
       <div className="field">
         <label>Note (optional)</label>
-        <textarea className="input" rows={3} value={note} onChange={(e) => setNote(e.target.value)} />
+        <textarea className="input" rows={3} value={note} maxLength={2000} onChange={(e) => setNote(e.target.value)} />
       </div>
       {error && banner('error', error)}
       <div className="row" style={{ justifyContent: 'flex-end' }}>

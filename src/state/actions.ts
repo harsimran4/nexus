@@ -721,8 +721,9 @@ export function createRef(fields: { projectId: string; url: string; title?: stri
   return id
 }
 
-export function updateRef(id: string, fields: { url?: string; title?: string; note?: string }): void {
+export function updateRef(id: string, fields: { url?: string; title?: string; note?: string }): boolean {
   assertWrite()
+  let changed = false
   commit((d) => {
     const r = d.refs?.find((x) => x.id === id)
     if (!r || r.deleted) return
@@ -732,11 +733,14 @@ export function updateRef(id: string, fields: { url?: string; title?: string; no
     r.updatedAt = hlcNow()
     r.writerId = writerId()
     appendActivity(d, 'ref.update', r.projectId ?? id, { refId: id, title: r.title || r.url })
+    changed = true
   })
+  return changed
 }
 
-export function deleteRef(id: string): void {
+export function deleteRef(id: string): boolean {
   assertWrite()
+  let changed = false
   commit((d) => {
     const r = d.refs?.find((x) => x.id === id)
     if (!r || r.deleted) return
@@ -744,7 +748,9 @@ export function deleteRef(id: string): void {
     r.updatedAt = hlcNow() // LWW: the delete must beat any in-flight older edit
     r.writerId = writerId()
     appendActivity(d, 'ref.delete', r.projectId ?? id, { refId: id, title: r.title || r.url })
+    changed = true
   })
+  return changed
 }
 
 // ---------------------------------------------------------------------------

@@ -1472,6 +1472,7 @@ html[data-theme='dark'] .theme-toggle .theme-ic-moon { display: none; }
 
 /* ---- Project References: pinned clippings -------------------------------- */
 
+.refs-row { flex-wrap: wrap; row-gap: 8px; } /* controls drop below the text on narrow screens */
 .refs-title { color: var(--text); font-weight: var(--fw-semibold); word-break: break-word; }
 .refs-title:hover { color: var(--accent-strong); }
 .refs-url { word-break: break-all; }

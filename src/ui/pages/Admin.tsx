@@ -845,7 +845,7 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
         title: 'Wipe all workspace data?',
         body: (
           <div className="confirm-body">
-            <div className="confirm-what">Every group, project and script is removed — their files move to the trash.</div>
+            <div className="confirm-what">Every group, project, script and reference is removed — their files move to the trash.</div>
             Your login, settings and the workspace itself are kept.
           </div>
         ),
