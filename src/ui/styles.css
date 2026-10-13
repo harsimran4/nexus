@@ -1474,6 +1474,8 @@ html[data-theme='dark'] .theme-toggle .theme-ic-moon { display: none; }
 
 .refs-row { flex-wrap: wrap; row-gap: 8px; } /* controls drop below the text on narrow screens */
 .refs-title { color: var(--text); font-weight: var(--fw-semibold); word-break: break-word; }
+.refs-title-line { display: inline-flex; align-items: center; gap: 6px; }
+.refs-favicon { width: 16px; height: 16px; border-radius: var(--radius-xs); flex: none; }
 .refs-title:hover { color: var(--accent-strong); }
 .refs-url { word-break: break-all; }
 .refs-when { white-space: nowrap; }

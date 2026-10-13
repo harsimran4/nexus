@@ -596,3 +596,4 @@ export const storageInfoFn = createServerFn({ method: 'POST' })
     const { env } = await import('cloudflare:workers')
     return { ok: true, data: { bucket: env.OCI_S3_BUCKET, endpoint: env.OCI_S3_ENDPOINT, region: env.OCI_S3_REGION } }
   })
+
