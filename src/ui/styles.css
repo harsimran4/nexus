@@ -1469,3 +1469,10 @@ select.input.admin-role-select { max-width: 120px; padding: 3px 8px; font-size: 
 .theme-toggle .theme-ic-moon { display: inline; }
 html[data-theme='dark'] .theme-toggle .theme-ic-sun { display: inline; }
 html[data-theme='dark'] .theme-toggle .theme-ic-moon { display: none; }
+
+/* ---- Project References: pinned clippings -------------------------------- */
+
+.refs-title { color: var(--text); font-weight: var(--fw-semibold); word-break: break-word; }
+.refs-title:hover { color: var(--accent-strong); }
+.refs-url { word-break: break-all; }
+.refs-when { white-space: nowrap; }

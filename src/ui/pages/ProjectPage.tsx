@@ -5,12 +5,14 @@ import { setProjectStatus, updateProject } from '../../state/actions'
 import { groupColorMap } from '../../util/groups'
 import { useMediaView } from './project/mediaView'
 import { MediaTab } from './project/MediaTab'
+import { RefsTab } from './project/RefsTab'
 import { ScriptsTab } from './project/ScriptsTab'
 import { SettingsTab } from './project/SettingsTab'
 
-const TABS: { id: 'media' | 'scripts' | 'settings'; label: string }[] = [
+const TABS: { id: 'media' | 'scripts' | 'refs' | 'settings'; label: string }[] = [
   { id: 'media', label: 'Media' },
   { id: 'scripts', label: 'Scripts' },
+  { id: 'refs', label: 'References' },
   { id: 'settings', label: 'Settings' },
 ]
 
@@ -70,6 +72,7 @@ export function ProjectPage({ projectId }: { projectId: string }): React.JSX.Ele
 
       {view.tab === 'media' && <MediaTab projectId={projectId} />}
       {view.tab === 'scripts' && <ScriptsTab projectId={projectId} />}
+      {view.tab === 'refs' && <RefsTab projectId={projectId} />}
       {view.tab === 'settings' && <SettingsTab projectId={projectId} />}
     </div>
   )

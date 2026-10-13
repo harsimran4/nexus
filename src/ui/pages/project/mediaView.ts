@@ -11,7 +11,7 @@ import { parseMediaView, serializeMediaView, type MediaViewUrl } from '../../../
 const routeApi = getRouteApi('/project/$projectId')
 
 export interface ResolvedMediaView {
-  tab: 'media' | 'scripts' | 'settings'
+  tab: 'media' | 'scripts' | 'refs' | 'settings'
   section: string
   kind: MediaKind | 'all'
   sort: MediaSort

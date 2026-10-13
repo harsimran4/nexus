@@ -170,6 +170,11 @@ export function mergeRemote(input: MergeInput): { merged: NexusDoc; undeletes: A
   // because the merged-doc literal below overrides the spread.
   const uploadLinks = mergeUsers(local.uploadLinks ?? [], remote.uploadLinks ?? [], [])
 
+  // refs: per-entry LWW — same reasoning as uploadLinks (a just-added ref or
+  // just-applied soft delete not yet saved would be silently dropped on any
+  // rebase, because the merged-doc literal below overrides the spread).
+  const refs = mergeUsers(local.refs ?? [], remote.refs ?? [], [])
+
   // tombstones: union by (type,id), newest wins
   const tombMap = new Map<string, Tombstone>()
   for (const t of [...remote.tombstones, ...local.tombstones]) {
@@ -199,6 +204,7 @@ export function mergeRemote(input: MergeInput): { merged: NexusDoc; undeletes: A
     users,
     settings: settingsWinner,
     uploadLinks,
+    refs,
     groups,
     projects,
     scripts,

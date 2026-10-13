@@ -28,6 +28,10 @@ describe('parseMediaView', () => {
     expect(parseMediaView({ sort: 'added-asc' }).sort).toBe('date-asc')
   })
 
+  it('accepts the refs tab', () => {
+    expect(parseMediaView({ tab: 'refs' }).tab).toBe('refs')
+  })
+
   it('clamps q to 100 chars', () => {
     expect(parseMediaView({ q: 'x'.repeat(500) }).q).toHaveLength(100)
   })
@@ -45,5 +49,9 @@ describe('serializeMediaView', () => {
   it('round-trips non-defaults', () => {
     const view = { tab: 'scripts' as const, section: 'sec_9', kind: 'audio' as const, sort: 'size-asc' as const, q: 'vo' }
     expect(parseMediaView(serializeMediaView(view))).toEqual(view)
+  })
+
+  it('round-trips the refs tab', () => {
+    expect(parseMediaView(serializeMediaView({ tab: 'refs' }))).toEqual({ tab: 'refs' })
   })
 })

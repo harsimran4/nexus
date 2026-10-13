@@ -10,6 +10,7 @@ import {
   newViewerId,
   newMediaSectionId,
   newUploadLinkId,
+  newRefId,
 } from '../util/id'
 import { hlcNow } from '../util/hlc'
 import { thumbKeyFor } from '../util/media'
@@ -22,6 +23,7 @@ import {
   type Script,
   type ScriptStatus,
   type UploadLink,
+  type Ref,
 } from '../types/schema'
 import { canWrite, canAdmin } from '../auth/session'
 import { commit, touch, recordTombstone, appendActivity, flush, markContentDirty, writerId } from '../sync/writer'
@@ -677,6 +679,75 @@ export function deleteScript(id: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// References — saved external links per project. Top-level doc.refs array
+// (uploadLinks model): entries carry their own updatedAt/writerId LWW stamps
+// and are merged per-entry in sync/merge.ts. NEVER touch() an entry — touch()
+// indexes the scratch set by EntityMapName and reassertPending writes
+// doc[map][id], a Record write that would corrupt an array. Soft delete +
+// entry-level LWW makes tombstones unnecessary, same as uploadLinks'
+// revokedAt.
+// ---------------------------------------------------------------------------
+
+const REF_URL_MAX = 2048
+const REF_TEXT_MAX = 300
+
+const cleanRefUrl = (raw: string): string => {
+  const url = raw.trim().slice(0, REF_URL_MAX)
+  if (!/^https?:\/\//i.test(url)) throw new Error('The link must start with http:// or https://')
+  return url
+}
+
+export function createRef(fields: { projectId: string; url: string; title?: string; note?: string }): string {
+  assertWrite()
+  const url = cleanRefUrl(fields.url)
+  const project = storeGet().doc?.projects[fields.projectId]
+  if (!project || project.deleted) throw new Error('Project not found')
+  const id = newRefId()
+  commit((d) => {
+    const ref: Ref = {
+      id,
+      projectId: fields.projectId,
+      url,
+      title: (fields.title ?? '').trim().slice(0, REF_TEXT_MAX),
+      note: (fields.note ?? '').trim().slice(0, 2000),
+      createdAt: hlcNow(),
+      updatedAt: hlcNow(),
+      writerId: writerId(),
+      deleted: null,
+    }
+    d.refs = [...(d.refs ?? []), ref]
+    appendActivity(d, 'ref.create', fields.projectId, { refId: id, title: ref.title || ref.url })
+  })
+  return id
+}
+
+export function updateRef(id: string, fields: { url?: string; title?: string; note?: string }): void {
+  assertWrite()
+  commit((d) => {
+    const r = d.refs?.find((x) => x.id === id)
+    if (!r || r.deleted) return
+    if (fields.url !== undefined) r.url = cleanRefUrl(fields.url)
+    if (fields.title !== undefined) r.title = fields.title.trim().slice(0, REF_TEXT_MAX)
+    if (fields.note !== undefined) r.note = fields.note.trim().slice(0, 2000)
+    r.updatedAt = hlcNow()
+    r.writerId = writerId()
+    appendActivity(d, 'ref.update', r.projectId ?? id, { refId: id, title: r.title || r.url })
+  })
+}
+
+export function deleteRef(id: string): void {
+  assertWrite()
+  commit((d) => {
+    const r = d.refs?.find((x) => x.id === id)
+    if (!r || r.deleted) return
+    r.deleted = { at: hlcNow(), by: writerId() }
+    r.updatedAt = hlcNow() // LWW: the delete must beat any in-flight older edit
+    r.writerId = writerId()
+    appendActivity(d, 'ref.delete', r.projectId ?? id, { refId: id, title: r.title || r.url })
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Admin: app users, viewer tokens, settings, workspace reset
 // ---------------------------------------------------------------------------
 
@@ -1056,6 +1127,7 @@ export async function resetWorkspaceData(): Promise<{ groups: number; projects: 
     d.groups = {}
     d.projects = {}
     d.scripts = {}
+    d.refs = []
     d.tombstones = []
     d.activity = [{ at: hlcNow(), actor: sessionRef.getSession?.()?.appUserId ?? 'system', verb: 'workspace.reset', ref: 'workspace', meta: {} }]
     d.snapshots = []

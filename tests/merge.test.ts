@@ -322,3 +322,55 @@ describe('mergeRemote — uploadLinks', () => {
     expect(out.uploadLinks.map((l) => l.id).sort()).toEqual(['ul_a', 'ul_b'])
   })
 })
+
+// ---------------------------------------------------------------------------
+// refs — per-entry LWW (same failure mode as uploadLinks: a dropped field
+// would silently delete just-saved references on every rebase)
+// ---------------------------------------------------------------------------
+
+import type { Ref } from '../src/types/schema'
+
+function makeRef(id: string, ms: number, writer: string, overrides: Partial<Ref> = {}): Ref {
+  return {
+    id,
+    projectId: 'p0',
+    url: 'https://example.com/' + id,
+    title: id,
+    note: '',
+    createdAt: encodeHlc(BASE_MS, 0),
+    updatedAt: encodeHlc(ms, 0),
+    writerId: writer,
+    deleted: null,
+    ...overrides,
+  }
+}
+
+describe('mergeRemote — refs', () => {
+  it('keeps a locally-saved ref through a rebase against a remote that lacks it', () => {
+    const local = baseDoc()
+    local.refs = [makeRef('ref_a', 2000, 'w-aaa')]
+    const remote = baseDoc()
+    const out = mergeRemote({ local: cloneDoc(local), remote: cloneDoc(remote) }).merged
+    expect(out.refs.some((r) => r.id === 'ref_a')).toBe(true)
+    const back = mergeRemote({ local: cloneDoc(remote), remote: cloneDoc(local) }).merged
+    expect(back.refs.some((r) => r.id === 'ref_a')).toBe(true)
+  })
+
+  it('a newer remote soft delete wins over a stale local edit', () => {
+    const local = baseDoc()
+    local.refs = [makeRef('ref_a', 2000, 'w-aaa', { title: 'edited locally' })]
+    const remote = baseDoc()
+    remote.refs = [makeRef('ref_a', 3000, 'w-bbb', { deleted: { at: encodeHlc(3000, 0), by: 'w-bbb' } })]
+    const out = mergeRemote({ local: cloneDoc(local), remote: cloneDoc(remote) }).merged
+    expect(out.refs.find((r) => r.id === 'ref_a')?.deleted).not.toBeNull()
+  })
+
+  it('unions concurrent creates from both sides', () => {
+    const local = baseDoc()
+    local.refs = [makeRef('ref_a', 2000, 'w-aaa')]
+    const remote = baseDoc()
+    remote.refs = [makeRef('ref_b', 2000, 'w-bbb')]
+    const out = mergeRemote({ local: cloneDoc(local), remote: cloneDoc(remote) }).merged
+    expect(out.refs.map((r) => r.id).sort()).toEqual(['ref_a', 'ref_b'])
+  })
+})

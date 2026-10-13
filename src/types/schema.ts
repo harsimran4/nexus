@@ -216,6 +216,25 @@ export const uploadLinkSchema = z.object({
 })
 export type UploadLink = z.infer<typeof uploadLinkSchema>
 
+/** Saved external reference (research/inspiration link) for a project. A
+ *  TOP-LEVEL array (like uploadLinks), NOT embedded on project — whole-
+ *  project LWW would clobber concurrent link adds; NOT a record map
+ *  (tombstone enum + EntityMapName churn for a soft-delete flag we already
+ *  have). Per-entry LWW in sync/merge.ts; UI filters deleted === null.
+ *  projectId is nullable to leave a cross-project library possible later. */
+export const refSchema = z.object({
+  id: z.string(), // "ref_…"
+  projectId: z.string().nullable().default(null),
+  url: z.string().min(1),
+  title: z.string().default(''),
+  note: z.string().default(''),
+  createdAt: z.string(), // HLC
+  updatedAt: z.string().optional(), // LWW stamps (merge.ts)
+  writerId: z.string().optional(),
+  deleted: deletedSchema, // soft delete; UI hides rows with deleted !== null
+})
+export type Ref = z.infer<typeof refSchema>
+
 export const usersSchema = z
   .object({
     app: z.array(appUserSchema).default([]),
@@ -248,6 +267,7 @@ export const nexusDocSchema = z.object({
   users: usersSchema,
   settings: settingsSchema,
   uploadLinks: z.array(uploadLinkSchema).default([]),
+  refs: z.array(refSchema).default([]),
   groups: z.record(z.string(), groupSchema).default({}),
   projects: z.record(z.string(), projectSchema).default({}),
   scripts: z.record(z.string(), scriptSchema).default({}),

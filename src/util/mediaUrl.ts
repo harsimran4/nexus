@@ -5,7 +5,7 @@
 
 import type { MediaKind, MediaSort } from './media'
 
-export type ProjectTab = 'media' | 'scripts' | 'settings'
+export type ProjectTab = 'media' | 'scripts' | 'refs' | 'settings'
 
 export interface MediaViewUrl {
   tab?: ProjectTab
@@ -19,7 +19,7 @@ export interface MediaViewUrl {
   file?: string
 }
 
-const TABS: ProjectTab[] = ['media', 'scripts', 'settings']
+const TABS: ProjectTab[] = ['media', 'scripts', 'refs', 'settings']
 const KINDS: (MediaKind | 'all')[] = ['all', 'image', 'video', 'audio', 'other']
 const SORTS: MediaSort[] = ['date-desc', 'date-asc', 'name-asc', 'name-desc', 'size-desc', 'size-asc']
 // Links minted before the date sorts existed carry the legacy names — read

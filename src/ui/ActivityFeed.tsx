@@ -57,6 +57,9 @@ function describe(doc: NexusDoc, e: ActivityEvent): string {
     case 'script.create': return `created script ${quoted}`
     case 'script.status': return `script ${quoted} → ${String(meta.to ?? '')}`
     case 'script.delete': return `deleted script ${quoted}`
+    case 'ref.create': return `saved a reference "${String(meta.title ?? '')}" for ${quoted}`
+    case 'ref.update': return `edited a reference "${String(meta.title ?? '')}" for ${quoted}`
+    case 'ref.delete': return `removed a reference "${String(meta.title ?? '')}" from ${quoted}`
     case 'user.create': return `added ${String(meta.name ?? 'a user')} (${String(meta.role ?? '')})`
     case 'user.disable': return `disabled ${String(meta.name ?? 'a user')}`
     case 'user.enable': return `re-enabled ${String(meta.name ?? 'a user')}`
