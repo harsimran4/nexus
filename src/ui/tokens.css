@@ -4,10 +4,18 @@
    Primitives (space/type/radius/z/motion) are the scales everything new code
    uses. Semantic tokens are where the LOOK lives: a future direction pass
    edits this file, not the component CSS. styles.css consumes both; dark
-   values override under [data-theme='dark'] ("same paper, different hour").
+   values override under [data-theme='dark'].
+
+   Current direction: quiet neutral materials — light/dark parity, translucent
+   chrome over content (materials), depth by elevation scale, size-specific
+   type tracking, one brand accent for action.
 -------------------------------------------------------------------------- */
 
 :root {
+  /* UA chrome follows the theme from CSS — not the color-scheme meta, which
+     hydration would rewrite back to its light default (see __root.tsx) */
+  color-scheme: light;
+
   /* ---- primitives: spacing (4/8 grid) ---- */
   --space-1: 4px;
   --space-2: 8px;
@@ -25,15 +33,27 @@
   --fs-lg: 15px;
   --fs-xl: 18px;
   --fs-2xl: 26px;
+  --fs-3xl: 32px;
   --fw-regular: 400;
   --fw-medium: 550;
   --fw-semibold: 650;
 
+  /* ---- primitives: type detail (tracking is size-specific — never one
+         value everywhere; leading tightens as size grows) ---- */
+  --track-display: -0.022em;  /* 26px+ display text reads too loose untracked */
+  --track-snug: -0.011em;     /* titles / large controls */
+  --track-body: 0em;          /* body copy near zero */
+  --track-label: 0.01em;      /* small labeled UI */
+  --track-caps: 0.06em;       /* uppercase micro-labels, th, badges */
+  --leading-display: 1.12;
+  --leading-title: 1.25;
+  --leading-body: 1.5;
+
   /* ---- primitives: radius ---- */
-  --radius-xs: 3px;
-  --radius-sm: 6px;
-  --radius: 8px;
-  --radius-lg: 12px;
+  --radius-xs: 4px;
+  --radius-sm: 7px;
+  --radius: 10px;
+  --radius-lg: 14px;
   --radius-pill: 999px;
 
   /* ---- primitives: z-index ladder (one layering, documented) ---- */
@@ -45,94 +65,148 @@
   --z-drawer: 60;      /* mobile drawer */
   --z-lightbox: 80;    /* media viewer — above all chrome */
   --z-toast: 90;       /* toasts — visible over the lightbox too */
-  --z-grain: 9999;     /* paper grain: visual only, pointer-events none */
 
-  /* ---- primitives: motion ---- */
+  /* ---- primitives: motion ----
+     CSS keeps short opacity/transform transitions; JS springs (motion.tsx)
+     own the interruptible overlay enter/exit. --ease-spring is the CSS
+     approximation of a critically-damped spring for the drawer. */
   --dur-fast: 120ms;
   --dur: 180ms;
-  --dur-slow: 280ms;
+  --dur-slow: 320ms;
+  --dur-reduce: 160ms;         /* reduced-motion cross-fades */
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);       /* mirrored exits */
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
 
-  /* ---- semantic: color (current palette = "storyboard paper") ---- */
-  --paper: #f6f4ed;
-  --paper-raised: #f0ede2;
-  --card: #fdfcf8;
-  --panel: #fbfaf4;
-  --panel-2: #f1eee3;
-  --border: #e4dfd0;
-  --border-strong: #d3ccba;
-  --text: #22251f;
-  --muted: #6e6a5e;
-  --faint: #9a9484;
-  --accent: #c05621;          /* grease-pencil orange — actions & doing */
-  --accent-strong: #a84a1b;
-  --accent-dim: rgba(192, 86, 33, 0.1);
-  --green: #5f7a4e;           /* done / healthy */
-  --green-dim: rgba(95, 122, 78, 0.13);
-  --amber: #a97b2f;           /* review / queued */
-  --amber-dim: rgba(169, 123, 47, 0.13);
-  --red: #b34a3e;             /* danger / overdue */
-  --red-dim: rgba(179, 74, 62, 0.1);
+  /* ---- semantic: color (neutral surfaces, one accent) ---- */
+  --paper: #f5f5f7;
+  --paper-raised: #ebebed;
+  --card: #ffffff;
+  --panel: #f7f7f8;
+  --panel-2: #f0f0f1;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --faint: #a1a1a6;
+  --accent: #bf5619;          /* brand orange — actions & doing */
+  --accent-strong: #a04413;
+  --accent-dim: rgba(191, 86, 25, 0.1);
+  --green: #217a41;           /* done / healthy */
+  --green-dim: rgba(33, 122, 65, 0.12);
+  --amber: #9a6a00;           /* review / queued */
+  --amber-dim: rgba(154, 106, 0, 0.12);
+  --red: #d0342c;             /* danger / overdue */
+  --red-dim: rgba(208, 52, 44, 0.1);
+
+  /* ---- semantic: materials (translucency = hierarchy; heavier = structural.
+         Never stack a light material on another light material.) ---- */
+  --material-thin-bg: rgba(255, 255, 255, 0.72);
+  --material-thin-blur: blur(20px) saturate(1.8);
+  --material-regular-bg: rgba(255, 255, 255, 0.78);
+  --material-regular-blur: blur(30px) saturate(1.8);
+  --material-thick-bg: rgba(255, 255, 255, 0.86);
+  --material-thick-blur: blur(40px) saturate(1.8);
+
+  /* ---- semantic: elevation (bigger surface = deeper shadow) ---- */
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.04);
+  --elev-2: 0 2px 4px rgba(0, 0, 0, 0.05), 0 8px 20px rgba(0, 0, 0, 0.07);
+  --elev-3: 0 4px 10px rgba(0, 0, 0, 0.08), 0 16px 40px rgba(0, 0, 0, 0.12);
+  --elev-4: 0 8px 20px rgba(0, 0, 0, 0.10), 0 28px 64px rgba(0, 0, 0, 0.16);
 
   /* ---- semantic: derived surfaces & effects ---- */
   --bg: var(--paper);              /* legacy alias — was referenced but undefined */
   --bg-raised: var(--paper-raised);/* legacy alias — was referenced but undefined */
-  --surface-thumb: var(--panel);   /* thumb wells / skeleton ground */
-  --backdrop: rgba(46, 42, 30, 0.4);       /* modal backdrop */
-  --scrim: rgba(20, 18, 12, 0.78);         /* lightbox ground */
-  --shadow: 0 1px 2px rgba(60, 54, 38, 0.06), 0 6px 20px rgba(60, 54, 38, 0.07);
-  --shadow-lg: 0 12px 40px rgba(60, 54, 38, 0.18);
+  --surface-thumb: var(--panel-2); /* thumb wells / skeleton ground */
+  --backdrop: rgba(0, 0, 0, 0.35);         /* modal backdrop */
+  --scrim: rgba(0, 0, 0, 0.75);            /* lightbox ground */
+  /* legacy aliases — existing consumers reskin for free */
+  --shadow: var(--elev-1);
+  --shadow-lg: var(--elev-3);
   --focus-ring: 0 0 0 2px var(--paper), 0 0 0 4px var(--accent);
 
-  /* ---- semantic: sticky-note palette (matches public/welcome.html) ---- */
-  /* welcome.html keeps its own duplicated copies of sticky-1..5 (its
-     landing-page illustration) and doesn't use 6..8 — leave that file alone. */
-  --sticky-1: #fcf2cd;
-  --sticky-2: #e3efd8;
-  --sticky-3: #fae3dc;
-  --sticky-4: #dfeaf2;
-  --sticky-5: #e9e2f4;
-  --sticky-6: #d8ebe6;
-  --sticky-7: #f7e3d0;
-  --sticky-8: #e2e7d1;
+  /* group identity shades — consumed as soft washes (color-mix into --card)
+     and as solid dots; one shade per group, chosen in the group dialog */
+  --sticky-wash-pct: 26%;
+  --sticky-1: #f2d16b;
+  --sticky-2: #9fd3a8;
+  --sticky-3: #f0a8a0;
+  --sticky-4: #a3c6ec;
+  --sticky-5: #bfb3e8;
+  --sticky-6: #8fd0c6;
+  --sticky-7: #f0b784;
+  --sticky-8: #c2d49b;
 
-  /* ---- fonts (unchanged) ---- */
+  /* ---- fonts (platform system stack carries the whole voice) ---- */
   --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-  --serif: 'Fraunces', 'Iowan Old Style', Georgia, 'Times New Roman', serif;
   --mono: ui-monospace, 'Cascadia Code', 'SF Mono', Consolas, monospace;
 }
 
 [data-theme='dark'] {
-  --paper: #16171b;
-  --paper-raised: #1c1e23;
-  --card: #212329;
-  --panel: #25272e;
-  --panel-2: #2b2d35;
-  --border: #33353e;
-  --border-strong: #43454f;
-  --text: #e6e4dc;
-  --muted: #a3a094;
-  --faint: #73716a;
-  --accent: #e07636;
-  --accent-strong: #ec8c52;
-  --accent-dim: rgba(224, 118, 54, 0.16);
-  --green: #8fae7c;
-  --green-dim: rgba(143, 174, 124, 0.16);
-  --amber: #d1a356;
-  --amber-dim: rgba(209, 163, 86, 0.16);
-  --red: #d67f72;
-  --red-dim: rgba(212, 122, 110, 0.14);
-  --backdrop: rgba(10, 10, 14, 0.55);
-  --scrim: rgba(8, 8, 11, 0.86);
-  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 6px 20px rgba(0, 0, 0, 0.4);
-  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
-  --focus-ring: 0 0 0 2px var(--paper), 0 0 0 4px var(--accent);
-  --sticky-1: #35311e;
-  --sticky-2: #26312a;
-  --sticky-3: #37291f;
-  --sticky-4: #222c34;
-  --sticky-5: #2d2836;
-  --sticky-6: #1f2e2b;
-  --sticky-7: #3b2a1d;
-  --sticky-8: #2b2f20;
+  color-scheme: dark;
+
+  --paper: #131315;
+  --paper-raised: #1a1a1d;
+  --card: #1e1e20;
+  --panel: #242427;
+  --panel-2: #2c2c30;
+  --border: rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --text: #f5f5f7;
+  --muted: #a1a1a6;
+  --faint: #6e6e73;
+  --accent: #ef8b4a;
+  --accent-strong: #f4a26a;
+  --accent-dim: rgba(239, 139, 74, 0.16);
+  --green: #6cc08b;
+  --green-dim: rgba(108, 192, 139, 0.16);
+  --amber: #dca536;
+  --amber-dim: rgba(220, 165, 54, 0.16);
+  --red: #f66b60;
+  --red-dim: rgba(246, 107, 96, 0.14);
+
+  --material-thin-bg: rgba(28, 28, 30, 0.62);
+  --material-regular-bg: rgba(28, 28, 30, 0.72);
+  --material-thick-bg: rgba(24, 24, 26, 0.82);
+
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.25);
+  --elev-2: 0 2px 4px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.35);
+  --elev-3: 0 4px 10px rgba(0, 0, 0, 0.4), 0 16px 40px rgba(0, 0, 0, 0.45);
+  --elev-4: 0 8px 20px rgba(0, 0, 0, 0.5), 0 28px 64px rgba(0, 0, 0, 0.55);
+
+  --backdrop: rgba(0, 0, 0, 0.5);
+  --scrim: rgba(0, 0, 0, 0.85);
+
+  --sticky-wash-pct: 40%;
+  --sticky-1: #4d4520;
+  --sticky-2: #2f4d38;
+  --sticky-3: #55342e;
+  --sticky-4: #2c4257;
+  --sticky-5: #423760;
+  --sticky-6: #2b4f49;
+  --sticky-7: #54391f;
+  --sticky-8: #454f2a;
+}
+
+/* ---- accessibility overrides --------------------------------------------
+   Reduced transparency: frost becomes solid — materials map to opaque
+   surfaces, blur drops. Increased contrast: hairlines strengthen. */
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  [data-theme='dark'] {
+    --material-thin-bg: var(--card);
+    --material-regular-bg: var(--card);
+    --material-thick-bg: var(--panel);
+    --material-thin-blur: none;
+    --material-regular-blur: none;
+    --material-thick-blur: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root,
+  [data-theme='dark'] {
+    --border: var(--muted);
+    --border-strong: var(--muted);
+  }
 }

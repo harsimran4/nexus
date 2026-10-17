@@ -1,10 +1,12 @@
-import { useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { Modal } from './Modal'
 
 /** Promise-based confirm that replaces native confirm() — themed, blocking
  *  only its own caller, with human copy. `confirmDialog` can be called from
  *  anywhere (no provider); ConfirmHost renders the active dialog and mounts
- *  once, in the Shell. */
+ *  once, in the Shell. The promise settles the moment a button is pressed
+ *  (callers unblock immediately); the dialog itself stays on screen through
+ *  its exit animation via Modal's `closing` prop, then unmounts. */
 
 export interface ConfirmOptions {
   title: string
@@ -63,29 +65,46 @@ export function ConfirmHost(): React.JSX.Element | null {
   const p = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
   const [typed, setTyped] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-  if (!p) {
+  // What's on screen: the pending confirm, or — after it settled — the same
+  // dialog kept mounted for its exit (cleared when Modal fires onClose).
+  const [shown, setShown] = useState<ConfirmOptions | null>(null)
+  useEffect(() => {
+    if (p) setShown(p.opts)
+  }, [p])
+
+  if (!shown) {
     // Reset the typed guard once the dialog is gone.
     if (typed !== null) setTyped(null)
     return null
   }
-  const danger = p.opts.tone === 'danger'
-  const blocked = p.opts.typeToConfirm !== undefined && typed !== p.opts.typeToConfirm
+  const danger = shown.tone === 'danger'
+  const blocked = shown.typeToConfirm !== undefined && typed !== shown.typeToConfirm
   return (
     // ownsEscape: the confirm closes on Escape — Modal's guard stands every
     // OTHER modal down while this one is up, so one keypress closes the
     // confirm alone no matter what re-rendered underneath it.
     <Modal
-      title={p.opts.title}
-      onClose={() => settle(false)}
+      title={shown.title}
+      closing={p === null}
+      onClosing={() => {
+        // Escape/backdrop/✕ start the exit — settle now so confirmIsOpen()
+        // drops and the modal underneath can act without waiting out the
+        // animation (the dialog stays painted via `closing`).
+        if (p) settle(false)
+      }}
+      onClose={() => {
+        setShown(null)
+        if (p) settle(false)
+      }}
       ownsEscape
-      initialFocusRef={p.opts.typeToConfirm !== undefined ? inputRef : undefined}
+      initialFocusRef={shown.typeToConfirm !== undefined ? inputRef : undefined}
     >
-      {p.opts.body && <div className="confirm-body">{p.opts.body}</div>}
-      {p.opts.typeToConfirm !== undefined && (
+      {shown.body && <div className="confirm-body">{shown.body}</div>}
+      {shown.typeToConfirm !== undefined && (
         <input
           ref={inputRef}
           className="input mt8"
-          placeholder={`Type “${p.opts.typeToConfirm}” to confirm`}
+          placeholder={`Type “${shown.typeToConfirm}” to confirm`}
           value={typed ?? ''}
           onChange={(e) => setTyped(e.target.value)}
           spellCheck={false}
@@ -94,15 +113,18 @@ export function ConfirmHost(): React.JSX.Element | null {
         />
       )}
       <div className="row mt8" style={{ justifyContent: 'flex-end' }}>
+        {/* Buttons settle the promise immediately (callers unblock); the
+            `closing` prop keeps the dialog painted through its exit, and
+            Modal's post-exit onClose clears `shown`. */}
         <button className="btn" onClick={() => settle(false)}>
-          {p.opts.cancelLabel ?? 'Cancel'}
+          {shown.cancelLabel ?? 'Cancel'}
         </button>
         <button
           className={`btn ${danger ? 'danger' : 'primary'}`}
           disabled={blocked}
           onClick={() => settle(true)}
         >
-          {p.opts.confirmLabel ?? (danger ? 'Delete' : 'Confirm')}
+          {shown.confirmLabel ?? (danger ? 'Delete' : 'Confirm')}
         </button>
       </div>
     </Modal>

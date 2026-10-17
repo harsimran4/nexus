@@ -53,7 +53,7 @@ export function ScriptsTab({ projectId }: { projectId: string }): React.JSX.Elem
             </div>
           </div>
           {openScript === s.id && (
-            <pre className="manuscript mt8" style={{ fontFamily: 'var(--mono)', fontSize: 13, whiteSpace: 'pre-wrap', padding: '12px 14px', borderRadius: 6, border: '1px solid var(--border)', maxHeight: 420, overflowY: 'auto', margin: 0 }}>
+            <pre className="mt8" style={{ fontFamily: 'var(--mono)', fontSize: 13, whiteSpace: 'pre-wrap', padding: '12px 14px', borderRadius: 'var(--radius-sm)', background: 'var(--panel)', border: '1px solid var(--border)', maxHeight: 420, overflowY: 'auto', margin: 0 }}>
               {bodies[s.id] ?? 'Loading…'}
             </pre>
           )}

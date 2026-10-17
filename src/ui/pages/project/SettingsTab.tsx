@@ -132,7 +132,7 @@ export function SettingsTab({ projectId }: { projectId: string }): React.JSX.Ele
       <div className="field">
         <label>Notes</label>
         <textarea
-          className="input legal-pad"
+          className="input"
           value={notesDraft}
           disabled={!writable}
           onChange={(e) => {

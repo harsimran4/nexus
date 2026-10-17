@@ -2,28 +2,25 @@
    Lightbox — full-screen media viewer.
 
    The ground is --scrim (near-black in both themes), so the lightbox draws
-   all of its own chrome in one fixed light ink (#f2f0e8); theme switches
-   don't apply out here. Media sits in an absolute stage that centers every
-   kind and clips a zoomed image's overflow; clicks on the stage's empty
-   ground close, clicks on media or chrome don't.
+   all of its own chrome in one fixed light ink (#fff); theme switches don't
+   apply out here. Media sits in an absolute stage that centers every kind
+   and clips a zoomed image's overflow; clicks on the stage's empty ground
+   close, clicks on media or chrome don't. Enter/exit is motion-owned
+   (Lightbox.tsx) — no CSS animation here.
 -------------------------------------------------------------------------- */
 
 .lightbox {
-  --lb-ink: #f2f0e8;
+  --lb-ink: #ffffff;
   position: fixed; inset: 0;
   z-index: var(--z-lightbox);
   background: var(--scrim);
-  animation: lightbox-fade var(--dur) var(--ease-out);
 }
-@keyframes lightbox-fade { from { opacity: 0; } }
 
 /* media stage — the whole ground under the chrome */
 .lightbox-stage {
   position: absolute; inset: 0;
   overflow: hidden;   /* a zoomed image must not spill over the chrome */
-  animation: lightbox-pop var(--dur) var(--ease-out);
 }
-@keyframes lightbox-pop { from { opacity: 0; transform: scale(0.98); } }
 
 /* Images (incl. hidden neighbors) share one centered slot: absolute + auto
    margins shrink the box to the fitted content and center it. The transform
@@ -51,8 +48,8 @@
   border-radius: var(--radius-lg);
 }
 
-/* Paper card for audio + no-inline-preview kinds — the one warm surface on
-   the dark ground. */
+/* Card for audio + no-inline-preview kinds — the one light surface on the
+   dark ground. */
 .lightbox-card {
   position: absolute; inset: 0; margin: auto;
   width: min(420px, calc(100vw - 2 * var(--space-6)));
@@ -61,7 +58,7 @@
   padding: var(--space-5);
   background: var(--card);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--elev-3);
   color: var(--text);
   text-align: center;
 }
@@ -88,25 +85,26 @@
 }
 .lightbox-count {
   flex: none;
-  color: rgba(242, 240, 232, 0.55);
+  color: rgba(255, 255, 255, 0.6);
   font-size: var(--fs-sm);
   white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .lightbox-btn {
   flex: none;
   display: inline-flex; align-items: center; gap: 7px;
   height: 34px; min-width: 34px; padding: 0 10px;
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: var(--radius-pill);
-  background: rgba(20, 18, 12, 0.35);
+  background: rgba(255, 255, 255, 0.12);
   color: var(--lb-ink);
   font: inherit; font-size: var(--fs-sm); font-weight: var(--fw-medium);
   text-decoration: none;
   cursor: pointer;
   transition: background var(--dur-fast) ease;
 }
-.lightbox-btn:hover { background: rgba(255, 255, 255, 0.12); }
+.lightbox-btn:hover { background: rgba(255, 255, 255, 0.2); }
 .lightbox-btn:disabled { opacity: 0.55; cursor: default; }
 .lightbox-btn.icon { padding: 0; justify-content: center; }
 

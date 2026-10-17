@@ -8,7 +8,9 @@ import {
   type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { AnimatePresence, motion } from 'motion/react'
 import { Icon, type IconName } from './Icon'
+import { useMaterialVariants } from './motion'
 import './Menu.css'
 
 /** Dropdown menu for card overflow actions (the "..." on a media card). The
@@ -139,18 +141,32 @@ export function Menu({ trigger, align = 'end', label, children }: {
     // Enter/Space need nothing here: real buttons activate natively.
   }
 
-  const panel = open ? (
-    <div
-      ref={panelRef}
-      role="menu"
-      aria-label={label}
-      className={`menu-panel${align === 'start' ? ' menu-start' : ''}${pos?.dropUp ? ' menu-up' : ''}`}
-      style={pos?.css}
-      onKeyDown={onKeyDown}
-    >
-      <MenuContext.Provider value={{ open, close }}>{children}</MenuContext.Provider>
-    </div>
-  ) : null
+  // The panel scales from the corner nearest its trigger, so the spatial
+  // relationship between button and menu is the animation itself.
+  const panelMotion = useMaterialVariants('snappy')
+  const origin = pos ? `${pos.dropUp ? 'bottom' : 'top'} ${align === 'end' ? 'right' : 'left'}` : 'top right'
+
+  const panel = (
+    <AnimatePresence>
+      {open ? (
+        <motion.div
+          ref={panelRef}
+          role="menu"
+          aria-label={label}
+          className={`menu-panel${align === 'start' ? ' menu-start' : ''}`}
+          style={{ ...pos?.css, transformOrigin: origin }}
+          onKeyDown={onKeyDown}
+          variants={panelMotion.variants}
+          initial="hidden"
+          animate="shown"
+          exit="exit"
+          transition={panelMotion.transition}
+        >
+          <MenuContext.Provider value={{ open, close }}>{children}</MenuContext.Provider>
+        </motion.div>
+      ) : null}
+    </AnimatePresence>
+  )
 
   return (
     <div ref={wrapperRef} className="menu" onKeyDown={onKeyDown}>
@@ -163,7 +179,7 @@ export function Menu({ trigger, align = 'end', label, children }: {
         // props the render-prop type guarantees.
         ...(label !== undefined ? { 'aria-label': label } : {}),
       })}
-      {panel && (typeof document === 'undefined' ? panel : createPortal(panel, document.body))}
+      {typeof document === 'undefined' ? panel : createPortal(panel, document.body)}
     </div>
   )
 }

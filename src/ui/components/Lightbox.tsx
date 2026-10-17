@@ -11,12 +11,15 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
+import { motion, usePresence } from 'motion/react'
 import { webViewLink } from '../../drive/client'
 import { downloadToBrowserProgress, describeError } from '../../drive/preview'
 import { mimeFromKey } from '../../server/mime'
 import { kindFromMime } from '../../util/media'
 import { toast } from './Toast'
 import { Icon } from './Icon'
+import { useMaterialVariants, useOverlayTransition } from './motion'
+import { lockBodyScroll, unlockBodyScroll } from './scrollLock'
 import './Lightbox.css'
 
 export interface LightboxItem { fileId: string; name: string; mime?: string }
@@ -51,6 +54,10 @@ export function Lightbox({ items, index, onClose, onNavigate, actions }: {
   const dialogRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const imgRef = useRef<HTMLImageElement>(null)
+  // False while AnimatePresence plays our exit — keys and clicks stand down.
+  const [isPresent] = usePresence()
+  const ground = useOverlayTransition('snappy')
+  const stage = useMaterialVariants('snappy')
 
   // Image zoom: one toggle level (1x ↔ ZOOM) plus a pan offset while zoomed.
   // Panning (the CSS transition off) tracks the pointer 1:1; the flag also
@@ -79,21 +86,17 @@ export function Lightbox({ items, index, onClose, onNavigate, actions }: {
     setDl(null)
   }, [index])
 
-  // Focus + scroll lock on mount, both restored on unmount — same contract
-  // as Modal, but the dialog itself takes focus (the media is the content).
+  // Focus + scroll lock (shared, ref-counted — see scrollLock.ts) on mount,
+  // both restored on unmount — same contract as Modal, but the dialog itself
+  // takes focus (the media is the content).
   useEffect(() => {
     const dialog = dialogRef.current
     if (!dialog) return
     const opener = document.activeElement as HTMLElement | null
     dialog.focus({ preventScroll: true })
-    const scrollbar = window.innerWidth - document.documentElement.clientWidth
-    const prevOverflow = document.body.style.overflow
-    const prevPad = document.body.style.paddingRight
-    document.body.style.overflow = 'hidden'
-    if (scrollbar > 0) document.body.style.paddingRight = `${scrollbar}px`
+    lockBodyScroll()
     return () => {
-      document.body.style.overflow = prevOverflow
-      document.body.style.paddingRight = prevPad
+      unlockBodyScroll()
       if (opener?.isConnected) opener.focus({ preventScroll: true })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -104,6 +107,7 @@ export function Lightbox({ items, index, onClose, onNavigate, actions }: {
   // would fight the player.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (!isPresent) return // exit already running — one close per open
       const t = e.target as HTMLElement | null
       const tag = t?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || t?.isContentEditable) return
@@ -117,7 +121,7 @@ export function Lightbox({ items, index, onClose, onNavigate, actions }: {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, onNavigate, multi, index, items.length])
+  }, [onClose, onNavigate, multi, index, items.length, isPresent])
 
   // Wheel zoom — a native non-passive listener: React's onWheel registers
   // passive and could not preventDefault the page gesture underneath.
@@ -281,7 +285,7 @@ export function Lightbox({ items, index, onClose, onNavigate, actions }: {
     )
 
   return createPortal(
-    <div
+    <motion.div
       ref={dialogRef}
       className="lightbox"
       role="dialog"
@@ -289,18 +293,28 @@ export function Lightbox({ items, index, onClose, onNavigate, actions }: {
       aria-label={item.name}
       tabIndex={-1}
       onKeyDown={trapTab}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={ground}
+      style={isPresent ? undefined : { pointerEvents: 'none' }}
     >
-      <div
+      <motion.div
         ref={stageRef}
         className="lightbox-stage"
-        onClick={onStageClick}
+        onClick={isPresent ? onStageClick : undefined}
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerUp}
+        variants={stage.variants}
+        initial="hidden"
+        animate="shown"
+        exit="exit"
+        transition={stage.transition}
       >
         {media}
-      </div>
+      </motion.div>
 
       <header className="lightbox-bar">
         <div className="lightbox-name" title={item.name}>
@@ -342,7 +356,7 @@ export function Lightbox({ items, index, onClose, onNavigate, actions }: {
           </button>
         </>
       )}
-    </div>,
+    </motion.div>,
     document.body,
   )
 }

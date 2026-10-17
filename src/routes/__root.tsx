@@ -4,12 +4,13 @@
 
 import { createRootRoute, HeadContent, Link, Outlet, Scripts, useNavigate, useRouterState } from '@tanstack/react-router'
 import { useEffect, useState, type ReactNode } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useStore } from '../sync/store'
 import { boot } from '../boot'
 import { logout, currentSession } from '../auth/session'
 import { checkDraftRecovery, recommitDraft, discardDraft } from '../sync/writer'
 import { runHealthChecks, type HealthIssue } from '../diagnostics/health'
-import { ConfirmHost, GuestUploadPill, Icon, IssueBanner, Modal, StatusBanners, SyncPill, ToastViewport } from '../ui/components'
+import { ConfirmHost, GuestUploadPill, Icon, IssueBanner, Modal, StatusBanners, SyncPill, ToastViewport, useOverlayTransition } from '../ui/components'
 import { config } from '../config'
 import { WelcomeGate } from '../ui/WelcomeGate'
 import { Init } from '../ui/pages/Init'
@@ -36,28 +37,33 @@ export const Route = createRootRoute({
           "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='22' fill='%236c8cff'/><text x='50' y='72' font-size='58' text-anchor='middle' fill='%230b0e14' font-family='system-ui' font-weight='700'>N</text></svg>",
       },
     ],
-    scripts: [
-      {
-        // Apply the stored theme before first paint (no flash of the wrong
-        // theme) — and tell the UA, so native controls (select popups, date
-        // pickers, scrollbars) style for the dark theme too.
-        children:
-          'try{if(localStorage.getItem("nexus.theme")==="dark"){document.documentElement.dataset.theme="dark";document.querySelector(\'meta[name="color-scheme"]\')?.setAttribute("content","dark")}}catch(e){}',
-      },
-    ],
   }),
   component: RootComponent,
 })
 
 function RootComponent(): ReactNode {
   return (
-    // suppressHydrationWarning: the head script sets html[data-theme] before
-    // paint from localStorage — without this, hydration reconciles <html>
-    // back to the server's attribute-less render and dark mode flips off on
-    // every full load. React only allows this suppression one level deep,
-    // which is exactly the html element's own attributes.
+    // suppressHydrationWarning: the inline script below sets html[data-theme]
+    // before paint from localStorage — without this, hydration reconciles
+    // <html> back to the server's attribute-less render and dark mode flips
+    // off on every full load. React only allows this suppression one level
+    // deep, which is exactly the html element's own attributes.
     <html lang="en" suppressHydrationWarning>
       <head>
+        {/* Apply the stored theme BEFORE first paint (no flash of the wrong
+            theme). Inline here rather than via head.scripts — the prerendered
+            production shell drops head.scripts entries (dev renders them),
+            which is why full page loads used to fall back to light. Also sets
+            style.colorScheme explicitly: hydration would otherwise rewrite
+            the color-scheme META back to its light default (HeadContent owns
+            that meta), leaving native controls in the wrong scheme until the
+            toggle ran. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              "try{if(localStorage.getItem('nexus.theme')==='dark'){var d=document.documentElement;d.dataset.theme='dark';d.style.colorScheme='dark'}}catch(e){}",
+          }}
+        />
         <HeadContent />
       </head>
       <body>
@@ -244,6 +250,26 @@ async function recommitFromRecovery(): Promise<void> {
 
 // ---------------------------------------------------------------------------
 
+/** Mobile drawer scrim: mounted only while the drawer is open, faded by a
+ *  spring so it trails the sidebar slide instead of cutting. */
+function DrawerBackdrop({ open, onClose }: { open: boolean; onClose: () => void }): ReactNode {
+  const fade = useOverlayTransition('smooth')
+  return (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          className="drawer-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={fade}
+          onClick={onClose}
+        />
+      )}
+    </AnimatePresence>
+  )
+}
+
 function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): ReactNode {
   const session = useStore((s) => s.session)
   const pathname = useRouterState({ select: (s) => s.location.pathname })
@@ -282,8 +308,8 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
   const setTheme = (): void => {
     const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'
     document.documentElement.dataset.theme = next
+    document.documentElement.style.colorScheme = next
     localStorage.setItem('nexus.theme', next)
-    document.querySelector('meta[name="color-scheme"]')?.setAttribute('content', next)
     setThemeTick((t) => t + 1)
   }
   // The active icon is CSS-selected off html[data-theme] — reading document
@@ -302,7 +328,9 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
   )
   return (
     <div className="shell">
-      {menuOpen && <div className="drawer-backdrop" onClick={() => setMenuOpen(false)} />}
+      {/* The backdrop fades with a spring; the sidebar itself is CSS-sprung
+          (styles.css) and always mounted, so its slide already reverses. */}
+      <DrawerBackdrop open={menuOpen} onClose={() => setMenuOpen(false)} />
       <aside className={`sidebar ${menuOpen ? 'drawer-open' : ''}`}>
         <div className="drawer-head">
           <div className="brand">

@@ -1,5 +1,5 @@
 import { useStore } from '../../../sync/store'
-import { statusBucket, type Project } from '../../../types/schema'
+import { type Project } from '../../../types/schema'
 import { Icon, Menu, MenuItem, StatusBadge } from '../../components'
 import { setProjectStatus } from '../../../state/actions'
 import { MediaThumb } from '../../MediaThumb'
@@ -17,21 +17,8 @@ export function dueInfo(dueAt: string): { text: string; overdue: boolean } {
   return { text: `due ${due.toLocaleDateString()}`, overdue: false }
 }
 
-/** Wobbly hand-drawn ellipse, like someone circled the date in red pen. */
-function ScribbleCircle(): React.JSX.Element {
-  return (
-    <svg className="scribble" viewBox="0 0 100 40" preserveAspectRatio="none" aria-hidden="true">
-      <path
-        d="M10 22 C 20 8, 55 5, 78 11 C 97 16, 99 28, 74 33 C 48 38, 14 37, 6 27 C 1 21, 14 11, 34 8"
-        fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" opacity="0.5"
-      />
-    </svg>
-  )
-}
-
-/** The one project card every board view renders. Sticky-paper tint comes
- *  from colorKey (the group's shade); the tape strip can additionally carry
- *  the status bucket color in views where status isn't the geography. */
+/** The one project card every board view renders. A group's shade reads as
+ *  a soft wash (colorKey → .sticky-N → --sticky mixed into the card). */
 export function ProjectCard({
   project,
   groupName,
@@ -40,7 +27,6 @@ export function ProjectCard({
   draggable = false,
   dragging = false,
   statusPill = false,
-  statusTape = false,
   onDragStart,
   onDragEnd,
   onOpen,
@@ -58,8 +44,6 @@ export function ProjectCard({
   dragging?: boolean
   /** Status pill in the meta row (views without status bands). */
   statusPill?: boolean
-  /** Tint the tape strip by status bucket (wall view). */
-  statusTape?: boolean
   onDragStart?: () => void
   onDragEnd?: () => void
   onOpen: () => void
@@ -70,10 +54,9 @@ export function ProjectCard({
   const assignee = project.assigneeAppId ? doc?.users.app.find((u) => u.id === project.assigneeAppId)?.name : null
   const cover = project.fileIds[0]
   const otherStages = doc?.settings.pipeline.filter((st) => st.id !== project.status) ?? []
-  const bucket = doc ? statusBucket(doc, project.status) : 'todo'
   return (
     <div
-      className={`item-card${colorKey ? ` ${colorKey}` : ''}${statusTape ? ` st-${bucket}` : ''}${overdue ? ' overdue' : ''}${dragging ? ' dragging' : ''}`}
+      className={`item-card${colorKey ? ` ${colorKey}` : ''}${overdue ? ' overdue' : ''}${dragging ? ' dragging' : ''}`}
       draggable={draggable}
       onDragStart={
         onDragStart
@@ -90,7 +73,7 @@ export function ProjectCard({
       {cover && (
         <MediaThumb
           fileKey={cover}
-          style={{ height: 64, borderRadius: 'var(--radius-xs)', marginBottom: 7, background: 'rgba(255,255,255,0.4)' }}
+          style={{ height: 64, borderRadius: 'var(--radius-sm)', marginBottom: 7, background: 'var(--panel-2)' }}
         />
       )}
       {statusPill && doc && (
@@ -117,7 +100,6 @@ export function ProjectCard({
         {assignee && <span>· {assignee}</span>}
         {due && (
           <span className={`due-wrap${overdue ? ' overdue' : ''}`}>
-            {overdue && <ScribbleCircle />}
             · {due.text}
           </span>
         )}

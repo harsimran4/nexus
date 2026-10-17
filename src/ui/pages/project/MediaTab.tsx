@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { useStore } from '../../../sync/store'
 import { banner, Empty } from '../../components'
 import { confirmDialog, confirmIsOpen } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
 import { toast } from '../../components/Toast'
 import { Lightbox, type LightboxItem } from '../../components/Lightbox'
+import { useOverlayTransition } from '../../components/motion'
 import { canWrite } from '../../../auth/session'
 import { addMediaSection, moveMediaToSection, removeProjectFile } from '../../../state/actions'
 import { startUploadBatch } from '../../../state/uploads'
@@ -29,6 +31,10 @@ import { UploadLinksModal } from '../../UploadLinks'
 export function MediaTab({ projectId }: { projectId: string }): React.JSX.Element {
   const doc = useStore((s) => s.doc)
   const { view, setView } = useMediaView()
+  // reduce-aware transitions for the tray + drop veil (opacity cross-fades
+  // under prefers-reduced-motion)
+  const trayT = useOverlayTransition('smooth')
+  const veilT = useOverlayTransition('snappy')
   const [error, setError] = useState<{ message: string; fix?: string } | null>(null)
   // selection + bulk
   const [selectMode, setSelectMode] = useState(false)
@@ -465,9 +471,16 @@ export function MediaTab({ projectId }: { projectId: string }): React.JSX.Elemen
         </div>
       )}
 
-      {/* Floating selection tray — a taped note pinned to the desk */}
-      {selectMode && selected.size > 0 && (
-        <div className="media-tray">
+      {/* Floating selection tray — rises into place, leaves the same way */}
+      <AnimatePresence>
+        {selectMode && selected.size > 0 && (
+          <motion.div
+            className="media-tray"
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 16 }}
+            transition={trayT}
+          >
           <b aria-live="polite">{selected.size} selected</b>
           <button
             className="btn small"
@@ -516,19 +529,34 @@ export function MediaTab({ projectId }: { projectId: string }): React.JSX.Elemen
           >
             Done
           </button>
-        </div>
-      )}
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Drop veil — the whole page is the dropzone */}
-      {dragging && (
-        <div className="drop-veil">
-          <div className="drop-veil-card">
-            <Icon name="upload" size={26} />
-            <div className="drop-veil-title">Drop to add to {uploadTargetLabel}</div>
-            <div className="drop-veil-sub">files upload straight to storage — keep working while they run</div>
-          </div>
-        </div>
-      )}
+      <AnimatePresence>
+        {dragging && (
+          <motion.div
+            className="drop-veil"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={veilT}
+          >
+            <motion.div
+              className="drop-veil-card"
+              initial={{ opacity: 0, scale: 0.96 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.96 }}
+              transition={veilT}
+            >
+              <Icon name="upload" size={26} />
+              <div className="drop-veil-title">Drop to add to {uploadTargetLabel}</div>
+              <div className="drop-veil-sub">files upload straight to storage — keep working while they run</div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Dialogs + preview */}
       {uploadOpen && (
@@ -551,8 +579,9 @@ export function MediaTab({ projectId }: { projectId: string }): React.JSX.Elemen
           onClose={() => setManageOpen(false)}
         />
       )}
-      {lbItems.length > 0 && view.file && (
-        <Lightbox
+      <AnimatePresence>
+        {lbItems.length > 0 && view.file && (
+          <Lightbox
           items={lbItems}
           index={Math.max(0, lbIdx)}
           onClose={() => setView({ file: undefined })}
@@ -587,8 +616,9 @@ export function MediaTab({ projectId }: { projectId: string }): React.JSX.Elemen
                 )
               : undefined
           }
-        />
-      )}
+          />
+        )}
+      </AnimatePresence>
     </div>
   )
 }

@@ -30,7 +30,7 @@ export function Login({ viewerTokenFromLink }: { viewerTokenFromLink: string | n
   }
 
   return (
-    <div className="card letterhead">
+    <div className="card">
       <span className="eyebrow">Nexus Studio</span>
       <h1 style={{ marginBottom: 2 }}>Nexus</h1>
       <p className="muted" style={{ marginBottom: 16 }}>

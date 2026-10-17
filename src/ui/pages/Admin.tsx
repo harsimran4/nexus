@@ -465,7 +465,7 @@ function ViewersTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
           {doc.users.viewers.map((v) => (
             <div key={v.id} className={`ticket ${v.revokedAt ? 'ticket-revoked' : ''}`}>
               <div className="ticket-stub">
-                <span className="ticket-caption">Admit one</span>
+                <span className="ticket-mark" aria-hidden="true" />
                 <span className="mono faint" style={{ fontSize: 10 }}>{fmtWhen(v.createdAt)}</span>
               </div>
               <div className="ticket-body">
@@ -919,7 +919,7 @@ function MaintenanceTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
       <div className="card">
         <div className="spread mb8">
           <h2>
-            Reset workspace data <span className="admin-stamp-danger">danger</span>
+            Reset workspace data <span className="badge red" style={{ marginLeft: 8, verticalAlign: 2 }}>danger</span>
           </h2>
           <button className="btn danger" onClick={wipe}>
             Wipe workspace data

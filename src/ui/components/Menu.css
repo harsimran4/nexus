@@ -2,7 +2,8 @@
    Dropdown menu (Menu.tsx) — card overflow actions. The panel portals to
    body with position:fixed coordinates computed from the trigger (Menu.tsx
    owns them as inline styles) so no ancestor's overflow clipping can hide
-   it; this file only the look.
+   it; this file only the look. Enter/exit is a spring from the trigger
+   corner, animated by motion (Menu.tsx) — no CSS animation here.
 -------------------------------------------------------------------------- */
 
 .menu {
@@ -13,24 +14,17 @@
   position: fixed;         /* coordinates are inline styles from Menu.tsx */
   min-width: 176px;
   z-index: var(--z-modal); /* overlays inside modals, above grid cards */
-  background: var(--card);
-  border: 1px solid var(--border-strong);
+  background: var(--material-thin-bg);
+  -webkit-backdrop-filter: var(--material-thin-blur);
+  backdrop-filter: var(--material-thin-blur);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--elev-3);
   padding: 5px;
-  --menu-slide: 2px;
-  animation: menu-in var(--dur) var(--ease-out);
 }
 
 /* align="start" — left edges flush (position still inline from Menu.tsx) */
 .menu-panel.menu-start { }
-
-/* flipped above the trigger — not enough floor left under it */
-.menu-panel.menu-up { --menu-slide: -2px; }
-
-@keyframes menu-in {
-  from { opacity: 0; transform: translateY(var(--menu-slide)); }
-}
 
 .menu-item {
   display: flex; align-items: center; gap: 9px;
@@ -59,6 +53,6 @@
   padding: 6px 10px 3px;
   font-size: var(--fs-xs);
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: var(--track-caps);
   color: var(--faint);
 }

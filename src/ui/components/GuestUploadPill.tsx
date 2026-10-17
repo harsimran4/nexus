@@ -6,10 +6,12 @@
 // has uploaded recently, so the chrome stays quiet otherwise.
 
 import { useEffect, useState } from 'react'
+import { AnimatePresence, motion } from 'motion/react'
 import { uploadProgressFn } from '../../server/fns'
 import type { UploadProgressSession } from '../../types/storage'
 import { useStore } from '../../sync/store'
 import { Icon } from './Icon'
+import { useMaterialVariants } from './motion'
 
 const ACTIVE_MS = 30 * 60_000 // beacon quiet this long → the guest is gone
 
@@ -18,6 +20,9 @@ export function GuestUploadPill(): React.JSX.Element | null {
   const canWrite = !!session && (session.role === 'admin' || session.role === 'editor')
   const [sessions, setSessions] = useState<UploadProgressSession[] | null>(null)
   const [open, setOpen] = useState(false)
+  // Hooks stay above the early returns: sessions arrives async, so the hook
+  // count must not change between the empty and non-empty renders.
+  const pop = useMaterialVariants('snappy')
 
   useEffect(() => {
     if (!canWrite) return
@@ -57,6 +62,7 @@ export function GuestUploadPill(): React.JSX.Element | null {
         className={`pill guest-pill ${active.length > 0 ? 'live' : ''}`}
         onClick={() => setOpen((o) => !o)}
         title="Guest upload progress"
+        aria-expanded={open}
       >
         <Icon name="upload" size={13} />
         {active.length > 0 ? (
@@ -68,28 +74,40 @@ export function GuestUploadPill(): React.JSX.Element | null {
           <span>guest uploads</span>
         )}
       </button>
-      {open && (
-        <div className="guest-pop card" role="dialog" aria-label="Guest upload progress">
-          <div className="guest-pop-head">
-            <b>Guest uploads</b>
-            <button className="icon-btn" aria-label="Close" onClick={() => setOpen(false)}>
-              <Icon name="x" />
-            </button>
-          </div>
-          {active.map((s) => (
-            <GuestRow key={s.linkId} s={s} now={now} />
-          ))}
-          {active.length === 0 && <div className="guest-pop-none muted small">No upload in progress right now.</div>}
-          {settled.length > 0 && (
-            <>
-              <div className="guest-pop-sep faint small">recently finished</div>
-              {settled.map((s) => (
-                <GuestRow key={s.linkId} s={s} now={now} />
-              ))}
-            </>
-          )}
-        </div>
-      )}
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            className="guest-pop card"
+            role="dialog"
+            aria-label="Guest upload progress"
+            style={{ transformOrigin: 'top right' }}
+            variants={pop.variants}
+            initial="hidden"
+            animate="shown"
+            exit="exit"
+            transition={pop.transition}
+          >
+            <div className="guest-pop-head">
+              <b>Guest uploads</b>
+              <button className="icon-btn" aria-label="Close" onClick={() => setOpen(false)}>
+                <Icon name="x" />
+              </button>
+            </div>
+            {active.map((s) => (
+              <GuestRow key={s.linkId} s={s} now={now} />
+            ))}
+            {active.length === 0 && <div className="guest-pop-none muted small">No upload in progress right now.</div>}
+            {settled.length > 0 && (
+              <>
+                <div className="guest-pop-sep faint small">recently finished</div>
+                {settled.map((s) => (
+                  <GuestRow key={s.linkId} s={s} now={now} />
+                ))}
+              </>
+            )}
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

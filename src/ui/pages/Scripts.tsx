@@ -474,12 +474,12 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
           </div>
           {preview ? (
             <div
-              className="input manuscript md-preview"
+              className="input md-preview"
               dangerouslySetInnerHTML={{ __html: renderMarkdown(body) }}
             />
           ) : (
             <textarea
-              className="input manuscript"
+              className="input"
               rows={14}
               value={loaded ? body : ''}
               placeholder={loaded ? 'Write the script…' : 'Loading…'}

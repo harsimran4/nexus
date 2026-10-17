@@ -248,7 +248,7 @@ export function UploadLinkPage({ token }: { token: string }): React.JSX.Element 
               </p>
             )}
             {verify === 'unverified' && (
-              <p className="small" style={{ margin: '2px 0', color: 'var(--warn, #b45309)' }}>
+              <p className="small" style={{ margin: '2px 0', color: 'var(--amber)' }}>
                 Uploaded — but we couldn't run the final check. Your files are safe; the sender can confirm them in a moment.
                 <button className="btn ghost small" style={{ marginLeft: 8 }} onClick={recheck} disabled={busy}>
                   Check again
@@ -289,7 +289,7 @@ export function UploadLinkPage({ token }: { token: string }): React.JSX.Element 
             }}
           >
             <div style={{ fontSize: 15 }}>Tap to choose files</div>
-            <div className="faint" style={{ fontFamily: 'var(--serif)', fontStyle: 'italic', fontSize: 12.5, marginTop: 4 }}>
+            <div className="faint" style={{ fontSize: 12.5, marginTop: 4 }}>
               or drop them here — they upload straight to {info.sectionName ?? 'the project'} in the background
             </div>
           </div>

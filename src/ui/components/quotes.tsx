@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 
 // ---------------------------------------------------------------------------
-// Page quotes — one quiet serif line per section, picked fresh each visit.
+// Page quotes — one quiet line per section, picked fresh each visit.
 // ---------------------------------------------------------------------------
 
 const QUOTES: Record<string, { text: string; by: string }[]> = {

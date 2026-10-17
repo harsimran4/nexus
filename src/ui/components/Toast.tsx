@@ -1,6 +1,8 @@
 import { useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Icon } from './Icon'
+import { useOverlayTransition } from './motion'
 
 /** Lightweight receipt system: toast = receipt (auto-dismisses), banner =
  *  persistent condition. Module store — no provider; call `toast()` from
@@ -60,36 +62,49 @@ const TONE_ICON = { success: 'check', error: 'alert', info: 'clock' } as const
 
 export function ToastViewport(): React.JSX.Element | null {
   const list = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
+  const reduce = useReducedMotion()
+  const transition = useOverlayTransition('snappy')
   if (typeof document === 'undefined') return null
   // The viewport mounts EMPTY and stays mounted: a live region that appears
   // together with its first message is routinely skipped by screen readers.
   return createPortal(
     <div className="toast-viewport" role="status" aria-live="polite">
-      {list.map((t) => (
-        <div key={t.id} className={`toast toast-${t.tone}`} role={t.tone === 'error' ? 'alert' : undefined}>
-          <span className="toast-ic">
-            <Icon name={TONE_ICON[t.tone]} size={14} />
-          </span>
-          <div className="toast-body">
-            <span>{t.msg}</span>
-            {t.fix && <div className="toast-fix">{t.fix}</div>}
-            {t.action && (
-              <button
-                className="toast-action"
-                onClick={() => {
-                  t.action?.onClick()
-                  dismiss(t.id)
-                }}
-              >
-                {t.action.label}
-              </button>
-            )}
-          </div>
-          <button className="toast-x" aria-label="Dismiss" onClick={() => dismiss(t.id)}>
-            <Icon name="x" size={13} />
-          </button>
-        </div>
-      ))}
+      <AnimatePresence initial={false}>
+        {list.map((t) => (
+          <motion.div
+            key={t.id}
+            className={`toast toast-${t.tone}`}
+            role={t.tone === 'error' ? 'alert' : undefined}
+            /* receipts drop in from the top edge and leave the same way */
+            initial={reduce ? { opacity: 0 } : { opacity: 0, y: -8, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={reduce ? { opacity: 0 } : { opacity: 0, y: -8, scale: 0.97 }}
+            transition={transition}
+          >
+            <span className="toast-ic">
+              <Icon name={TONE_ICON[t.tone]} size={14} />
+            </span>
+            <div className="toast-body">
+              <span>{t.msg}</span>
+              {t.fix && <div className="toast-fix">{t.fix}</div>}
+              {t.action && (
+                <button
+                  className="toast-action"
+                  onClick={() => {
+                    t.action?.onClick()
+                    dismiss(t.id)
+                  }}
+                >
+                  {t.action.label}
+                </button>
+              )}
+            </div>
+            <button className="toast-x" aria-label="Dismiss" onClick={() => dismiss(t.id)}>
+              <Icon name="x" size={13} />
+            </button>
+          </motion.div>
+        ))}
+      </AnimatePresence>
     </div>,
     document.body,
   )
