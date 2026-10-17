@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { Icon } from './Icon'
@@ -64,9 +64,16 @@ export function ToastViewport(): React.JSX.Element | null {
   const list = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot)
   const reduce = useReducedMotion()
   const transition = useOverlayTransition('snappy')
-  if (typeof document === 'undefined') return null
-  // The viewport mounts EMPTY and stays mounted: a live region that appears
-  // together with its first message is routinely skipped by screen readers.
+  // The viewport must NOT render during SSR or hydration: a `typeof document`
+  // branch here (server null, client div) is a hydration mismatch that fails
+  // the WHOLE tree and regenerates it client-side — which is what used to
+  // wipe html[data-theme] and flip dark mode off on every full load. Instead
+  // the viewport appears right after mount — long before any toast can
+  // exist (they're user-triggered), so the live region still precedes its
+  // first message for screen readers.
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
+  if (!mounted) return null
   return createPortal(
     <div className="toast-viewport" role="status" aria-live="polite">
       <AnimatePresence initial={false}>

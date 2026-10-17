@@ -52,12 +52,13 @@ function RootComponent(): ReactNode {
       <head>
         {/* Apply the stored theme BEFORE first paint (no flash of the wrong
             theme). Inline here rather than via head.scripts — the prerendered
-            production shell drops head.scripts entries (dev renders them),
-            which is why full page loads used to fall back to light. Also sets
-            style.colorScheme explicitly: hydration would otherwise rewrite
-            the color-scheme META back to its light default (HeadContent owns
-            that meta), leaving native controls in the wrong scheme until the
-            toggle ran. */}
+            production shell drops head.scripts entries (dev renders them).
+            style.colorScheme is set explicitly too: HeadContent owns the
+            color-scheme META and would rewrite it to its light default.
+            suppressHydrationWarning on <html> keeps hydration from stripping
+            data-theme — which works now that the tree actually hydrates (the
+            ToastViewport server/client branch used to fail hydration and
+            regenerate the whole tree, resetting these attributes). */}
         <script
           dangerouslySetInnerHTML={{
             __html:
