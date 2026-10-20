@@ -183,7 +183,11 @@ async function up() {
 
   console.log('[e2e] starting wrangler dev…')
   // SESSION_SECRET must be stable across the run (HMAC tokens). --var works
-  // for every binding in dev, so no .dev.vars is needed (or touched).
+  // for every binding in dev, so no .dev.vars is needed (or touched). The S3
+  // credentials MUST be passed too: locally .dev.vars happens to supply real
+  // ones, but CI has no .dev.vars (it holds real secrets) and the worker's
+  // S3 client then had no accessKeyId (CI run 39466536896). fake-s3 ignores
+  // signatures — anything works.
   const secret = process.env.E2E_SESSION_SECRET ?? crypto.randomBytes(32).toString('base64')
   const wrangler = spawn(process.execPath, [
     WRANGLER_ENTRY,
@@ -196,6 +200,10 @@ async function up() {
     'OCI_S3_BUCKET:nexus',
     '--var',
     'OCI_S3_REGION:e2e',
+    '--var',
+    'OCI_S3_ACCESS_KEY_ID:e2e-fake-key',
+    '--var',
+    'OCI_S3_SECRET_ACCESS_KEY:e2e-fake-secret',
     '--var',
     `SESSION_SECRET:${secret}`,
     '--var',
