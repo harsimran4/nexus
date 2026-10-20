@@ -1,13 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../../../sync/store'
 import { Empty } from '../../components'
-import { canWrite } from '../../../auth/session'
+import { useCanWrite } from '../../../auth/session'
 import { readScriptBody, updateScript } from '../../../state/actions'
 
 /** Scripts assigned to this project — read in place, link/unlink. */
 export function ScriptsTab({ projectId }: { projectId: string }): React.JSX.Element {
   const doc = useStore((s) => s.doc)
-  const writable = canWrite()
+  const writable = useCanWrite()
   const [openScript, setOpenScript] = useState<string | null>(null)
   const [bodies, setBodies] = useState<Record<string, string | null>>({})
 

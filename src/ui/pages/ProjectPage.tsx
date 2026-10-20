@@ -1,6 +1,6 @@
 import { useStore } from '../../sync/store'
 import { Empty, PageQuote } from '../components'
-import { canWrite } from '../../auth/session'
+import { useCanWrite } from '../../auth/session'
 import { setProjectStatus, updateProject } from '../../state/actions'
 import { groupColorMap } from '../../util/groups'
 import { useMediaView } from './project/mediaView'
@@ -8,15 +8,18 @@ import { MediaTab } from './project/MediaTab'
 import { RefsTab } from './project/RefsTab'
 import { ScriptsTab } from './project/ScriptsTab'
 import { SettingsTab } from './project/SettingsTab'
+import { DiscussionTab } from './project/DiscussionTab'
 
-const TABS: { id: 'media' | 'scripts' | 'refs' | 'settings'; label: string }[] = [
+const TABS: { id: 'media' | 'scripts' | 'refs' | 'discussion' | 'settings'; label: string }[] = [
   { id: 'media', label: 'Media' },
   { id: 'scripts', label: 'Scripts' },
   { id: 'refs', label: 'References' },
+  { id: 'discussion', label: 'Discussion' },
   { id: 'settings', label: 'Settings' },
 ]
 
 export function ProjectPage({ projectId }: { projectId: string }): React.JSX.Element {
+  const writable = useCanWrite()
   const doc = useStore((s) => s.doc)
   const { view, setTab } = useMediaView()
   const project = doc?.projects[projectId]
@@ -53,7 +56,7 @@ export function ProjectPage({ projectId }: { projectId: string }): React.JSX.Ele
         <select
           className="input project-head-status"
           value={project.status}
-          disabled={!canWrite()}
+          disabled={!writable}
           onChange={(e) => setProjectStatus(projectId, e.target.value)}
           aria-label="Project status"
         >
@@ -73,6 +76,7 @@ export function ProjectPage({ projectId }: { projectId: string }): React.JSX.Ele
       {view.tab === 'media' && <MediaTab projectId={projectId} />}
       {view.tab === 'scripts' && <ScriptsTab projectId={projectId} />}
       {view.tab === 'refs' && <RefsTab projectId={projectId} />}
+      {view.tab === 'discussion' && <DiscussionTab projectId={projectId} />}
       {view.tab === 'settings' && <SettingsTab projectId={projectId} />}
     </div>
   )
@@ -83,7 +87,7 @@ export function ProjectPage({ projectId }: { projectId: string }): React.JSX.Ele
  *  `size` (not CSS) gives the input its intrinsic width so the plate hugs
  *  short names and gives up space gracefully when the row gets tight. */
 function NameEditor({ projectId, name }: { projectId: string; name: string }): React.JSX.Element {
-  const writable = canWrite()
+  const writable = useCanWrite()
   return (
     <div className="project-tab">
       <input

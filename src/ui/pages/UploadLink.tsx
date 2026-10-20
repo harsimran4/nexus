@@ -55,6 +55,9 @@ export function UploadLinkPage({ token }: { token: string }): React.JSX.Element 
   // Beacons read counters from a ref — setState inside uploadOne already
   // re-renders the roster; the beacon must not depend on React timing.
   const countsRef = useRef({ total: 0, done: 0, failed: 0 })
+  // Keys of everything that landed — the FINAL beacon carries them so the
+  // worker can run the verify/repair pass server-side even if this tab dies.
+  const keysRef = useRef<string[]>([])
   const lastBeaconAt = useRef(0)
 
   useEffect(() => {
@@ -87,7 +90,9 @@ export function UploadLinkPage({ token }: { token: string }): React.JSX.Element 
   }
 
   /** Coarse progress for the owner's live pill — fire-and-forget, throttled;
-   *  a dropped beacon must never affect the upload. */
+   *  a dropped beacon must never affect the upload. The final 'complete'
+   *  beacon carries the batch's keys so the worker can run the repair pass
+   *  server-side even if this tab never gets the chance. */
   const beacon = (state?: 'complete' | 'failed'): void => {
     const now = Date.now()
     if (!state && now - lastBeaconAt.current < 4000) return
@@ -95,7 +100,11 @@ export function UploadLinkPage({ token }: { token: string }): React.JSX.Element 
     void fetch('/api/upload/progress', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-      body: JSON.stringify({ ...countsRef.current, state: state ?? 'active' }),
+      body: JSON.stringify({
+        ...countsRef.current,
+        state: state ?? 'active',
+        ...(state === 'complete' ? { keys: keysRef.current } : {}),
+      }),
     }).catch(() => {})
   }
 
@@ -153,6 +162,7 @@ export function UploadLinkPage({ token }: { token: string }): React.JSX.Element 
     try {
       const meta = await uploadFile(info.folderId, file, (pct) => patch(i, { pct }), { authToken: token })
       countsRef.current.done += 1
+      keysRef.current.push(meta.id)
       beacon()
       patch(i, { pct: 100, done: true, ok: true, key: meta.id })
     } catch (e) {
@@ -167,6 +177,7 @@ export function UploadLinkPage({ token }: { token: string }): React.JSX.Element 
     setBusy(true)
     filesRef.current = files
     countsRef.current = { total: files.length, done: 0, failed: 0 }
+    keysRef.current = []
     setVerify('idle')
     setRepaired(0)
     setRoster(files.map((f) => ({ name: f.name, pct: 0, started: false, done: false })))

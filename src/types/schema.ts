@@ -23,11 +23,19 @@ export const pipelineEntrySchema = z.object({
 
 export const syncSettingsSchema = z.object({
   debounceMs: z.number().int().min(250).default(2500),
-  pollMs: z.number().int().min(2000).default(10_000),
+  pollMs: z.number().int().min(2000).default(30_000),
   tombstoneGcDays: z.number().int().min(7).default(90),
   snapshotKeep: z.number().int().min(3).default(30),
   maxDocBytes: z.number().int().min(100_000).default(4_000_000),
 })
+
+// Activity ring sizes — the ONE source of truth. The doc keeps the most
+// recent RING events after a merge; a session buffers up to BUFFER events
+// locally before its next sync, so a long offline stretch doesn't lose
+// history. Two different numbers on purpose — but defined together, because
+// they were previously duplicated (300 / 1500) across three files.
+export const ACTIVITY_RING_CAP = 300
+export const ACTIVITY_LOCAL_BUFFER = 1500
 
 export const settingsSchema = z
   .object({
@@ -114,6 +122,9 @@ export const projectSchema = stampsSchema.extend({
   assigneeAppId: z.string().nullable().default(null),
   dueAt: z.string().nullable().default(null),
   notes: z.string().default(''),
+  // P7 approval state — a single-slot LWW field on the project (last approval
+  // wins is the correct semantics; names resolve from users at render).
+  approved: z.object({ at: z.string(), by: z.string() }).nullable().default(null),
 })
 export type Project = z.infer<typeof projectSchema>
 
@@ -191,6 +202,9 @@ export const viewerSchema = z.object({
   createdBy: z.string().default('bootstrap'),
   revokedAt: z.string().nullable().default(null),
   note: z.string().default(''),
+  // P8 scope: '' = the whole workspace; otherwise ONE project id — the share
+  // link serves only that project, enforced server-side (scoped queries).
+  scope: z.string().default(''),
   updatedAt: z.string().optional(), // LWW stamps (merge.ts)
   writerId: z.string().optional(),
 })
@@ -235,6 +249,22 @@ export const refSchema = z.object({
 })
 export type Ref = z.infer<typeof refSchema>
 
+/** Project discussion comment (P7). A TOP-LEVEL array exactly like refs —
+ *  embedding a thread on the project would let one writer's whole-project LWW
+ *  clobber everyone else's comments landing in the same window. Per-entry LWW
+ *  in sync/merge.ts; soft delete hides the row but keeps the audit trail. */
+export const commentSchema = z.object({
+  id: z.string(), // "cmt_…"
+  projectId: z.string(),
+  body: z.string().min(1),
+  by: z.string(), // session actor id (display name resolves from users at render)
+  createdAt: z.string(), // HLC
+  updatedAt: z.string().optional(), // LWW stamps (merge.ts)
+  writerId: z.string().optional(),
+  deleted: deletedSchema,
+})
+export type Comment = z.infer<typeof commentSchema>
+
 export const usersSchema = z
   .object({
     app: z.array(appUserSchema).default([]),
@@ -268,6 +298,7 @@ export const nexusDocSchema = z.object({
   settings: settingsSchema,
   uploadLinks: z.array(uploadLinkSchema).default([]),
   refs: z.array(refSchema).default([]),
+  comments: z.array(commentSchema).default([]),
   groups: z.record(z.string(), groupSchema).default({}),
   projects: z.record(z.string(), projectSchema).default({}),
   scripts: z.record(z.string(), scriptSchema).default({}),

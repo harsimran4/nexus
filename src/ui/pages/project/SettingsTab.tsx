@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useStore } from '../../../sync/store'
 import { confirmDialog } from '../../components/ConfirmDialog'
 import { useDebouncedCommit } from '../../components'
-import { canWrite } from '../../../auth/session'
+import { useCanWrite } from '../../../auth/session'
 import { updateProject } from '../../../state/actions'
 import { touch } from '../../../sync/writer'
 import { navigate } from '../../../nav'
@@ -10,7 +10,7 @@ import { navigate } from '../../../nav'
 /** Project settings: assignee, due date, group, labels, notes, danger zone. */
 export function SettingsTab({ projectId }: { projectId: string }): React.JSX.Element {
   const doc = useStore((s) => s.doc)
-  const writable = canWrite()
+  const writable = useCanWrite()
   const [labelInput, setLabelInput] = useState('')
   const commitNotesDebounced = useDebouncedCommit(800)
   const project = doc?.projects[projectId]

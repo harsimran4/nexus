@@ -1,0 +1,215 @@
+/* GENERATED — do not edit. Copied from src/ui/tokens.css by
+   scripts/sync-welcome-tokens.mjs; run the build to refresh. */
+
+/* ---------------------------------------------------------------------------
+   Nexus design tokens — primitives + semantic values.
+
+   Primitives (space/type/radius/z/motion) are the scales everything new code
+   uses. Semantic tokens are where the LOOK lives: a future direction pass
+   edits this file, not the component CSS. styles.css consumes both; dark
+   values override under [data-theme='dark'].
+
+   Current direction: quiet neutral materials — light/dark parity, translucent
+   chrome over content (materials), depth by elevation scale, size-specific
+   type tracking, one brand accent for action.
+-------------------------------------------------------------------------- */
+
+:root {
+  /* UA chrome follows the theme from CSS — not the color-scheme meta, which
+     hydration would rewrite back to its light default (see __root.tsx) */
+  color-scheme: light;
+
+  /* ---- primitives: spacing (4/8 grid) ---- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* ---- primitives: type scale + weights ---- */
+  --fs-xs: 11.5px;
+  --fs-sm: 12.5px;
+  --fs-md: 13.5px;
+  --fs-base: 14.5px;
+  --fs-lg: 15px;
+  --fs-xl: 18px;
+  --fs-2xl: 26px;
+  --fs-3xl: 32px;
+  --fw-regular: 400;
+  --fw-medium: 550;
+  --fw-semibold: 650;
+
+  /* ---- primitives: type detail (tracking is size-specific — never one
+         value everywhere; leading tightens as size grows) ---- */
+  --track-display: -0.022em;  /* 26px+ display text reads too loose untracked */
+  --track-snug: -0.011em;     /* titles / large controls */
+  --track-body: 0em;          /* body copy near zero */
+  --track-label: 0.01em;      /* small labeled UI */
+  --track-caps: 0.06em;       /* uppercase micro-labels, th, badges */
+  --leading-display: 1.12;
+  --leading-title: 1.25;
+  --leading-body: 1.5;
+
+  /* ---- primitives: radius ---- */
+  --radius-xs: 4px;
+  --radius-sm: 7px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+
+  /* ---- primitives: z-index ladder (one layering, documented) ---- */
+  --z-card-hover: 2;   /* hovered/raised cards inside a stacking context */
+  --z-topbar: 40;      /* mobile sticky top bar */
+  --z-tray: 45;        /* floating selection tray + upload tile */
+  --z-modal: 50;       /* modal backdrop + dialog */
+  --z-backdrop: 55;    /* mobile drawer backdrop */
+  --z-drawer: 60;      /* mobile drawer */
+  --z-lightbox: 80;    /* media viewer — above all chrome */
+  --z-toast: 90;       /* toasts — visible over the lightbox too */
+
+  /* ---- primitives: motion ----
+     CSS keeps short opacity/transform transitions; JS springs (motion.tsx)
+     own the interruptible overlay enter/exit. --ease-spring is the CSS
+     approximation of a critically-damped spring for the drawer. */
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --dur-slow: 320ms;
+  --dur-reduce: 160ms;         /* reduced-motion cross-fades */
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);       /* mirrored exits */
+  --ease-spring: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* ---- semantic: color (neutral surfaces, one accent) ---- */
+  --paper: #f5f5f7;
+  --paper-raised: #ebebed;
+  --card: #ffffff;
+  --panel: #f7f7f8;
+  --panel-2: #f0f0f1;
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.16);
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --faint: #a1a1a6;
+  --accent: #bf5619;          /* brand orange — actions & doing */
+  --accent-strong: #a04413;
+  --accent-dim: rgba(191, 86, 25, 0.1);
+  --green: #217a41;           /* done / healthy */
+  --green-dim: rgba(33, 122, 65, 0.12);
+  --amber: #9a6a00;           /* review / queued */
+  --amber-dim: rgba(154, 106, 0, 0.12);
+  --red: #d0342c;             /* danger / overdue */
+  --red-dim: rgba(208, 52, 44, 0.1);
+
+  /* ---- semantic: materials (translucency = hierarchy; heavier = structural.
+         Never stack a light material on another light material.) ---- */
+  --material-thin-bg: rgba(255, 255, 255, 0.72);
+  --material-thin-blur: blur(20px) saturate(1.8);
+  --material-regular-bg: rgba(255, 255, 255, 0.78);
+  --material-regular-blur: blur(30px) saturate(1.8);
+  --material-thick-bg: rgba(255, 255, 255, 0.86);
+  --material-thick-blur: blur(40px) saturate(1.8);
+
+  /* ---- semantic: elevation (bigger surface = deeper shadow) ---- */
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.04);
+  --elev-2: 0 2px 4px rgba(0, 0, 0, 0.05), 0 8px 20px rgba(0, 0, 0, 0.07);
+  --elev-3: 0 4px 10px rgba(0, 0, 0, 0.08), 0 16px 40px rgba(0, 0, 0, 0.12);
+  --elev-4: 0 8px 20px rgba(0, 0, 0, 0.10), 0 28px 64px rgba(0, 0, 0, 0.16);
+
+  /* ---- semantic: derived surfaces & effects ---- */
+  --bg: var(--paper);              /* legacy alias — was referenced but undefined */
+  --bg-raised: var(--paper-raised);/* legacy alias — was referenced but undefined */
+  --surface-thumb: var(--panel-2); /* thumb wells / skeleton ground */
+  --backdrop: rgba(0, 0, 0, 0.35);         /* modal backdrop */
+  --scrim: rgba(0, 0, 0, 0.75);            /* lightbox ground */
+  /* legacy aliases — existing consumers reskin for free */
+  --shadow: var(--elev-1);
+  --shadow-lg: var(--elev-3);
+  --focus-ring: 0 0 0 2px var(--paper), 0 0 0 4px var(--accent);
+
+  /* group identity shades — consumed as soft washes (color-mix into --card)
+     and as solid dots; one shade per group, chosen in the group dialog */
+  --sticky-wash-pct: 26%;
+  --sticky-1: #f2d16b;
+  --sticky-2: #9fd3a8;
+  --sticky-3: #f0a8a0;
+  --sticky-4: #a3c6ec;
+  --sticky-5: #bfb3e8;
+  --sticky-6: #8fd0c6;
+  --sticky-7: #f0b784;
+  --sticky-8: #c2d49b;
+
+  /* ---- fonts (platform system stack carries the whole voice) ---- */
+  --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --mono: ui-monospace, 'Cascadia Code', 'SF Mono', Consolas, monospace;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --paper: #131315;
+  --paper-raised: #1a1a1d;
+  --card: #1e1e20;
+  --panel: #242427;
+  --panel-2: #2c2c30;
+  --border: rgba(255, 255, 255, 0.10);
+  --border-strong: rgba(255, 255, 255, 0.18);
+  --text: #f5f5f7;
+  --muted: #a1a1a6;
+  --faint: #6e6e73;
+  --accent: #ef8b4a;
+  --accent-strong: #f4a26a;
+  --accent-dim: rgba(239, 139, 74, 0.16);
+  --green: #6cc08b;
+  --green-dim: rgba(108, 192, 139, 0.16);
+  --amber: #dca536;
+  --amber-dim: rgba(220, 165, 54, 0.16);
+  --red: #f66b60;
+  --red-dim: rgba(246, 107, 96, 0.14);
+
+  --material-thin-bg: rgba(28, 28, 30, 0.62);
+  --material-regular-bg: rgba(28, 28, 30, 0.72);
+  --material-thick-bg: rgba(24, 24, 26, 0.82);
+
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 8px rgba(0, 0, 0, 0.25);
+  --elev-2: 0 2px 4px rgba(0, 0, 0, 0.35), 0 8px 20px rgba(0, 0, 0, 0.35);
+  --elev-3: 0 4px 10px rgba(0, 0, 0, 0.4), 0 16px 40px rgba(0, 0, 0, 0.45);
+  --elev-4: 0 8px 20px rgba(0, 0, 0, 0.5), 0 28px 64px rgba(0, 0, 0, 0.55);
+
+  --backdrop: rgba(0, 0, 0, 0.5);
+  --scrim: rgba(0, 0, 0, 0.85);
+
+  --sticky-wash-pct: 40%;
+  --sticky-1: #4d4520;
+  --sticky-2: #2f4d38;
+  --sticky-3: #55342e;
+  --sticky-4: #2c4257;
+  --sticky-5: #423760;
+  --sticky-6: #2b4f49;
+  --sticky-7: #54391f;
+  --sticky-8: #454f2a;
+}
+
+/* ---- accessibility overrides --------------------------------------------
+   Reduced transparency: frost becomes solid — materials map to opaque
+   surfaces, blur drops. Increased contrast: hairlines strengthen. */
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  [data-theme='dark'] {
+    --material-thin-bg: var(--card);
+    --material-regular-bg: var(--card);
+    --material-thick-bg: var(--panel);
+    --material-thin-blur: none;
+    --material-regular-blur: none;
+    --material-thick-blur: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  :root,
+  [data-theme='dark'] {
+    --border: var(--muted);
+    --border-strong: var(--muted);
+  }
+}

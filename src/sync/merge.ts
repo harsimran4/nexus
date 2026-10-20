@@ -17,11 +17,11 @@
 
 import { compareHlc, lwwWinner } from '../util/hlc'
 import type { ActivityEvent, NexusDoc, Tombstone } from '../types/schema'
+import { ACTIVITY_RING_CAP as RING_CAP } from '../types/schema'
 
 // Activity ring: the fastest-growing section of the doc (every action logs an
-// event, and each edit re-uploads the whole file). 300 recent events is ample
-// history for the feed while keeping nexus.json lean.
-const RING_CAP = 300
+// event, and each edit re-uploads the whole file). The ring cap lives in
+// schema.ts next to its local-buffer sibling — one source of truth.
 
 function isRec(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
@@ -175,6 +175,10 @@ export function mergeRemote(input: MergeInput): { merged: NexusDoc; undeletes: A
   // rebase, because the merged-doc literal below overrides the spread).
   const refs = mergeUsers(local.refs ?? [], remote.refs ?? [], [])
 
+  // comments: per-entry LWW, same reasoning — two people commenting on the
+  // same project in the same window must BOTH land.
+  const comments = mergeUsers(local.comments ?? [], remote.comments ?? [], [])
+
   // tombstones: union by (type,id), newest wins
   const tombMap = new Map<string, Tombstone>()
   for (const t of [...remote.tombstones, ...local.tombstones]) {
@@ -205,6 +209,7 @@ export function mergeRemote(input: MergeInput): { merged: NexusDoc; undeletes: A
     settings: settingsWinner,
     uploadLinks,
     refs,
+    comments,
     groups,
     projects,
     scripts,

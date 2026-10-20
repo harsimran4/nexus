@@ -2,12 +2,14 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useStore, storeGet } from '../../sync/store'
 import { SCRIPT_STATUSES, type Script, type ScriptStatus } from '../../types/schema'
 import { compareHlc, decodeHlc } from '../../util/hlc'
-import { canWrite } from '../../auth/session'
+import { canWrite, useCanWrite } from '../../auth/session'
 import { createScript, deleteScript, readScriptBody, saveScriptBody, setScriptStatus, updateScript } from '../../state/actions'
 import { clearScriptDraft, loadScriptDraft, saveScriptDraft } from '../../sync/drafts'
+import { consumeScriptRequest, subscribe as subscribeScriptRequests } from '../../state/navBus'
 import { renderMarkdown } from '../../util/markdown'
 import { downloadToBrowser, describeError } from '../../drive/preview'
 import { Empty, Icon, Modal, banner, PageQuote, confirmDialog, confirmIsOpen, toast } from '../components'
+import { ScriptDiffModal } from './ScriptDiffModal'
 
 // Scripts run on their own draft → review → final ladder (not the item
 // pipeline). Badges reuse the bucket palette: muted / amber / green.
@@ -34,6 +36,16 @@ export function Scripts(): React.JSX.Element {
   const [statusFilter, setStatusFilter] = useState<ScriptStatus | 'all'>('all')
   const listRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+
+  // ⌘K palette deep-links: open the requested script on arrival.
+  useEffect(
+    () =>
+      subscribeScriptRequests(() => {
+        const id = consumeScriptRequest()
+        if (id) setSelectedId(id)
+      }),
+    [],
+  )
 
   const scripts = useMemo(() => {
     if (!doc) return []
@@ -64,7 +76,7 @@ export function Scripts(): React.JSX.Element {
 
   if (!doc) return <></>
 
-  const writable = canWrite()
+  const writable = useCanWrite()
   const active =
     selectedId !== null && doc.scripts[selectedId]?.deleted === null ? doc.scripts[selectedId] : null
   const isFiltering = query.trim() !== '' || statusFilter !== 'all'
@@ -251,6 +263,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
   const [saveError, setSaveError] = useState<string | null>(null)
   const [statusBusy, setStatusBusy] = useState(false)
   const [preview, setPreview] = useState(false)
+  const [diffCopy, setDiffCopy] = useState<{ label: string; fileId: string } | null>(null)
   const draftSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const id = script.id
 
@@ -329,7 +342,7 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
 
   if (!doc) return <></>
 
-  const writable = canWrite()
+  const writable = useCanWrite()
   // Scripts link to a PROJECT (one piece of content); picking one also sets
   // the group so the script's group assignment follows automatically.
   const projects = Object.values(doc.projects)
@@ -508,6 +521,9 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
           <div key={`${c.fileId}-${c.at}`} className="script-copy small">
             <span className="row">
               <span className={`badge ${c.label === 'final' ? 'done' : 'doing'}`}>{c.label}</span>
+              <button className="btn ghost small" onClick={() => setDiffCopy({ label: c.label, fileId: c.fileId })}>
+                Diff vs current
+              </button>
               <button
                 className="btn ghost small"
                 onClick={() =>
@@ -525,6 +541,15 @@ function ScriptEditor({ script, onDeleted }: { script: Script; onDeleted: () => 
           </div>
         ))}
       </div>
+
+      {diffCopy && (
+        <ScriptDiffModal
+          copyLabel={diffCopy.label}
+          fileId={diffCopy.fileId}
+          currentBody={body}
+          onClose={() => setDiffCopy(null)}
+        />
+      )}
 
       <div className="row spread mt16 script-foot">
         <span className="small muted">Updated {fmt(script.updatedAt)}</span>
@@ -546,7 +571,7 @@ function NewScriptModal({
   onCreated: (id: string) => void
 }): React.JSX.Element {
   const [title, setTitle] = useState('')
-  const writable = canWrite()
+  const writable = useCanWrite()
 
   const create = () => {
     const t = title.trim()

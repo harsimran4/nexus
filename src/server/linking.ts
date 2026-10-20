@@ -25,6 +25,7 @@
 //      residual (guest closed the tab before repair — bytes are orphans).
 
 import { hlcNow } from '../util/hlc'
+import { ACTIVITY_LOCAL_BUFFER } from '../types/schema'
 import { DOC_KEY } from './keys'
 import { config } from '../config'
 
@@ -63,6 +64,20 @@ export async function linkUploadedFiles(infos: UploadLinkInfo[]): Promise<LinkRe
   const auth = await import('./auth')
   const { parseDoc } = await import('../types/schema')
 
+  // STAGE 2: the doc is derived from D1 — link as SQL (INSERT OR IGNORE is
+  // atomic; the whole verify-then-write CAS dance below exists only because
+  // the doc-era write couldn't be). Resolution still reads the doc (it is
+  // kept true by write-through); the WRITE lands in D1, then write-through.
+  try {
+    const { env } = await import('cloudflare:workers')
+    if (env.DB) {
+      const apply = await import('./d1/apply')
+      if ((await apply.readStage(env.DB)) === 2) return linkViaD1(env.DB, infos)
+    }
+  } catch {
+    /* no binding or D1 hiccup → fall through to the doc-era path */
+  }
+
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     if (attempt > 0) await sleep(backoffMs(attempt))
     const before = await s3.head(DOC_KEY)
@@ -76,6 +91,10 @@ export async function linkUploadedFiles(infos: UploadLinkInfo[]): Promise<LinkRe
       throw new Error(`Workspace written by a newer Nexus (schema ${parsed.doc.schema}) — link skipped`)
     }
     const doc = parsed.doc
+    // P4 shadow: pristine pre-mutation snapshot — the mutations below happen
+    // IN PLACE on `doc`, and mirrorDocChange's rev-equal guard would see
+    // prev.rev === next.rev and silently skip the transition otherwise.
+    const docBefore = structuredClone(doc)
 
     // Exact id preferred; else the project whose folder prefix owns the key
     // (longest prefix wins — prefixes are nested groups/<gid>/<pid>/). The
@@ -112,7 +131,10 @@ export async function linkUploadedFiles(infos: UploadLinkInfo[]): Promise<LinkRe
         }
       }
     }
-    if (!changed) return { outcome: 'already-linked', added: 0 }
+    if (!changed) {
+      console.log(`[upload-link] ${infos[0].key}: already-linked (attempt ${attempt})`)
+      return { outcome: 'already-linked', added: 0 }
+    }
     project.fileIds = [...have]
 
     const stamp = hlcNow()
@@ -130,7 +152,7 @@ export async function linkUploadedFiles(infos: UploadLinkInfo[]): Promise<LinkRe
         ref: project.id,
         meta: { fileId: info.key, fileName: info.fileName ?? null, sectionId: info.sectionId ?? null, via: 'upload' },
       })),
-    ].slice(-1500)
+    ].slice(-ACTIVITY_LOCAL_BUFFER)
 
     // CAS on EVERY attempt: if another writer landed between our read and
     // now, re-read and re-apply — the links are idempotent so the retry
@@ -149,14 +171,99 @@ export async function linkUploadedFiles(infos: UploadLinkInfo[]): Promise<LinkRe
     try {
       const verifyDoc = JSON.parse(await s3.getText(DOC_KEY)) as { projects?: Record<string, { fileIds?: string[] }> }
       const verifyIds = verifyDoc.projects?.[project.id]?.fileIds ?? []
-      if (infos.every((info) => verifyIds.includes(info.key))) return { outcome: 'linked', added }
+      if (infos.every((info) => verifyIds.includes(info.key))) {
+        // P4 shadow: mirror the confirmed transition. verifyDoc is the doc AS
+        // IT NOW STANDS (ours + any peer writes that landed meanwhile), so the
+        // mirror converges D1 onto current truth, not just our slice. The
+        // mirror never throws; a failure logs and the diff check surfaces it.
+        const { mirrorDocChange } = await import('./d1/mirror')
+        await mirrorDocChange(docBefore as never, verifyDoc as never, `link ${infos.length} file(s)`)
+        await (await import('./hub')).notifyWorkspaceChange((verifyDoc as { rev?: number }).rev ?? 0) // P5 live push
+        console.log(`[upload-link] ${infos[0].key}: linked (attempt ${attempt}, mirror done)`)
+        return { outcome: 'linked', added }
+      }
     } catch { /* unreadable verify read — treat as unverified and retry */ }
     // else: loop and re-apply (our keys were eaten by a late peer put)
   }
+  console.error(`[upload-link] ${infos[0].key}: exhausted ${MAX_ATTEMPTS} attempts`)
   throw new Error('The workspace changed too quickly to link the upload')
 }
 
 /** Single-file convenience wrapper — the per-completion path. */
 export async function linkUploadedFile(info: UploadLinkInfo): Promise<LinkResult> {
   return linkUploadedFiles([info])
+}
+
+// ---------------------------------------------------------------------------
+// Stage-2 link path — the incident's machinery, gone: one D1 transaction.
+// ---------------------------------------------------------------------------
+
+/** Resolve the owning project the same way the doc path does (exact id, else
+ *  longest folder-prefix), then link every key as guarded SQL. Resolution
+ *  reads the bucket doc (kept true by write-through) so the semantics match
+ *  the stage-1 path exactly. */
+async function linkViaD1(db: D1Database, infos: UploadLinkInfo[]): Promise<LinkResult> {
+  const auth = await import('./auth')
+  const doc = await auth.loadNexusDoc()
+  if (!doc) throw new Error('Workspace document missing')
+
+  let project = infos[0].projectId ? doc.projects[infos[0].projectId] : undefined
+  if (!project || project.deleted) {
+    project = undefined
+    let bestPrefix = ''
+    for (const p of Object.values(doc.projects)) {
+      const prefix = p.folderId
+      if (p.deleted || !prefix || !infos[0].key.startsWith(prefix)) continue
+      if (!project || prefix.length > bestPrefix.length) {
+        project = p
+        bestPrefix = prefix
+      }
+    }
+  }
+  if (!project) return { outcome: 'no-project', added: 0 }
+
+  const { hlcNow } = await import('../util/hlc')
+  const { canonicalJson, activityHash } = await import('./d1/tables')
+  const stamp = hlcNow()
+  const have = new Set(project.fileIds)
+  const sectionIds = new Set(project.mediaSections.map((s) => s.id))
+  const stmts: { sql: string; args: (string | number | null)[] }[] = []
+  let added = 0
+  for (const info of infos) {
+    const section = info.sectionId && sectionIds.has(info.sectionId) ? info.sectionId : null
+    if (!have.has(info.key)) {
+      have.add(info.key)
+      added += 1
+      stmts.push({
+        sql: `INSERT OR IGNORE INTO project_files (project_id,file_key,section_id,added_at,added_by) VALUES (?,?,?,?,?)`,
+        args: [project.id, info.key, section, stamp, info.actorUid ?? 'upload'],
+      })
+    } else if (section) {
+      stmts.push({ sql: `UPDATE project_files SET section_id = ? WHERE project_id = ? AND file_key = ?`, args: [section, project.id, info.key] })
+    }
+    const event = {
+      at: stamp,
+      actor: info.actorUid ?? 'system:upload',
+      verb: 'project.attach',
+      ref: project.id,
+      meta: { fileId: info.key, fileName: info.fileName ?? null, sectionId: info.sectionId ?? null, via: 'upload' },
+    }
+    stmts.push({
+      sql: `INSERT OR IGNORE INTO activity (at,actor,verb,ref,meta,h) VALUES (?,?,?,?,?,?)`,
+      args: [event.at, event.actor, event.verb, event.ref, canonicalJson(event.meta), await activityHash(event)],
+    })
+  }
+  if (added === 0 && stmts.length === 0) return { outcome: 'already-linked', added: 0 }
+
+  const apply = await import('./d1/apply')
+  const batched = [...apply.bookkeepingOps('upload', stamp), ...stmts].map((op) =>
+    op.args.length ? db.prepare(op.sql).bind(...op.args) : db.prepare(op.sql),
+  )
+  await db.batch(batched)
+  const s3 = await import('./s3')
+  const wt = await apply.writeThrough(db, s3, DOC_KEY)
+  await (await import('./hub')).notifyWorkspaceChange(wt.rev) // P5 live push
+  auth.invalidateDocCache()
+  console.log(`[upload-link] stage2: linked ${added}/${infos.length} key(s) into ${project.id}`)
+  return { outcome: 'linked', added }
 }

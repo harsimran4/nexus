@@ -1,23 +1,12 @@
-import { useState } from 'react'
-import { setProjectStatus } from '../../../state/actions'
 import { Icon } from '../../components'
 import { ProjectCard } from './ProjectCard'
+import { useBoardDrag } from './useBoardDrag'
 import type { BoardViewProps } from './types'
 
 /** Columns — the original kanban: one narrow column per pipeline stage,
  *  vertical stacks, drag between columns. Best when every stage is small. */
 export function ColumnsView({ doc, projects, colorByGroup, writable, onQuickAdd, onOpen }: BoardViewProps): React.JSX.Element {
-  const [dragId, setDragId] = useState<string | null>(null)
-  const [dragOverCol, setDragOverCol] = useState<string | null>(null)
-
-  const drop = (status: string) => {
-    if (dragId && writable) {
-      const p = doc.projects[dragId]
-      if (p && p.status !== status) setProjectStatus(dragId, status)
-    }
-    setDragId(null)
-    setDragOverCol(null)
-  }
+  const { dragId, dragOver, onDragStart, onDragEnd, bandDragProps } = useBoardDrag(writable, doc.projects)
 
   return (
     <div className="kanban">
@@ -26,17 +15,8 @@ export function ColumnsView({ doc, projects, colorByGroup, writable, onQuickAdd,
         return (
           <div
             key={col.id}
-            className={`kanban-col ${dragOverCol === col.id ? 'drag-over' : ''}`}
-            onDragOver={(e) => {
-              if (!writable || dragId === null) return
-              e.preventDefault()
-              setDragOverCol(col.id)
-            }}
-            onDragLeave={() => setDragOverCol((c) => (c === col.id ? null : c))}
-            onDrop={(e) => {
-              e.preventDefault()
-              drop(col.id)
-            }}
+            className={`kanban-col${dragOver === col.id ? ' drag-over' : ''}`}
+            {...bandDragProps(col.id)}
           >
             <div className="kanban-col-head">
               <h3>{col.label}</h3>
@@ -63,11 +43,8 @@ export function ColumnsView({ doc, projects, colorByGroup, writable, onQuickAdd,
                 canMove={writable}
                 draggable={writable}
                 dragging={dragId === project.id}
-                onDragStart={() => setDragId(project.id)}
-                onDragEnd={() => {
-                  setDragId(null)
-                  setDragOverCol(null)
-                }}
+                onDragStart={() => onDragStart(project.id)}
+                onDragEnd={onDragEnd}
                 onOpen={() => onOpen(project.id)}
               />
             ))}

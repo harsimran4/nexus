@@ -7,15 +7,19 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useStore } from '../sync/store'
 import { boot } from '../boot'
+import { getScopedSession } from '../sync/scoped'
 import { logout, currentSession } from '../auth/session'
 import { checkDraftRecovery, recommitDraft, discardDraft } from '../sync/writer'
 import { runHealthChecks, type HealthIssue } from '../diagnostics/health'
-import { ConfirmHost, GuestUploadPill, Icon, IssueBanner, Modal, StatusBanners, SyncPill, ToastViewport, useOverlayTransition } from '../ui/components'
+import { ConfirmHost, GuestUploadPill, Icon, IssueBanner, Modal, NotificationBell, StatusBanners, SyncPill, ToastViewport, useOverlayTransition } from '../ui/components'
 import { config } from '../config'
 import { WelcomeGate } from '../ui/WelcomeGate'
 import { Init } from '../ui/pages/Init'
 import { Setup } from '../ui/pages/Setup'
 import { UploadTile } from '../ui/UploadTile'
+import { RootErrorBoundary } from '../ui/components/ErrorBoundary'
+import { CommandPalette } from '../ui/components/CommandPalette'
+import { installGlobalErrorHandlers } from '../ui/errorReport'
 import '../ui/styles.css'
 
 export const Route = createRootRoute({
@@ -62,13 +66,15 @@ function RootComponent(): ReactNode {
         <script
           dangerouslySetInnerHTML={{
             __html:
-              "try{if(localStorage.getItem('nexus.theme')==='dark'){var d=document.documentElement;d.dataset.theme='dark';d.style.colorScheme='dark'}}catch(e){}",
+              "try{var t=localStorage.getItem('nexus.theme');if(!t)t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';if(t==='dark'){var d=document.documentElement;d.dataset.theme='dark';d.style.colorScheme='dark'}}catch(e){}",
           }}
         />
         <HeadContent />
       </head>
       <body>
-        <AppBody />
+        <RootErrorBoundary>
+          <AppBody />
+        </RootErrorBoundary>
         <Scripts />
       </body>
     </html>
@@ -86,16 +92,26 @@ function AppBody(): ReactNode {
   const [draftRecovery, setDraftRecovery] = useState<string | null>(null)
   const [staleBuild, setStaleBuild] = useState(false)
 
-  // Guest upload links (/upload/<token>) are self-contained: they must never
-  // download the workspace doc, start the poller, or be swallowed by the
-  // viewer-login gate below. The pathname branch returns before every doc-
-  // based branch, and boot is skipped so even the public doc read never runs.
+  // The crash net: global error/rejection handlers feeding the beacon.
+  useEffect(() => {
+    installGlobalErrorHandlers()
+  }, [])
+
+  // Guest upload links (/upload/<token>) and P8 share links (/share/<token>)
+  // are self-contained: they must never download the workspace doc, start the
+  // poller, or be swallowed by the viewer-login gate below. The pathname
+  // branch returns before every doc-based branch, and boot is skipped so even
+  // the public doc read never runs (the share route fetches its own scoped
+  // subset — the enforcement).
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const isGuestUpload = pathname.startsWith('/upload/')
+  const isGuestUpload = pathname.startsWith('/upload/') || pathname.startsWith('/share/')
 
   useEffect(() => {
     if (isGuestUpload) return
     void boot().then(() => {
+      // A scoped share tab must not surface editor draft recovery — those
+      // drafts belong to a full session and would leak into the subset view.
+      if (getScopedSession()) return
       void checkDraftRecovery().then((d) => {
         if (d) setDraftRecovery(d.savedAt)
       })
@@ -299,13 +315,18 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
   )
   const isActive = (id: string): boolean =>
     pathname === '/' + id || (id === 'dash' && (pathname === '/' || pathname.startsWith('/project')))
+  // P8 — a scoped share session holds a ONE-project subset: the workspace
+  // pages (Groups/Scripts/Archive) would render a misleading near-empty world,
+  // so the chrome reduces to the board (which shows the shared project).
+  // This is UX, not enforcement — the enforcement is the server filter.
+  const scopedNav = !!session?.scope
   const nav = [
     { id: 'dash', label: 'Board', to: '/', icon: icon(<><rect x="3" y="4" width="5" height="16" rx="1" /><rect x="10" y="4" width="5" height="10" rx="1" /><rect x="17" y="4" width="4" height="13" rx="1" /></>) },
     { id: 'groups', label: 'Groups', to: '/groups', icon: icon(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />) },
     { id: 'scripts', label: 'Scripts', to: '/scripts', icon: icon(<><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" /></>) },
     { id: 'archive', label: 'Archive', to: '/archive', icon: icon(<><rect x="3" y="4" width="18" height="4" rx="1" /><path d="M5 8v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8" /><path d="M10 12h4" /></>) },
     ...(session?.role === 'admin' ? [{ id: 'admin', label: 'Admin', to: '/admin', icon: icon(<><path d="M4 6h16" /><path d="M4 12h16" /><path d="M4 18h16" /><circle cx="9" cy="6" r="1.6" fill="currentColor" stroke="none" /><circle cx="15" cy="12" r="1.6" fill="currentColor" stroke="none" /><circle cx="7" cy="18" r="1.6" fill="currentColor" stroke="none" /></>) }] : []),
-  ]
+  ].filter((n) => !scopedNav || n.id === 'dash')
   const setTheme = (): void => {
     const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'
     document.documentElement.dataset.theme = next
@@ -386,12 +407,16 @@ function Shell({ children, bare }: { children: ReactNode; bare?: boolean }): Rea
             <span className="brand-dot" /> Nexus
           </div>
           <div style={{ marginLeft: 'auto', display: 'flex', gap: 6, alignItems: 'center' }}>
+            <NotificationBell />
+            <CommandPalette onToggleTheme={setTheme} />
             <GuestUploadPill />
             {themeToggle}
           </div>
         </div>
         <div className="content-header">
           <div className="row desktop-tools" style={{ marginLeft: 'auto' }}>
+            <NotificationBell />
+            <CommandPalette onToggleTheme={setTheme} />
             <GuestUploadPill />
             {themeToggle}
             <SyncPill />

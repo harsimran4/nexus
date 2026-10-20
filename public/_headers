@@ -1,0 +1,14 @@
+# Static-asset response headers (Cloudflare Workers assets). Applies to the
+# deployed shell + client files; `vite dev` is unaffected.
+#
+# script-src keeps 'unsafe-inline' because the framework owns inline scripts
+# (TanStack Start dehydration + the pre-paint theme script in __root.tsx) —
+# they vary per build, so hash-allowlisting isn't stable. Everything else is
+# locked to same-origin. connect-src must include the OCI endpoint: the
+# browser PUTs upload parts DIRECTLY to presigned URLs there. If
+# OCI_S3_ENDPOINT ever changes, change it here too.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' https://axryun3awvp1.compat.objectstorage.ap-hyderabad-1.oci.customer-oci.com; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'self'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()

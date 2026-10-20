@@ -1,40 +1,20 @@
-import { useState } from 'react'
-import { setProjectStatus } from '../../../state/actions'
 import { Icon } from '../../components'
 import { ProjectCard } from './ProjectCard'
+import { useBoardDrag } from './useBoardDrag'
 import type { BoardViewProps } from './types'
 
 /** Lanes — the kanban rotated 90°: one full-width band per pipeline stage,
  *  cards flowing left-to-right and wrapping into rows. A huge Finished stage
  *  becomes a dense wall instead of an endless column. Drag between bands. */
 export function LanesView({ doc, projects, colorByGroup, writable, onQuickAdd, onOpen }: BoardViewProps): React.JSX.Element {
-  const [dragId, setDragId] = useState<string | null>(null)
-  const [dragOver, setDragOver] = useState<string | null>(null)
+  const { dragId, dragOver, onDragStart, onDragEnd, bandDragProps } = useBoardDrag(writable, doc.projects)
 
   return (
     <div className="lanes">
       {doc.settings.pipeline.map((col) => {
         const colProjects = projects.filter((p) => p.status === col.id)
         return (
-          <section
-            key={col.id}
-            className={`lane${dragOver === col.id ? ' drag-over' : ''}`}
-            onDragOver={(e) => {
-              if (!writable || dragId === null) return
-              e.preventDefault()
-              setDragOver(col.id)
-            }}
-            onDragLeave={() => setDragOver((c) => (c === col.id ? null : c))}
-            onDrop={(e) => {
-              e.preventDefault()
-              if (dragId && writable) {
-                const p = doc.projects[dragId]
-                if (p && p.status !== col.id) setProjectStatus(dragId, col.id)
-              }
-              setDragId(null)
-              setDragOver(null)
-            }}
-          >
+          <section key={col.id} className={`lane${dragOver === col.id ? ' drag-over' : ''}`} {...bandDragProps(col.id)}>
             <div className="lane-head">
               <h3>{col.label}</h3>
               <span className="row">
@@ -62,11 +42,8 @@ export function LanesView({ doc, projects, colorByGroup, writable, onQuickAdd, o
                     canMove={writable}
                     draggable={writable}
                     dragging={dragId === project.id}
-                    onDragStart={() => setDragId(project.id)}
-                    onDragEnd={() => {
-                      setDragId(null)
-                      setDragOver(null)
-                    }}
+                    onDragStart={() => onDragStart(project.id)}
+                    onDragEnd={onDragEnd}
                     onOpen={() => onOpen(project.id)}
                   />
                 ))}

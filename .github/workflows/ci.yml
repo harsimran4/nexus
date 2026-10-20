@@ -1,0 +1,56 @@
+# CI gate: typecheck + unit tests + build + bundle size + the e2e suite on
+# every push/PR. The e2e job runs the REAL worker (wrangler dev) against the
+# fake-S3 bucket server — no cloud credentials needed.
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npm test
+      - run: npx vite build
+      - run: node scripts/check-size.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dist
+          path: dist/
+          retention-days: 3
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # The check job already built; the e2e server reuses that dist. Simplest
+      # reliable path: rebuild here (cache makes it cheap enough) so the job
+      # is self-contained.
+      - run: npx vite build
+      - run: npx playwright test
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-report
+          path: |
+            e2e-report/
+            test-results/
+          retention-days: 7

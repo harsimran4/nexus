@@ -40,52 +40,6 @@ interface UploadSession {
 export const Route = createFileRoute('/api/upload/resumable')({
   server: {
     handlers: {
-      // TEMP DIAGNOSTIC: admin-only. Puts 16 bytes three ways and dumps
-      // OCI's raw responses — distinguishes AccessDenied XML from a
-      // firewall block page from an empty-body proxy 403.
-      // PENDING REMOVAL: kept until the live evidence pass (step 0) has
-      // captured its output on the deployed worker.
-      GET: async ({ request }) => {
-        const { env } = await import('cloudflare:workers')
-        const auth = await import('../../../server/auth')
-        const session = await auth.requireWriterRequest(request)
-        if (!session || session.role !== 'admin') return Response.json({ error: 'admin only' }, { status: 401 })
-        const { AwsClient } = await import('aws4fetch')
-        const testKey = 'trash/put-probe.bin'
-        const out: Record<string, unknown> = {}
-        const variants: Record<string, Record<string, string>> = {
-          'unsigned-payload': { 'x-amz-content-sha256': 'UNSIGNED-PAYLOAD' },
-          'no-header': {},
-          'signed-payload': { 'x-amz-content-sha256': await crypto.subtle.digest('SHA-256', new TextEncoder().encode('probe-test-body')).then((d) => [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('')) },
-        }
-        for (const [name, headers] of Object.entries(variants)) {
-          try {
-            const client = new AwsClient({ accessKeyId: env.OCI_S3_ACCESS_KEY_ID, secretAccessKey: env.OCI_S3_SECRET_ACCESS_KEY, service: 's3', region: env.OCI_S3_REGION, retries: 0 })
-            const res = await client.fetch(`${env.OCI_S3_ENDPOINT.replace(/\/+$/, '')}/${env.OCI_S3_BUCKET}/${testKey}`, {
-              method: 'PUT', headers, body: 'probe-test-body',
-            })
-            const text = await res.text()
-            out[name] = { status: res.status, body: text.slice(0, 400), cfRay: res.headers.get('cf-ray'), server: res.headers.get('server'), contentType: res.headers.get('content-type') }
-          } catch (e) {
-            out[name] = { threw: e instanceof Error ? e.message : String(e) }
-          }
-        }
-        // replicate the REAL failing small upload: project prefix, spaces +
-        // parens in the filename, Content-Type set, ~30KB body
-        try {
-          const client = new AwsClient({ accessKeyId: env.OCI_S3_ACCESS_KEY_ID, secretAccessKey: env.OCI_S3_SECRET_ACCESS_KEY, service: 's3', region: env.OCI_S3_REGION, retries: 0 })
-          const { encodeKeyPath } = await import('../../../server/mime')
-          const realKey = 'groups/grp_1a0c2bf747e09c843225a/prj_1a0c2d44f78403f90875f/probe testing (1).webp'
-          const res = await client.fetch(`${env.OCI_S3_ENDPOINT.replace(/\/+$/, '')}/${env.OCI_S3_BUCKET}/${encodeKeyPath(realKey)}`, {
-            method: 'PUT', headers: { 'x-amz-content-sha256': 'UNSIGNED-PAYLOAD', 'Content-Type': 'image/webp' }, body: 'x'.repeat(30_000),
-          })
-          const text = await res.text()
-          out['real-small-upload'] = { status: res.status, key: realKey, body: text.slice(0, 400) }
-        } catch (e) {
-          out['real-small-upload'] = { threw: e instanceof Error ? e.message : String(e) }
-        }
-        return Response.json(out, { headers: { 'Cache-Control': 'no-store' } })
-      },
       // POST ?u=<session>&sig=…&next=<partNumber> → presign the NEXT WINDOW
       // of direct part URLs (lazy presigning keeps big inits off the CPU cap).
       // POST ?u=<session>&sig=… → COMPLETE an in-flight multipart upload.

@@ -470,6 +470,9 @@ function ViewersTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
               </div>
               <div className="ticket-body">
                 <b style={{ fontSize: 14 }}>{v.name}</b>
+                {v.scope && doc.projects[v.scope] && (
+                  <span className="badge" title="Scoped to one project">↳ {doc.projects[v.scope].name}</span>
+                )}
                 <span className="muted small" style={{ wordBreak: 'break-word' }}>{v.note || '—'}</span>
                 {v.revokedAt ? (
                   <span className="badge red">revoked</span>
@@ -495,16 +498,21 @@ function ViewersTab({ doc }: { doc: NexusDoc }): React.JSX.Element {
 function MintViewerModal({ onClose }: { onClose: () => void }): React.JSX.Element {
   const [name, setName] = useState('')
   const [note, setNote] = useState('')
+  // P8: '' = whole workspace; a project id scopes the link to ONE project —
+  // the share route serves only that project, enforced server-side.
+  const [scope, setScope] = useState('')
   const [reveal, setReveal] = useState<{ raw: string; link: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const doc = useStore((s) => s.doc)
+  const projects = Object.values(doc?.projects ?? {}).filter((p) => p.deleted === null)
 
   const mint = async () => {
     setBusy(true)
     setError(null)
     try {
-      const { raw } = await mintViewerToken(name.trim(), note.trim())
-      setReveal({ raw, link: loginLink(raw) })
+      const { raw } = await mintViewerToken(name.trim(), note.trim(), scope)
+      setReveal({ raw, link: scope ? `${location.origin}/share/${raw}` : loginLink(raw) })
     } catch (e) {
       setError(errText(e))
     }
@@ -515,7 +523,9 @@ function MintViewerModal({ onClose }: { onClose: () => void }): React.JSX.Elemen
     <Modal title="Mint viewer token" onClose={onClose}>
       {reveal ? (
         <>
-          <p className="muted small">Send this login link — opening it signs the viewer straight in.</p>
+          <p className="muted small">
+            {scope ? 'Send this share link — it opens that one project, read-only.' : 'Send this login link — opening it signs the viewer straight in.'}
+          </p>
           <TokenReveal raw={reveal.raw} kind="token" link={reveal.link} />
           <div className="row mt16">
             <button className="btn primary" onClick={onClose}>Done</button>
@@ -541,6 +551,19 @@ function MintViewerModal({ onClose }: { onClose: () => void }): React.JSX.Elemen
               value={note}
               onChange={(e) => setNote(e.target.value)}
             />
+          </div>
+          <div className="field">
+            <label>Scope</label>
+            <select className="input" value={scope} onChange={(e) => setScope(e.target.value)} aria-label="Viewer scope">
+              <option value="">Whole workspace</option>
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>One project only — {p.name}</option>
+              ))}
+            </select>
+            <div className="muted small">
+              A scoped link opens exactly one project (read-only) and the server answers with only
+              that project's data — the rest of the workspace never reaches that browser.
+            </div>
           </div>
           {error && banner('error', error)}
           <div className="row mt16">

@@ -7,7 +7,7 @@ import { Icon } from '../../components/Icon'
 import { toast } from '../../components/Toast'
 import { Lightbox, type LightboxItem } from '../../components/Lightbox'
 import { useOverlayTransition } from '../../components/motion'
-import { canWrite } from '../../../auth/session'
+import { useCanWrite } from '../../../auth/session'
 import { addMediaSection, moveMediaToSection, removeProjectFile } from '../../../state/actions'
 import { startUploadBatch } from '../../../state/uploads'
 import { commit, touch, appendActivity } from '../../../sync/writer'
@@ -53,7 +53,7 @@ export function MediaTab({ projectId }: { projectId: string }): React.JSX.Elemen
   // Range-select anchor as a FILE ID, not an index — an index into a previous
   // filter's `shown` order silently selects the wrong files after a refilter.
   const lastTouched = useRef<string | null>(null)
-  const writable = canWrite()
+  const writable = useCanWrite()
 
   const project = doc?.projects[projectId]
   const meta = useMediaMeta(project?.fileIds ?? [], project?.folderId)

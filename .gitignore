@@ -9,3 +9,13 @@ dist
 .migrate-state.json
 .prod-session-secret.tmp
 .tail-live.log
+
+# e2e
+.e2e-bucket/
+e2e-report/
+test-results/
+playwright-report/
+# e2e stack runtime state (pid file + server log)
+.e2e/
+# TanStack vite plugin cache
+.tanstack/

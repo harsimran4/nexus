@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { useStore } from '../../sync/store'
-import { canWrite } from '../../auth/session'
+import { useCanWrite } from '../../auth/session'
 import { Empty } from '../components'
 
 // Static, honest guarantees page. The copy below is FIXED — it is the contract
@@ -90,7 +90,7 @@ function EnforcementTable(): React.JSX.Element {
 
 export function Security(): React.JSX.Element {
   const session = useStore((s) => s.session)
-  const writable = canWrite()
+  const writable = useCanWrite()
 
   return (
     <div>

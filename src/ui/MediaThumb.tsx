@@ -39,39 +39,34 @@ const attempted = new Set<string>()
 // open a dozen concurrent decode+upload bursts.
 let chain: Promise<unknown> = Promise.resolve()
 
-async function generateThumb(fileKey: string, src: string): Promise<boolean> {
-  try {
-    const video = document.createElement('video')
-    video.muted = true
-    video.preload = 'auto'
-    video.src = src + '#t=1'
-    await new Promise<void>((resolve, reject) => {
-      video.onloadeddata = () => resolve()
-      video.onerror = () => reject(new Error('load failed'))
-      setTimeout(() => reject(new Error('timeout')), 20_000)
-    })
-    // Seek ~10% in — dodges black lead-in frames.
-    const at = Number.isFinite(video.duration) ? Math.min(1, video.duration * 0.1) : 0.5
-    await new Promise<void>((resolve) => {
-      video.onseeked = () => resolve()
-      video.currentTime = at
-      setTimeout(resolve, 4_000)
-    })
-    const scale = Math.min(1, 480 / (video.videoWidth || 480))
-    const canvas = document.createElement('canvas')
-    canvas.width = Math.max(2, Math.round((video.videoWidth || 480) * scale))
-    canvas.height = Math.max(2, Math.round((video.videoHeight || 270) * scale))
-    canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height)
-    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.72))
-    if (!blob) return false
-    const form = new FormData()
-    form.set('mediaKey', fileKey)
-    form.set('file', new File([blob], 'thumb.jpg', { type: 'image/jpeg' }))
-    const { putThumbFn } = await import('../server/fns')
-    return (await putThumbFn({ data: form })).ok
-  } catch {
-    return false
+/** Decode a representative frame into a JPEG blob (video ~10% in, PDF page 1). */
+async function generateBlob(kind: 'video' | 'pdf', src: string): Promise<Blob | null> {
+  if (kind === 'pdf') {
+    const { renderPdfFirstPage } = await import('./pdfThumb')
+    return renderPdfFirstPage(src)
   }
+  const video = document.createElement('video')
+  video.muted = true
+  video.preload = 'auto'
+  video.src = src + '#t=1'
+  await new Promise<void>((resolve, reject) => {
+    video.onloadeddata = () => resolve()
+    video.onerror = () => reject(new Error('load failed'))
+    setTimeout(() => reject(new Error('timeout')), 20_000)
+  })
+  // Seek ~10% in — dodges black lead-in frames.
+  const at = Number.isFinite(video.duration) ? Math.min(1, video.duration * 0.1) : 0.5
+  await new Promise<void>((resolve) => {
+    video.onseeked = () => resolve()
+    video.currentTime = at
+    setTimeout(resolve, 4_000)
+  })
+  const scale = Math.min(1, 480 / (video.videoWidth || 480))
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(2, Math.round((video.videoWidth || 480) * scale))
+  canvas.height = Math.max(2, Math.round((video.videoHeight || 270) * scale))
+  canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height)
+  return new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.72))
 }
 
 export function MediaThumb({
@@ -88,8 +83,10 @@ export function MediaThumb({
   mime?: string
 }): React.JSX.Element {
   const kind = kindFromMime(mime ?? mimeFromKey(fileKey))
+  const isPdf = (mime ?? mimeFromKey(fileKey)) === 'application/pdf'
   const src = thumbnailUrl(fileKey)
-  const tUrl = kind === 'video' ? (thumbKeyFor(fileKey) ? '/files/' + thumbKeyFor(fileKey) : null) : null
+  const tUrl =
+    kind === 'video' || isPdf ? (thumbKeyFor(fileKey) ? '/files/' + thumbKeyFor(fileKey) : null) : null
   // 'thumb' until the JPEG proves missing; then poster (+ generation).
   const [mode, setMode] = useState<'thumb' | 'poster'>(tUrl ? 'thumb' : 'poster')
   const [imgFailed, setImgFailed] = useState(false)
@@ -103,30 +100,38 @@ export function MediaThumb({
     setMode(tUrl ? 'thumb' : 'poster')
   }, [tUrl])
 
-  // Editor viewing a poster-mode video: generate + upload the JPEG once.
+  // Editor viewing a poster-mode video/PDF: generate + upload the JPEG once.
   useEffect(() => {
-    if (mode !== 'poster' || kind !== 'video' || !tUrl || !canWrite() || queued.current) return
+    if (mode !== 'poster' || !tUrl || !canWrite() || queued.current) return
+    if (kind !== 'video' && !isPdf) return
     if (attempted.has(fileKey)) return
     queued.current = true
     attempted.add(fileKey)
     chain = chain
-      .then(() => generateThumb(fileKey, src))
-      .then((ok) => {
-        if (ok) setMode('thumb')
+      .then(() => generateBlob(isPdf ? 'pdf' : 'video', src))
+      .then(async (blob) => {
+        if (!blob) return
+        const form = new FormData()
+        form.set('mediaKey', fileKey)
+        form.set('file', new File([blob], 'thumb.jpg', { type: 'image/jpeg' }))
+        const { putThumbFn } = await import('../server/fns')
+        if ((await putThumbFn({ data: form })).ok) setMode('thumb')
       })
       .catch(() => {})
-  }, [mode, kind, tUrl, fileKey, src])
+  }, [mode, kind, tUrl, fileKey, src, isPdf])
 
   // Audio, docs, and images that failed to load get a glyph tile — a blank
-  // well teaches nothing. This branch sits AFTER every hook: the same
-  // instance can flip between it and the media branches (meta arriving
+  // well teaches nothing. PDFs show a glyph while their thumb generates (or
+  // when a viewer can't generate one). This branch sits AFTER every hook: the
+  // same instance can flip between it and the media branches (meta arriving
   // changes the kind; a 404ing image flips imgFailed) and the hook count
   // must stay constant.
-  if (kind === 'audio' || kind === 'other' || (kind === 'image' && imgFailed)) {
-    return <ThumbGlyphTile icon={KIND_ICON[kind]} ext={extFromKey(fileKey)} style={style} />
+  const pdfShowsThumb = isPdf && mode === 'thumb' && tUrl
+  if (kind === 'audio' || (kind === 'other' && !isPdf) || (kind === 'image' && imgFailed) || (isPdf && !pdfShowsThumb)) {
+    return <ThumbGlyphTile icon={isPdf ? 'file-text' : KIND_ICON[kind]} ext={extFromKey(fileKey)} style={style} />
   }
 
-  if (kind === 'video' && mode === 'thumb' && tUrl) {
+  if ((kind === 'video' || isPdf) && mode === 'thumb' && tUrl) {
     return (
       <img
         src={tUrl}

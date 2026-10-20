@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useStore, storeGet } from '../../sync/store'
 import { type Project } from '../../types/schema'
 import { decodeHlc } from '../../util/hlc'
-import { canWrite } from '../../auth/session'
+import { useCanWrite } from '../../auth/session'
 import { commit, touch, recordTombstone, appendActivity, flush, forgetPending, writerId } from '../../sync/writer'
 import { unarchiveProject, updateProject } from '../../state/actions'
 import { describeError } from '../../drive/preview'
@@ -80,7 +80,7 @@ export function Archive(): React.JSX.Element {
   const doc = useStore((s) => s.doc)
   const [purgeBusy, setPurgeBusy] = useState(false)
   const [tab, setTab] = useState<'deleted' | 'archived'>('deleted')
-  const writable = canWrite()
+  const writable = useCanWrite()
 
   const deletedProjects = Object.values(doc?.projects ?? {})
     .filter((p) => p.deleted !== null)

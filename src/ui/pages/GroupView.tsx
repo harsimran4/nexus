@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useStore } from '../../sync/store'
 import { compareHlc, decodeHlc } from '../../util/hlc'
 import { Empty, Icon, Modal, StatusBadge, banner } from '../components'
-import { canWrite } from '../../auth/session'
+import { useCanWrite } from '../../auth/session'
 import { createProject } from '../../state/actions'
 import { navigate } from '../../nav'
 import { MediaThumb } from '../MediaThumb'
@@ -13,7 +13,7 @@ export function GroupView({ groupId }: { groupId: string }): React.JSX.Element {
   const [renameOpen, setRenameOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [newOpen, setNewOpen] = useState(false)
-  const writable = canWrite()
+  const writable = useCanWrite()
 
   const group = doc?.groups[groupId]
   if (!doc || !group || group.deleted !== null) {

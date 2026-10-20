@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 
 // ---------------------------------------------------------------------------
 // Page quotes — one quiet line per section, picked fresh each visit.
@@ -55,9 +55,15 @@ const QUOTES: Record<string, { text: string; by: string }[]> = {
 export type QuoteTopic = keyof typeof QUOTES
 
 export function PageQuote({ topic }: { topic: QuoteTopic }): ReactNode {
-  const pool = QUOTES[topic]
-  if (!pool || pool.length === 0) return null
-  const pick = pool[Math.floor(Math.random() * pool.length)]
+  // Random text DURING render is a hydration hazard by construction — server
+  // and client would pick different quotes. So nothing renders until after
+  // mount, when the pick is client-only decoration and can't mismatch.
+  const [pick, setPick] = useState<{ text: string; by: string } | null>(null)
+  useEffect(() => {
+    const pool = QUOTES[topic] ?? []
+    if (pool.length > 0) setPick(pool[Math.floor(Math.random() * pool.length)] ?? null)
+  }, [topic])
+  if (!pick) return null
   return (
     <div className="page-quote">
       <span className="q">{pick.text}</span>

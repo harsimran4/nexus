@@ -271,7 +271,7 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 .pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
 .pill.ok .dot { background: var(--green); }
 .pill.saving .dot { background: var(--accent); animation: pulse 1s infinite; }
-.pill.queued .dot, .pill.reconnect .dot { background: var(--amber); }
+.pill.queued .dot, .pill.reconnect .dot, .pill.offline .dot { background: var(--amber); }
 .pill.readOnly .dot, .pill.blocked .dot, .pill.corrupt .dot { background: var(--red); }
 @keyframes pulse { 50% { opacity: 0.35; } }
 
@@ -298,6 +298,29 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 .guest-row-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .guest-row-bar { height: 4px; border-radius: 999px; background: var(--border); overflow: hidden; }
 .guest-row-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width var(--dur-slow) var(--ease-out); }
+
+/* notification center bell + pop */
+.notice-bell-live { color: var(--accent); border-color: var(--accent); }
+.notice-bell-live:hover { color: var(--accent-strong); }
+.notice-dot {
+  position: absolute; top: -1px; right: -1px;
+  width: 9px; height: 9px; border-radius: 999px;
+  background: var(--accent); border: 2px solid var(--paper-raised);
+}
+.notice-pop {
+  position: absolute; top: calc(100% + 8px); right: 0; z-index: var(--z-tray);
+  width: min(88vw, 340px); padding: 12px; text-align: left; cursor: default;
+  display: flex; flex-direction: column; gap: 10px;
+  background: var(--material-thin-bg);
+  -webkit-backdrop-filter: var(--material-thin-blur);
+  backdrop-filter: var(--material-thin-blur);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elev-3);
+}
+.notice-row { display: flex; gap: 8px; align-items: flex-start; padding: 2px 0; }
+.notice-dot-inline { flex: none; width: 7px; height: 7px; border-radius: 999px; background: var(--accent); margin-top: 6px; }
+.notice-dot-inline.read { background: var(--border-strong); }
 
 /* ---- kanban: the board is the room ---- */
 
@@ -447,6 +470,29 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 .board-ledger-card .ledger-name a { color: inherit; text-decoration: none; }
 .board-ledger-card .ledger-name a:hover { text-decoration: underline; }
 .ledger-overdue { color: var(--red); }
+
+/* deadline view: urgency buckets over the shared lane surfaces */
+.deadline-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+.deadline-card {
+  display: flex; flex-direction: column; gap: 3px;
+  text-align: left; font: inherit;
+  background: var(--card);
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: var(--space-3); cursor: pointer;
+  box-shadow: var(--elev-1);
+  transition: transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+}
+.deadline-card:hover { transform: translateY(-2px); box-shadow: var(--elev-2); z-index: var(--z-card-hover); }
+.deadline-name { font-weight: var(--fw-medium); font-size: 13.5px; word-break: break-word; }
+.deadline-due { font-size: var(--fs-sm); color: var(--muted); }
+.deadline-due.overdue { color: var(--red); font-weight: var(--fw-semibold); }
+.deadline-meta { min-height: 1em; }
+.lane.deadline-overdue { border-color: color-mix(in srgb, var(--red) 35%, var(--border)); }
 
 /* ---- modal ---- */
 
@@ -880,6 +926,54 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 
 /* the editor's closing rule */
 .script-foot { border-top: 1px solid var(--border); padding-top: 12px; }
+
+/* milestone diff — unified line diff, old/new tinted */
+.diff-view {
+  max-height: 55vh; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: var(--space-2) 0;
+  font-size: 12.5px; line-height: 1.55;
+}
+.diff-row { display: flex; gap: var(--space-2); padding: 0 var(--space-2); white-space: pre-wrap; word-break: break-word; }
+.diff-sign { flex: none; width: 1ch; user-select: none; }
+.diff-text { flex: 1; min-width: 0; }
+.diff-old { background: color-mix(in srgb, var(--red) 9%, transparent); }
+.diff-old .diff-sign { color: var(--red); font-weight: var(--fw-semibold); }
+.diff-new { background: color-mix(in srgb, var(--green) 10%, transparent); }
+.diff-new .diff-sign { color: var(--green); font-weight: var(--fw-semibold); }
+.diff-stat-new { color: var(--green); font-weight: var(--fw-semibold); }
+.diff-stat-old { color: var(--red); font-weight: var(--fw-semibold); }
+
+/* command palette (⌘K) */
+.cmdk-veil {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  background: var(--backdrop);
+  backdrop-filter: blur(8px) saturate(1.4); -webkit-backdrop-filter: blur(8px) saturate(1.4);
+  display: flex; align-items: flex-start; justify-content: center; padding: 12vh 16px 16px;
+}
+.cmdk {
+  width: 100%; max-width: 560px;
+  background: var(--card); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--elev-4);
+  display: flex; flex-direction: column; max-height: 60vh; overflow: hidden;
+}
+.cmdk-input {
+  border: none; outline: none; background: none; color: var(--text);
+  font: inherit; font-size: var(--fs-lg); padding: 14px 16px;
+  border-bottom: 1px solid var(--border); width: 100%;
+}
+.cmdk-input::placeholder { color: var(--faint); }
+.cmdk-list { overflow-y: auto; padding: 6px; }
+.cmdk-item {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; text-align: left;
+  padding: 9px 10px; border: none; background: none;
+  font: inherit; color: var(--text); border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.cmdk-item[aria-selected='true'] { background: var(--accent-dim); color: var(--accent-strong); }
+.cmdk-item .cmdk-hint { margin-left: auto; flex: none; font-size: var(--fs-xs); color: var(--faint); }
+.cmdk-empty { padding: 18px 16px; color: var(--faint); font-size: var(--fs-md); text-align: center; }
 
 /* ---- Archive ----------------------------------------------------------------
    Archived projects on a shelf; deleted ones fade in the table. */

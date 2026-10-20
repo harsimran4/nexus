@@ -50,6 +50,7 @@ function makeProject(
     assigneeAppId: null,
     dueAt: null,
     notes: '',
+    approved: null,
     createdAt: encodeHlc(BASE_MS, 0),
     updatedAt: encodeHlc(ms, 0),
     writerId: writer,

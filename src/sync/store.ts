@@ -4,6 +4,9 @@
 //   ok → queued               (rate-limited / offline; auto-recovers)
 //   ok → reconnect            (token dead; user must click)
 //   ok → readOnly             (remote schema newer than this app)
+//   ok → offline              (boot revalidation failed; the P6 cached
+//                              snapshot is on screen — self-heals on the
+//                              next successful read)
 //   any → corrupt             (remote unparseable; quarantine + restore)
 
 import { create } from 'zustand'
@@ -16,6 +19,7 @@ export type SyncStatus =
   | 'queued'
   | 'reconnect'
   | 'readOnly'
+  | 'offline'
   | 'blocked'
   | 'needsInit'
   | 'needsReset'
@@ -31,6 +35,8 @@ export interface SessionInfo {
   appUserId: string
   name: string
   role: 'admin' | 'editor' | 'viewer'
+  /** P8 — a project id when this tab holds a SCOPED share-link subset. */
+  scope?: string
 }
 
 interface NexusState {

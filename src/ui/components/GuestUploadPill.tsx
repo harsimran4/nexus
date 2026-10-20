@@ -5,11 +5,12 @@
 // what landed, what failed, how much is left. Hidden entirely when no guest
 // has uploaded recently, so the chrome stays quiet otherwise.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { uploadProgressFn } from '../../server/fns'
 import type { UploadProgressSession } from '../../types/storage'
 import { useStore } from '../../sync/store'
+import { pushNotice } from '../../state/notifications'
 import { Icon } from './Icon'
 import { useMaterialVariants } from './motion'
 
@@ -23,14 +24,43 @@ export function GuestUploadPill(): React.JSX.Element | null {
   // Hooks stay above the early returns: sessions arrives async, so the hook
   // count must not change between the empty and non-empty renders.
   const pop = useMaterialVariants('snappy')
+  // Previous state per link — the effect below turns transitions into
+  // notification-center records without re-render churn.
+  const prevStates = useRef(new Map<string, string>())
 
   useEffect(() => {
     if (!canWrite) return
     let stopped = false
+    // Transitions into complete/failed become notification-center records
+    // (the pill is the live view; the bell is the "while you were away"
+    // digest). Same id = same event, so reloads and re-polls never duplicate.
     const poll = async (): Promise<void> => {
       try {
         const res = await uploadProgressFn()
-        if (!stopped && res.ok) setSessions(res.data)
+        if (!stopped && res.ok) {
+          for (const s of res.data) {
+            const before = prevStates.current.get(s.linkId)
+            prevStates.current.set(s.linkId, s.state)
+            if (before === s.state || before === undefined) continue
+            const where = s.projectName ?? 'A project'
+            if (s.state === 'complete') {
+              pushNotice({
+                id: `guest-${s.linkId}-complete`,
+                kind: 'guest-upload',
+                title: `${where} — guest upload complete`,
+                body: `${s.done} of ${s.total} saved${s.failed > 0 ? ` · ${s.failed} failed` : ''}`,
+              })
+            } else if (s.state === 'failed') {
+              pushNotice({
+                id: `guest-${s.linkId}-failed`,
+                kind: 'guest-upload',
+                title: `${where} — guest upload ended with failures`,
+                body: `${s.done} of ${s.total} saved · ${s.failed} failed — check the project's media tab`,
+              })
+            }
+          }
+          setSessions(res.data)
+        }
       } catch {
         /* the pill is additive — a failed poll just leaves it stale */
       }

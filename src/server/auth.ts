@@ -110,7 +110,7 @@ export function loginForgiven(ip: string): void {
 // ---------------------------------------------------------------------------
 // Credential verification — mirrors src/auth/hashing.ts exactly.
 // ---------------------------------------------------------------------------
-async function sha256Hex(input: string): Promise<string> {
+export async function sha256Hex(input: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', utf8(input))
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }

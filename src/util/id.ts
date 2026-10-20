@@ -23,6 +23,7 @@ export const newViewerId = () => uid('vw')
 export const newMediaSectionId = () => uid('sec')
 export const newUploadLinkId = () => uid('ul')
 export const newRefId = () => uid('ref')
+export const newCommentId = () => uid('cmt')
 
 export function newDeviceId(): string {
   const existing = localStorage.getItem('nexus.deviceId')

@@ -31,7 +31,7 @@ export const Route = createFileRoute('/api/upload/progress')({
         auth.loginForgiven(ip)
         const { link, project } = verdict
 
-        let body: { total?: unknown; done?: unknown; failed?: unknown; state?: unknown }
+        let body: { total?: unknown; done?: unknown; failed?: unknown; state?: unknown; keys?: unknown }
         try {
           body = (await request.json()) as typeof body
         } catch {
@@ -54,8 +54,35 @@ export const Route = createFileRoute('/api/upload/progress')({
           // A dropped beacon must never fail the upload — log and 200.
           console.error(`[upload-progress] ${link.id}: ${e instanceof Error ? e.message : e}`)
         }
+
+        // SERVER-SIDE BATCH REPAIR on completion: the guest tab may die right
+        // after its own client-side repair pass starts (or never start it) —
+        // the final beacon carries the batch's keys, so the worker can run the
+        // same quiescent re-link here. Best-effort: a failed repair still
+        // answers 200 (the client repair pass and the adopt-orphans script
+        // remain the backstops; D1 makes this whole class disappear).
+        if (record.state === 'complete' && Array.isArray(body.keys)) {
+          const keys = [...new Set(body.keys.filter((k): k is string => typeof k === 'string'))]
+          const prefix = project.folderId ?? ''
+          if (prefix && keys.length > 0 && keys.length <= 512 && keys.every((k) => k.startsWith(prefix))) {
+            const { linkUploadedFiles } = await import('../../../server/linking')
+            try {
+              for (let i = 0; i < keys.length; i += 64) {
+                const chunk = keys.slice(i, i + 64)
+                const { added } = await linkUploadedFiles(
+                  chunk.map((key) => ({ key, projectId: link.projectId, sectionId: link.sectionId, actorUid: link.id })),
+                )
+                if (added > 0) console.log(`[upload-progress] repair ${link.id}: re-linked ${added}`)
+              }
+            } catch (e) {
+              console.error(`[upload-progress] repair ${link.id}: ${e instanceof Error ? e.message : e}`)
+            }
+          }
+        }
+
         void project
         return Response.json({ ok: true }, { headers: { 'Cache-Control': 'no-store' } })
+
       },
     },
   },

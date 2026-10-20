@@ -1,38 +1,13 @@
 // IndexedDB mirror of the dirty scratch doc. This is LOAD-BEARING, not
 // optional: keepalive fetches die above 64KB (verified cap), so a tab closed
 // mid-debounce with a large doc recovers its edits from here on next boot.
+// The IDB plumbing lives in idb.ts (shared with the P6 boot snapshot cache).
 
 import type { NexusDoc } from '../types/schema'
+import { idbRun } from './idb'
 
-const DB_NAME = 'nexus'
-const STORE = 'kv'
 const DRAFT_KEY = 'scratch'
 const RECOVERY_KEY = 'recovery'
-
-let dbPromise: Promise<IDBDatabase> | null = null
-
-function openDb(): Promise<IDBDatabase> {
-  if (dbPromise) return dbPromise
-  dbPromise = new Promise((resolve, reject) => {
-    const req = indexedDB.open(DB_NAME, 1)
-    req.onupgradeneeded = () => {
-      if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE)
-    }
-    req.onsuccess = () => resolve(req.result)
-    req.onerror = () => reject(req.error ?? new Error('IndexedDB unavailable'))
-  })
-  return dbPromise
-}
-
-async function idbRun<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => IDBRequest): Promise<T> {
-  const db = await openDb()
-  return new Promise<T>((resolve, reject) => {
-    const tx = db.transaction(STORE, mode)
-    const req = fn(tx.objectStore(STORE))
-    req.onsuccess = () => resolve(req.result as T)
-    req.onerror = () => reject(req.error ?? new Error('IndexedDB request failed'))
-  })
-}
 
 export async function saveDraft(doc: NexusDoc): Promise<void> {
   try {

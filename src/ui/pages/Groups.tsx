@@ -3,7 +3,7 @@ import { useStore } from '../../sync/store'
 import { compareHlc } from '../../util/hlc'
 import { groupColorMap } from '../../util/groups'
 import { Empty, Icon, Modal, PageQuote, banner } from '../components'
-import { canWrite } from '../../auth/session'
+import { useCanWrite } from '../../auth/session'
 import { createGroup } from '../../state/actions'
 import { navigate } from '../../nav'
 import { GroupColorPicker, GroupDeleteModal, GroupRenameModal } from './GroupDialogs'
@@ -13,7 +13,7 @@ export function Groups(): React.JSX.Element {
   const [creating, setCreating] = useState(false)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
-  const writable = canWrite()
+  const writable = useCanWrite()
 
   const groups = Object.values(doc?.groups ?? {})
     .filter((g) => g.deleted === null)

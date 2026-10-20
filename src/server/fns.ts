@@ -208,6 +208,14 @@ export const initFn = createServerFn({ method: 'POST' })
       }
       await s3.put(DOC_KEY, JSON.stringify(doc), { contentType: 'application/json' })
       auth.invalidateDocCache()
+      // P4 shadow: a fresh workspace is the mirror's first full insert.
+      try {
+        const { mirrorDocChange } = await import('./d1/mirror')
+        await mirrorDocChange(null, doc, 'init')
+      } catch (e) {
+        console.error(`[d1-mirror] init: transition skipped (${e instanceof Error ? e.message : e})`)
+      }
+      await (await import('./hub')).notifyWorkspaceChange(doc.rev) // P5 live push — never throws
       auth.loginForgiven(ip) // success — don't count this attempt toward the throttle
       return { ok: true, data: { rootFolderId: '', nexusFileId: DOC_KEY } }
     } catch (e) {
@@ -233,23 +241,177 @@ export const docGetFn = createServerFn({ method: 'POST' })
     }
   })
 
+/** Stage-3 boot snapshot: the workspace doc as D1 regenerates it — ONE
+ *  batched read = one transactionally consistent snapshot. Below stage 3
+ *  this returns just the stage and the client falls back to the bucket doc. */
+
+/** P8 — the share-link read. The token IS the credential (same trust model
+ *  as the upload-link routes): hash it, find the viewer (D1 point query —
+ *  the mirror keeps the table fresh at every stage — with the bucket doc as
+ *  fallback below stage 3), then answer with ONLY what the scope allows.
+ *  A scoped viewer receives ONE project + its group + its thread/refs/
+ *  scripts — the rest of the workspace is never serialized, which is the
+ *  enforcement (server-side, not client filters). */
+export const scopedBootstrapFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ token: z.string().min(16).max(256) }))
+  .handler(
+    async ({
+      data,
+    }): Promise<FnResult<{ raw: string; projectId: string | null; viewerId: string; viewerName: string }>> => {
+      try {
+        const { env } = await import('cloudflare:workers')
+        const auth = await import('./auth')
+        const hash = 'sha256$' + (await auth.sha256Hex(data.token))
+
+        let viewer: { id: string; name: string; scope: string; revokedAt: string | null } | null = null
+        if (env.DB) {
+          const res = await env.DB.prepare('SELECT id, name, scope, revoked_at FROM viewers WHERE token_hash = ?').bind(hash).run()
+          const row = (res.results as { id: string; name: string; scope?: string; revoked_at?: string }[] | undefined)?.[0]
+          if (row) {
+            viewer = { id: String(row.id), name: String(row.name), scope: String(row.scope ?? ''), revokedAt: row.revoked_at != null ? String(row.revoked_at) : null }
+          }
+        }
+        if (!viewer) {
+          // No binding or the row hasn't mirrored — the bucket doc is truth.
+          const s3 = await import('./s3')
+          const { DOC_KEY } = await import('./keys')
+          const doc = JSON.parse(await s3.getText(DOC_KEY)) as {
+            users?: { viewers?: { id: string; name: string; scope?: string; revokedAt?: string | null; tokenHash: string }[] }
+          }
+          const v = (doc.users?.viewers ?? []).find((x) => x.tokenHash === hash)
+          if (v) viewer = { id: v.id, name: v.name, scope: v.scope ?? '', revokedAt: v.revokedAt ?? null }
+        }
+        if (!viewer) return err('notFound', 'This link is not valid')
+        if (viewer.revokedAt) return err('permission', 'This link was revoked')
+
+        const s3 = await import('./s3')
+        const { DOC_KEY } = await import('./keys')
+
+        if (!viewer.scope) {
+          // Whole-workspace viewer: the full doc — the exact bytes the public
+          // read path already serves (no new exposure).
+          return { ok: true, data: { raw: await s3.getText(DOC_KEY), projectId: null, viewerId: viewer.id, viewerName: viewer.name } }
+        }
+
+        // SCOPED: regenerate (stage 3 reads D1; below, the doc IS truth) and
+        // filter BEFORE serialization. The full read is one batched read —
+        // per-project point queries are a later optimization, the FILTER is
+        // the enforcement.
+        let full: import('../server/d1/tables').LightDoc
+        if (env.DB) {
+          const apply = await import('./d1/apply')
+          if ((await apply.readStage(env.DB)) >= 3) {
+            const regen = await import('./d1/regen')
+            const tables = await import('./d1/tables')
+            full = tables.rowsToDoc(await regen.readAllRows(env.DB))
+          } else {
+            full = JSON.parse(await s3.getText(DOC_KEY))
+          }
+        } else {
+          full = JSON.parse(await s3.getText(DOC_KEY))
+        }
+        const project = (full.projects as Record<string, { deleted?: unknown; groupId: string }> | undefined)?.[viewer.scope]
+        if (!project || project.deleted) return err('notFound', 'This project is no longer available')
+        const gid = project.groupId
+        const subset = {
+          schema: full.schema ?? 1,
+          rev: full.rev ?? 0,
+          writerId: full.writerId,
+          updatedAt: full.updatedAt,
+          ids: full.ids,
+          settings: full.settings,
+          users: {
+            studioSub: null,
+            app: [],
+            // the scoped viewer's own entry (their hash is useless without the
+            // token they already hold in the URL)
+            viewers: [{ id: viewer.id, name: viewer.name, tokenHash: hash, createdAt: '', createdBy: '', revokedAt: null, note: '', scope: viewer.scope }],
+          },
+          uploadLinks: [],
+          refs: (full.refs ?? []).filter((r) => r.projectId === viewer!.scope),
+          comments: (full.comments ?? []).filter((c) => c.projectId === viewer!.scope),
+          groups: Object.fromEntries(Object.entries(full.groups ?? {}).filter(([id]) => id === gid)),
+          projects: { [viewer.scope]: project },
+          scripts: Object.fromEntries(Object.entries(full.scripts ?? {}).filter(([, s]) => (s as { projectId?: string | null }).projectId === viewer!.scope)),
+          tombstones: [],
+          activity: [],
+          snapshots: [],
+        }
+        return { ok: true, data: { raw: JSON.stringify(subset), projectId: viewer.scope, viewerId: viewer.id, viewerName: viewer.name } }
+      } catch (e) {
+        return err('api', e instanceof Error ? e.message : 'Share link failed')
+      }
+    },
+  )
+
+export const bootstrapFn = createServerFn({ method: 'POST' })
+  .middleware([writerAuth])
+  .handler(async ({ context }): Promise<FnResult<{ raw?: string; rev?: number; stage: 1 | 2 | 3 }>> => {
+    if (!context.auth.ok) return err('auth', context.auth.message)
+    try {
+      const { env } = await import('cloudflare:workers')
+      if (!env.DB) return { ok: true, data: { stage: 1 } }
+      const apply = await import('./d1/apply')
+      const stage = await apply.readStage(env.DB)
+      if (stage < 3) return { ok: true, data: { stage } }
+      const regen = await import('./d1/regen')
+      const tables = await import('./d1/tables')
+      const doc = tables.rowsToDoc(await regen.readAllRows(env.DB))
+      return { ok: true, data: { raw: JSON.stringify(doc), rev: doc.rev, stage: 3 } }
+    } catch (e) {
+      return err('api', e instanceof Error ? e.message : 'Bootstrap read failed')
+    }
+  })
+
 /** Whole-doc write with optional compare-and-set on the previous ETag.
  *  (OCI ignores If-Match, so the CAS is our own read-compare-write — the
- *  sync engine's verify-then-write + rebase stays the real safety net.) */
+ *  sync engine's verify-then-write + rebase stays the real safety net.)
+ *
+ *  P4 shadow: the transition (prev doc → new doc) also mirrors into D1.
+ *  The mirror NEVER fails the write — it logs, and /api/debug/d1?op=diff
+ *  is the instrument that surfaces any drift. */
 export const docPutFn = createServerFn({ method: 'POST' })
   .validator(z.object({ raw: z.string().max(16 * 1024 * 1024), expectEtag: z.string().optional() }))
   .middleware([writerAuth])
   .handler(async ({ data, context }): Promise<FnResult<{ etag: string }>> => {
     if (!context.auth.ok) return err('auth', context.auth.message)
     try {
+      const { env } = await import('cloudflare:workers')
+      // STAGE 3: the doc is derived — whole-doc writes are refused and old
+      // tabs fall to the read-only path. Reload picks up the gateway client.
+      if (env.DB) {
+        const apply = await import('./d1/apply')
+        if ((await apply.readStage(env.DB)) >= 3) {
+          return err('permission', 'The workspace now lives in its database — reload the page to keep editing')
+        }
+      }
       const s3 = await import('./s3')
       const auth = await import('./auth')
       if (data.expectEtag !== undefined) {
         const h = await s3.head(DOC_KEY)
         if (h && h.etag !== data.expectEtag) return err('conflict', 'The workspace changed on the server — rebasing')
       }
+      // Snapshot the doc we're about to overwrite. Absent workspace → null
+      // (full insert); unreadable/transient read → skip this one transition.
+      let prevDoc: unknown = null
+      let mirrorable = true
+      try {
+        prevDoc = JSON.parse(await s3.getText(DOC_KEY))
+      } catch (e) {
+        if (!(e instanceof Error && 'status' in e && (e as { status?: number }).status === 404)) mirrorable = false
+      }
       const res = await s3.put(DOC_KEY, data.raw, { contentType: 'application/json' })
       auth.invalidateDocCache()
+      const nextDoc = JSON.parse(data.raw)
+      if (mirrorable) {
+        try {
+          const { mirrorDocChange } = await import('./d1/mirror')
+          await mirrorDocChange(prevDoc, nextDoc, 'docPut')
+        } catch (e) {
+          console.error(`[d1-mirror] docPut: transition skipped (${e instanceof Error ? e.message : e})`)
+        }
+      }
+      await (await import('./hub')).notifyWorkspaceChange(nextDoc.rev ?? 0) // P5 live push — never throws
       return { ok: true, data: res }
     } catch (e) {
       return err('api', e instanceof Error ? e.message : 'Write failed')
@@ -289,6 +451,56 @@ export const uploadProgressFn = createServerFn({ method: 'POST' })
       return { ok: true, data: sessions }
     } catch (e) {
       return err('api', e instanceof Error ? e.message : 'Progress read failed')
+    }
+  })
+
+// ---------------------------------------------------------------------------
+// Stage-2 mutation gateway — transactional entity ops (see docs/d1-migration.md)
+// ---------------------------------------------------------------------------
+
+/** Apply a batch of validated entity ops in ONE D1 transaction under the
+ *  kernel's LWW/tombstone rules, then write through (regenerate nexus.json
+ *  from D1 and put it). Below stage 2 this refuses softly so the client
+ *  falls back to the whole-doc writer. */
+export const mutateFn = createServerFn({ method: 'POST' })
+  .validator(z.object({ ops: z.array(z.unknown()).max(500), baseRev: z.number().int().min(0).optional() }))
+  .middleware([writerAuth])
+  .handler(async ({ data, context }): Promise<FnResult<{ applied: boolean; stage: 1 | 2 | 3; rev?: number; etag?: string }>> => {
+    if (!context.auth.ok) return err('auth', context.auth.message)
+    if (context.auth.session.role === 'viewer') return err('permission', 'Viewers cannot edit')
+    try {
+      const { env } = await import('cloudflare:workers')
+      if (!env.DB) return { ok: true, data: { applied: false, stage: 1 } }
+      const apply = await import('./d1/apply')
+      const stage = await apply.readStage(env.DB)
+      if (stage < 2) return { ok: true, data: { applied: false, stage } }
+      // Validation failures are 'api' (won't fix itself — the client gateway
+      // falls back to the legacy writer); only D1/write-through races are
+      // 'conflict' (retryable).
+      let ops
+      try {
+        ops = apply.validateOps(data.ops, { allowStrong: context.auth.session.role === 'admin' })
+      } catch (ve) {
+        console.error(`[mutateFn] validation rejected: ${ve instanceof Error ? ve.message : ve}`)
+        return err('api', ve instanceof Error ? ve.message : 'Invalid mutation batch')
+      }
+      const { hlcNow } = await import('../util/hlc')
+      const stamp = hlcNow()
+      const compiled = await apply.compileOps(ops)
+      const stmts = [...apply.bookkeepingOps(`gateway:${context.auth.session.uid}`, stamp), ...compiled].map((op) =>
+        op.args.length ? env.DB!.prepare(op.sql).bind(...op.args) : env.DB!.prepare(op.sql),
+      )
+      await env.DB.batch(stmts)
+      const s3 = await import('./s3')
+      const { DOC_KEY } = await import('./keys')
+      const wt = await apply.writeThrough(env.DB, s3, DOC_KEY)
+      // P5 live push — broadcast AFTER the write-through lands, so a reacting
+      // tab's meta check sees the fresh derived doc immediately.
+      await (await import('./hub')).notifyWorkspaceChange(wt.rev)
+      return { ok: true, data: { applied: true, stage, rev: wt.rev, etag: wt.etag } }
+    } catch (e) {
+      console.error(`[mutateFn] apply failed: ${e instanceof Error ? e.message : e}`)
+      return err('conflict', e instanceof Error ? e.message : 'Mutation failed')
     }
   })
 

@@ -11,6 +11,7 @@ import {
   newMediaSectionId,
   newUploadLinkId,
   newRefId,
+  newCommentId,
 } from '../util/id'
 import { hlcNow } from '../util/hlc'
 import { thumbKeyFor } from '../util/media'
@@ -24,6 +25,7 @@ import {
   type ScriptStatus,
   type UploadLink,
   type Ref,
+  type Comment,
 } from '../types/schema'
 import { canWrite, canAdmin } from '../auth/session'
 import { commit, touch, recordTombstone, appendActivity, flush, markContentDirty, writerId } from '../sync/writer'
@@ -32,7 +34,7 @@ import { storeGet } from '../sync/store'
 import { decodeHlc } from '../util/hlc'
 import { DriveError, createFolder, uploadFile } from '../drive/client'
 import { SYSTEM_PREFIXES } from '../types/storage'
-import { sessionRef } from '../sync/identity'
+import { sessionRef, sessionActor } from '../sync/identity'
 
 /** Deterministic storage keys: group = groups/<groupId>/, project lives
  *  inside its group. Names are doc-only — keys never change on rename. */
@@ -190,6 +192,7 @@ export async function createProject(fields: {
       folderId: null,
       status: fields.status ?? defaultStatus(doc),
       labels: fields.labels ?? [],
+      approved: null,
       fileIds: [],
       mediaSections: [],
       mediaSectionOf: {},
@@ -754,6 +757,70 @@ export function deleteRef(id: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// P7 — project discussion + approvals
+// ---------------------------------------------------------------------------
+
+const COMMENT_MAX = 4000
+
+/** Post a comment on a project. Viewers can READ the thread but not write —
+ *  comments are writer-only, same as every other mutation. */
+export function createComment(projectId: string, body: string): string {
+  assertWrite()
+  const text = body.trim().slice(0, COMMENT_MAX)
+  if (!text) throw new Error('Write something first')
+  const project = storeGet().doc?.projects[projectId]
+  if (!project || project.deleted) throw new Error('Project not found')
+  const id = newCommentId()
+  commit((d) => {
+    const comment: Comment = {
+      id,
+      projectId,
+      body: text,
+      by: sessionActor(),
+      createdAt: hlcNow(),
+      updatedAt: hlcNow(),
+      writerId: writerId(),
+      deleted: null,
+    }
+    d.comments = [...(d.comments ?? []), comment]
+    appendActivity(d, 'project.comment', projectId, { commentId: id, excerpt: text.slice(0, 80) })
+  })
+  return id
+}
+
+/** Soft-delete a comment (author or admin — enforced in the UI; the kernel
+ *  treats it as an ordinary soft delete). */
+export function deleteComment(id: string): boolean {
+  assertWrite()
+  let changed = false
+  commit((d) => {
+    const c = d.comments?.find((x) => x.id === id)
+    if (!c || c.deleted) return
+    c.deleted = { at: hlcNow(), by: writerId() }
+    c.updatedAt = hlcNow() // LWW: the delete must beat any in-flight older edit
+    c.writerId = writerId()
+    appendActivity(d, 'project.comment-delete', c.projectId, { commentId: id })
+    changed = true
+  })
+  return changed
+}
+
+/** Approve / unapprove a project — the single-slot LWW field. */
+export function setProjectApproval(projectId: string, approved: boolean): void {
+  assertWrite()
+  commit((d) => {
+    const p = d.projects[projectId]
+    if (!p || p.deleted) throw new Error('Project not found')
+    p.approved = approved ? { at: hlcNow(), by: sessionActor() } : null
+    touch('projects', p)
+    appendActivity(d, approved ? 'project.approve' : 'project.unapprove', projectId, {
+      name: p.name,
+      approvedBy: sessionActor(),
+    })
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Admin: app users, viewer tokens, settings, workspace reset
 // ---------------------------------------------------------------------------
 
@@ -907,8 +974,9 @@ export async function resetUserPassword(userId: string, secret: string | undefin
   return { raw, synced }
 }
 
-export async function mintViewerToken(name: string, note = ''): Promise<{ raw: string; id: string }> {
+export async function mintViewerToken(name: string, note = '', scope = ''): Promise<{ raw: string; id: string }> {
   assertAdmin()
+  if (scope && !storeGet().doc?.projects[scope]) throw new Error('Scope project not found')
   const { raw, hash } = await mintToken()
   const id = newViewerId()
   const by = sessionModule().getSession()?.appUserId ?? 'pending'
@@ -917,10 +985,10 @@ export async function mintViewerToken(name: string, note = ''): Promise<{ raw: s
       ...doc.users.viewers,
       {
         id, name, tokenHash: hash, createdAt: hlcNow(), createdBy: by,
-        revokedAt: null, note, updatedAt: hlcNow(), writerId: writerId(),
+        revokedAt: null, note, scope, updatedAt: hlcNow(), writerId: writerId(),
       },
     ]
-    appendActivity(doc, 'viewer.create', id, { name })
+    appendActivity(doc, 'viewer.create', id, { name, scope: scope || 'all' })
   })
   return { raw, id }
 }

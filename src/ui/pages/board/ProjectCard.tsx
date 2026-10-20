@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { useStore } from '../../../sync/store'
 import { type Project } from '../../../types/schema'
 import { Icon, Menu, MenuItem, StatusBadge } from '../../components'
@@ -54,6 +55,11 @@ export function ProjectCard({
   const assignee = project.assigneeAppId ? doc?.users.app.find((u) => u.id === project.assigneeAppId)?.name : null
   const cover = project.fileIds[0]
   const otherStages = doc?.settings.pipeline.filter((st) => st.id !== project.status) ?? []
+  // When the ⋮ menu closes, the exit-animated panel can vanish under a fast
+  // follow-up click and the card itself becomes the click target — opening the
+  // project the user was only moving. A short guard swallows that stray click
+  // (real card opens are deliberate, never within 500ms of a menu action).
+  const menuActionAt = useRef(0)
   return (
     <div
       className={`item-card${colorKey ? ` ${colorKey}` : ''}${overdue ? ' overdue' : ''}${dragging ? ' dragging' : ''}`}
@@ -68,7 +74,10 @@ export function ProjectCard({
           : undefined
       }
       onDragEnd={onDragEnd}
-      onClick={onOpen}
+      onClick={() => {
+        if (Date.now() - menuActionAt.current < 500) return
+        onOpen()
+      }}
     >
       {cover && (
         <MediaThumb
@@ -125,6 +134,7 @@ export function ProjectCard({
                 draggable={false}
                 onClick={(e) => {
                   e.stopPropagation()
+                  menuActionAt.current = Date.now()
                   onClick(e)
                 }}
                 aria-expanded={expanded}

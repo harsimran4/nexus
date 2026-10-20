@@ -22,6 +22,9 @@ export interface Session {
   appUserId: string
   name: string
   role: Role
+  /** P8 — set (a project id) only for scoped share-link sessions: the tab
+   *  holds a subset doc and must never leave the scoped read path. */
+  scope?: string
 }
 
 export function getSession(): Session | null {
@@ -179,6 +182,9 @@ export function logout(): void {
   } catch {
     /* ignore */
   }
+  // A scoped share session signs out the same way — gone from this device,
+  // so the next reload is a plain anonymous visit.
+  void import('../sync/scoped').then((s) => s.clearScopedSession())
   setGlobalBearer(null)
   void import('../sync/writer').then((w) => w.discardPendingForLogout())
 }
@@ -189,6 +195,16 @@ export function currentSession(): Session | null {
 
 export function canWrite(): boolean {
   const role = storeGet().session?.role
+  return role === 'admin' || role === 'editor'
+}
+
+/** REACTIVE canWrite for render-time use. The plain canWrite() reads the
+ *  store once per render — a page mounted before boot restores the session
+ *  never re-renders when the session arrives and stays read-only forever
+ *  (the Scripts "New script" bug). Subscribing to the session slice fixes
+ *  every consumer. */
+export function useCanWrite(): boolean {
+  const role = useStore((s) => s.session?.role)
   return role === 'admin' || role === 'editor'
 }
 

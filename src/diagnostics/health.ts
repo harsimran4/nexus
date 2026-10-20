@@ -110,6 +110,13 @@ export function statusToIssue(status: SyncStatus, detail: string | null): Health
       }
     case 'queued':
       return { level: 'warn', code: 'queued', message: detail ?? 'Changes waiting to sync', fix: 'Automatic retry; use Retry now in the top bar to force it.' }
+    case 'offline':
+      return {
+        level: 'warn',
+        code: 'offline',
+        message: detail ?? "Can't reach the server — showing your last synced workspace",
+        fix: 'Edits are kept and will sync when the connection returns. Click the Offline pill to retry now.',
+      }
     case 'readOnly':
       return { level: 'warn', code: 'readOnly', message: detail ?? 'Read-only mode', fix: 'Update the deployed app to the latest version.' }
     case 'blocked':

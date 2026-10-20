@@ -9,15 +9,58 @@
   //   SESSION_SECRET           — random 32+ bytes, e.g. `openssl rand -base64 32`
   //   SETUP_TOKEN              — one-time /init gate; delete after first init
   "name": "nexus",
-  "main": "@tanstack/react-start/server-entry",
+  // Custom entry: Start's handler PLUS the P5 hub DO class — the runtime
+  // discovers Durable Objects among the deployed worker's exports, so the
+  // class must ride the same entry module as the fetch handler.
+  "main": "./src/server/worker-entry.ts",
   "compatibility_date": "2026-09-29",
   "compatibility_flags": ["nodejs_compat"],
+  // Free dashboard logs — the only server-side visibility until the error
+  // beacon grew a UI; costs nothing.
+  "observability": {
+    "enabled": true
+  },
+  // P10: the nightly export (src/server/backup.ts) — one dated doc snapshot
+  // in backups/, pruned to 14. Off the :00 mark on purpose. Time Travel
+  // remains the PRIMARY recovery path (docs/backups.md).
+  "triggers": {
+    "crons": ["17 3 * * *"]
+  },
   "vars": {
     "OCI_S3_ENDPOINT": "https://axryun3awvp1.compat.objectstorage.ap-hyderabad-1.oci.customer-oci.com",
     "OCI_S3_BUCKET": "nexus",
     "OCI_S3_REGION": "ap-hyderabad-1",
     "PART_SIZE": "8388608"
   },
+  // P4: state database. Local dev + e2e use wrangler's built-in local SQLite
+  // (the placeholder id is fine there). BEFORE ANY DEPLOY: run
+  //   npx wrangler d1 create nexus
+  // and paste the real database_id here — deploy refuses a bogus id.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "nexus",
+      "database_id": "00000000-0000-0000-0000-000000000000"
+    }
+  ],
+  // P5: live push. One SQLite-backed DO holds a hibernating WebSocket per
+  // open tab; writes broadcast {rev}. Hibernation = idle tabs cost nothing
+  // (the reason this isn't SSE). Local dev + e2e run the DO in wrangler's
+  // built-in miniflare — no account needed.
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "HUB",
+        "class_name": "WorkspaceHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["WorkspaceHub"]
+    }
+  ],
   "assets": {
     // Unknown paths reach the Worker (assets-first only shields real files);
     // Start's server renders known routes in SPA mode and 404s the rest.

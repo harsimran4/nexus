@@ -8,12 +8,15 @@
 
 import { config } from '../config'
 import { DriveError, backoffRetry, getMeta, readFile, writeFileJson, copyFile, hasBearer, setGlobalBearer } from '../drive/client'
-import { emptyDoc, parseDoc, type NexusDoc } from '../types/schema'
+import { ACTIVITY_LOCAL_BUFFER, emptyDoc, parseDoc, type NexusDoc } from '../types/schema'
 import { SYSTEM_PREFIXES } from '../types/storage'
 import { DOC_KEY } from '../server/keys'
 import { hlcNow, observeHlc } from '../util/hlc'
 import { mergeRemote, gcTombstones } from './merge'
+import { applyDecision, reassertEntities, saveDecision, type PendingEntity } from './writeDecisions'
 import { loadDraft, clearDraft, saveDraft } from './drafts'
+import { putBootSnapshot } from './bootCache'
+import { gatewayFlush, gatewayMode, gatewayNoteSynced } from './gateway'
 import { storeGet, useStore } from './store'
 import { canWrite } from '../auth/session'
 import { writerId, sessionActor } from './identity'
@@ -46,7 +49,7 @@ export function appendActivity(
   doc.activity = [
     ...doc.activity,
     { at: hlcNow(), actor: actor ?? sessionActor(), verb, ref, meta },
-  ].slice(-1500)
+  ].slice(-ACTIVITY_LOCAL_BUFFER)
 }
 
 // ---------------------------------------------------------------------------
@@ -72,21 +75,10 @@ export function clearAllPending(): void {
 }
 
 function reassertPending(doc: NexusDoc): void {
-  for (const { map, entity } of scratch.values()) {
-    const fresh = { ...entity, updatedAt: hlcNow(), writerId: writerId() } as Record<string, unknown>
-    if (fresh.deleted) fresh.deleted = { at: fresh.updatedAt as string, by: fresh.writerId as string }
-    const target = doc[map] as Record<string, unknown>
-    // A purged key (absent here, covered by a tombstone) stays purged —
-    // re-assertion must not resurrect what the user explicitly removed.
-    if (target[String(fresh.id)] === undefined) {
-      const type = map === 'groups' ? 'group' : map === 'projects' ? 'project' : 'script'
-      const tomb = doc.tombstones
-        .filter((t) => t.type === type && t.id === fresh.id)
-        .sort((a, b) => (a.at > b.at ? -1 : 1))[0]
-      if (tomb) continue
-    }
-    target[String(fresh.id)] = fresh
-  }
+  // The rules (fresh stamps, tombstone-vs-resurrection) live in
+  // writeDecisions.ts, property-tested; this is the stateful wrapper.
+  const pending: PendingEntity[] = [...scratch.values()]
+  reassertEntities(doc, pending, { at: hlcNow(), by: writerId() })
 }
 
 function applyMerged(doc: NexusDoc): void {
@@ -180,6 +172,29 @@ async function saveLoop(): Promise<boolean> {
     return false
   }
 
+  // STAGE 2: try the transactional gateway first. 'fallback' (deployment is
+  // stage 1, or no baseline) falls through to the legacy whole-doc loop; the
+  // probe result pins this session's mode so later saves don't re-probe.
+  if (gatewayMode() !== 'doc') {
+    const verdict = await gatewayFlush()
+    if (verdict === 'applied' || verdict === 'noop') {
+      scratch.clear()
+      contentDirty = false
+      const store = storeGet()
+      store.setPending(0)
+      store.setStatus('ok', null)
+      store.markSynced()
+      lastConfirmedDoc = structuredClone(store.doc ?? emptyDoc())
+      await clearDraft()
+      void snapshotHook(nexusId) // daily snapshot still rides a gateway save
+      return true
+    }
+    if (verdict === 'failed') {
+      storeGet().setStatus('queued', 'Storage is busy or offline — changes are saved locally and will retry')
+      return false
+    }
+  }
+
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     try {
       // Fresh state EVERY iteration: after a rebase the doc/base have changed
@@ -188,14 +203,9 @@ async function saveLoop(): Promise<boolean> {
       const base = store.base
       const meta = await backoffRetry(() => getMeta(nexusId), { retries: 2 })
 
-      const unchanged =
-        (base.headRevisionId !== undefined && meta.headRevisionId === base.headRevisionId) ||
-        (base.version !== undefined && meta.version === base.version)
-
-      // Ambiguous tokens (all undefined) = treat as changed — never write blind.
-      const tokensKnown = meta.headRevisionId !== undefined || meta.version !== undefined
-
-      if (tokensKnown && unchanged) {
+      // Verified-unchanged → write; moved (or ambiguous tokens) → rebase.
+      // Pure logic lives in writeDecisions.ts (property-tested).
+      if (saveDecision(meta, base) === 'write') {
         await writeWholeDoc(nexusId, meta.headRevisionId ?? meta.version)
         return true
       }
@@ -226,6 +236,12 @@ async function saveLoop(): Promise<boolean> {
         }
         if (err.kind === 'notFound') {
           storeGet().setStatus('blocked', 'Workspace file not found — re-run setup or check sign-in')
+          return false
+        }
+        if (err.kind === 'permission') {
+          // STAGE 3: whole-doc writes are refused after the cutover — this
+          // tab predates it. Read-only until a reload brings the gateway.
+          storeGet().setStatus('readOnly', err.message)
           return false
         }
         if (err.kind === 'conflict') {
@@ -276,6 +292,7 @@ async function writeWholeDoc(nexusId: string, expectEtag?: string): Promise<void
   store.markSynced()
   // Confirmed-remote snapshot — the rollback point when a session is discarded.
   lastConfirmedDoc = structuredClone(doc)
+  gatewayNoteSynced(doc)
   await clearDraft()
   void snapshotHook(nexusId)
 }
@@ -333,11 +350,9 @@ export async function applyRemoteIfChanged(nexusId: string): Promise<'unchanged'
   } catch {
     return 'unchanged'
   }
-  const changed =
-    meta.headRevisionId !== store.base.headRevisionId ||
-    meta.version !== store.base.version ||
-    (meta.md5Checksum !== undefined && meta.md5Checksum !== store.base.md5Checksum && store.base.md5Checksum !== undefined)
-  if (!changed && store.base.headRevisionId !== undefined) return 'unchanged'
+  // Pure logic (writeDecisions.ts, property-tested): skip the read only when
+  // the meta proves nothing moved.
+  if (applyDecision(meta, store.base) === 'unchanged') return 'unchanged'
 
   let raw: string
   try {
@@ -357,6 +372,9 @@ export async function applyRemoteIfChanged(nexusId: string): Promise<'unchanged'
     store.setBase({ headRevisionId: meta.headRevisionId, md5Checksum: meta.md5Checksum, version: meta.version })
     return 'newerSchema'
   }
+  // P6: this raw is confirmed server truth — keep the boot cache fresh so an
+  // offline reload shows THIS, not whatever the last boot saw.
+  void putBootSnapshot(raw)
   const { merged } = mergeRemote({ local: storeGet().doc ?? emptyDoc(), remote: parsed.doc })
   applyMerged(merged)
   store.setBase({ headRevisionId: meta.headRevisionId, md5Checksum: meta.md5Checksum, version: meta.version })

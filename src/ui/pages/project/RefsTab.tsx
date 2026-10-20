@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../../../sync/store'
 import { banner, CopyButton, Empty, Icon, Modal, toast } from '../../components'
-import { canWrite } from '../../../auth/session'
+import { useCanWrite } from '../../../auth/session'
 import { createRef, deleteRef, updateRef } from '../../../state/actions'
 import { decodeHlc } from '../../../util/hlc'
 import { formatRelative } from '../../../util/media'
@@ -23,7 +23,7 @@ function faviconFor(url: string): string | null {
 
 export function RefsTab({ projectId }: { projectId: string }): React.JSX.Element {
   const doc = useStore((s) => s.doc)
-  const writable = canWrite()
+  const writable = useCanWrite()
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Ref | null>(null)
 

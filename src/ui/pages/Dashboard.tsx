@@ -5,13 +5,14 @@ import { groupColorMap } from '../../util/groups'
 import { Empty, Icon, Modal, banner, PageQuote } from '../components'
 import { ActivityFeed } from '../ActivityFeed'
 import { createProject } from '../../state/actions'
-import { canWrite } from '../../auth/session'
+import { useCanWrite } from '../../auth/session'
 import { navigate } from '../../nav'
 import { ColumnsView } from './board/ColumnsView'
 import { LanesView } from './board/LanesView'
 import { ShelvesView } from './board/ShelvesView'
 import { WallView } from './board/WallView'
 import { LedgerView } from './board/LedgerView'
+import { DeadlineView } from './board/DeadlineView'
 
 /** The board layouts. Pick per browser — persisted like nexus.theme. */
 const VIEWS = [
@@ -20,6 +21,7 @@ const VIEWS = [
   { id: 'shelves', label: 'Shelves' },
   { id: 'wall', label: 'Wall' },
   { id: 'ledger', label: 'Ledger' },
+  { id: 'deadline', label: 'Deadlines' },
 ] as const
 type BoardView = (typeof VIEWS)[number]['id']
 const VIEW_KEY = 'nexus.board.view'
@@ -67,7 +69,7 @@ export function Dashboard(): React.JSX.Element {
   // (status preset) or a shelf "+" (group preset).
   const [quickAdd, setQuickAdd] = useState<{ status?: string; groupId?: string } | null>(null)
   const [activityOpen, setActivityOpen] = useState(false)
-  const writable = canWrite()
+  const writable = useCanWrite()
 
   const projects = useMemo(() => {
     if (!doc) return []
@@ -236,6 +238,8 @@ export function Dashboard(): React.JSX.Element {
         <ShelvesView {...viewProps} />
       ) : view === 'wall' ? (
         <WallView {...viewProps} />
+      ) : view === 'deadline' ? (
+        <DeadlineView {...viewProps} />
       ) : (
         <LedgerView {...viewProps} />
       )}
@@ -266,6 +270,7 @@ const VIEW_TITLES: Record<BoardView, string> = {
   lanes: 'Full-width status bands — cards wrap into rows',
   shelves: 'One band per group, status pills on cards',
   wall: 'One dense grid of every project — filter with the chips',
+  deadline: 'Projects with due dates, bucketed by urgency',
   ledger: 'Account-book rows — densest scan',
 }
 

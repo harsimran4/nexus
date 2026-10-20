@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { useStore } from '../../sync/store'
 import { flush } from '../../sync/writer'
+import { revalidateBoot } from '../../boot'
 import { navigate } from '../../nav'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -10,6 +11,7 @@ const STATUS_LABEL: Record<string, string> = {
   queued: 'Queued',
   reconnect: 'Reconnect',
   readOnly: 'Read-only',
+  offline: 'Offline',
   blocked: 'Blocked',
   corrupt: 'Needs repair',
   needsInit: 'Setup',
@@ -28,6 +30,7 @@ export function SyncPill(): ReactNode {
   const time = lastSyncAt ? new Date(lastSyncAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : null
   const onClick = () => {
     if (status === 'queued') void flush()
+    if (status === 'offline') void revalidateBoot() // retry the read in place — no reload needed
     if (status === 'reconnect') {
       // Session expired — the login page is the one way back.
       navigate('/login')
@@ -36,7 +39,7 @@ export function SyncPill(): ReactNode {
   return (
     <button
       className={cls}
-      style={{ cursor: status === 'reconnect' || status === 'queued' ? 'pointer' : 'default', font: 'inherit' }}
+      style={{ cursor: status === 'reconnect' || status === 'queued' || status === 'offline' ? 'pointer' : 'default', font: 'inherit' }}
       onClick={onClick}
       title={time ? `Last synced ${time}` : undefined}
     >

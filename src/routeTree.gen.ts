@@ -20,7 +20,10 @@ import { Route as SecurityRouteImport } from './routes/security'
 import { Route as FilesSplatRouteImport } from './routes/files/$'
 import { Route as GroupGroupIdRouteImport } from './routes/group.$groupId'
 import { Route as ProjectProjectIdRouteImport } from './routes/project.$projectId'
+import { Route as ShareTokenRouteImport } from './routes/share.$token'
 import { Route as UploadTokenRouteImport } from './routes/upload.$token'
+import { Route as ApiDebugD1RouteImport } from './routes/api/debug/d1'
+import { Route as ApiDiagnosticsErrorRouteImport } from './routes/api/diagnostics/error'
 import { Route as ApiPublicListRouteImport } from './routes/api/public/list'
 import { Route as ApiPublicMetaRouteImport } from './routes/api/public/meta'
 import { Route as ApiUploadLinkRouteImport } from './routes/api/upload/link'
@@ -83,9 +86,24 @@ const ProjectProjectIdRoute = ProjectProjectIdRouteImport.update({
   path: '/project/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ShareTokenRoute = ShareTokenRouteImport.update({
+  id: '/share/$token',
+  path: '/share/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const UploadTokenRoute = UploadTokenRouteImport.update({
   id: '/upload/$token',
   path: '/upload/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDebugD1Route = ApiDebugD1RouteImport.update({
+  id: '/api/debug/d1',
+  path: '/api/debug/d1',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiDiagnosticsErrorRoute = ApiDiagnosticsErrorRouteImport.update({
+  id: '/api/diagnostics/error',
+  path: '/api/diagnostics/error',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiPublicListRoute = ApiPublicListRouteImport.update({
@@ -131,7 +149,10 @@ export interface FileRoutesByFullPath {
   '/files/$': typeof FilesSplatRoute
   '/group/$groupId': typeof GroupGroupIdRoute
   '/project/$projectId': typeof ProjectProjectIdRoute
+  '/share/$token': typeof ShareTokenRoute
   '/upload/$token': typeof UploadTokenRoute
+  '/api/debug/d1': typeof ApiDebugD1Route
+  '/api/diagnostics/error': typeof ApiDiagnosticsErrorRoute
   '/api/public/list': typeof ApiPublicListRoute
   '/api/public/meta': typeof ApiPublicMetaRoute
   '/api/upload/link': typeof ApiUploadLinkRoute
@@ -151,7 +172,10 @@ export interface FileRoutesByTo {
   '/files/$': typeof FilesSplatRoute
   '/group/$groupId': typeof GroupGroupIdRoute
   '/project/$projectId': typeof ProjectProjectIdRoute
+  '/share/$token': typeof ShareTokenRoute
   '/upload/$token': typeof UploadTokenRoute
+  '/api/debug/d1': typeof ApiDebugD1Route
+  '/api/diagnostics/error': typeof ApiDiagnosticsErrorRoute
   '/api/public/list': typeof ApiPublicListRoute
   '/api/public/meta': typeof ApiPublicMetaRoute
   '/api/upload/link': typeof ApiUploadLinkRoute
@@ -172,7 +196,10 @@ export interface FileRoutesById {
   '/files/$': typeof FilesSplatRoute
   '/group/$groupId': typeof GroupGroupIdRoute
   '/project/$projectId': typeof ProjectProjectIdRoute
+  '/share/$token': typeof ShareTokenRoute
   '/upload/$token': typeof UploadTokenRoute
+  '/api/debug/d1': typeof ApiDebugD1Route
+  '/api/diagnostics/error': typeof ApiDiagnosticsErrorRoute
   '/api/public/list': typeof ApiPublicListRoute
   '/api/public/meta': typeof ApiPublicMetaRoute
   '/api/upload/link': typeof ApiUploadLinkRoute
@@ -194,7 +221,10 @@ export interface FileRouteTypes {
     | '/files/$'
     | '/group/$groupId'
     | '/project/$projectId'
+    | '/share/$token'
     | '/upload/$token'
+    | '/api/debug/d1'
+    | '/api/diagnostics/error'
     | '/api/public/list'
     | '/api/public/meta'
     | '/api/upload/link'
@@ -214,7 +244,10 @@ export interface FileRouteTypes {
     | '/files/$'
     | '/group/$groupId'
     | '/project/$projectId'
+    | '/share/$token'
     | '/upload/$token'
+    | '/api/debug/d1'
+    | '/api/diagnostics/error'
     | '/api/public/list'
     | '/api/public/meta'
     | '/api/upload/link'
@@ -234,7 +267,10 @@ export interface FileRouteTypes {
     | '/files/$'
     | '/group/$groupId'
     | '/project/$projectId'
+    | '/share/$token'
     | '/upload/$token'
+    | '/api/debug/d1'
+    | '/api/diagnostics/error'
     | '/api/public/list'
     | '/api/public/meta'
     | '/api/upload/link'
@@ -255,7 +291,10 @@ export interface RootRouteChildren {
   FilesSplatRoute: typeof FilesSplatRoute
   GroupGroupIdRoute: typeof GroupGroupIdRoute
   ProjectProjectIdRoute: typeof ProjectProjectIdRoute
+  ShareTokenRoute: typeof ShareTokenRoute
   UploadTokenRoute: typeof UploadTokenRoute
+  ApiDebugD1Route: typeof ApiDebugD1Route
+  ApiDiagnosticsErrorRoute: typeof ApiDiagnosticsErrorRoute
   ApiPublicListRoute: typeof ApiPublicListRoute
   ApiPublicMetaRoute: typeof ApiPublicMetaRoute
   ApiUploadLinkRoute: typeof ApiUploadLinkRoute
@@ -343,11 +382,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/share/$token': {
+      id: '/share/$token'
+      path: '/share/$token'
+      fullPath: '/share/$token'
+      preLoaderRoute: typeof ShareTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/upload/$token': {
       id: '/upload/$token'
       path: '/upload/$token'
       fullPath: '/upload/$token'
       preLoaderRoute: typeof UploadTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/debug/d1': {
+      id: '/api/debug/d1'
+      path: '/api/debug/d1'
+      fullPath: '/api/debug/d1'
+      preLoaderRoute: typeof ApiDebugD1RouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/diagnostics/error': {
+      id: '/api/diagnostics/error'
+      path: '/api/diagnostics/error'
+      fullPath: '/api/diagnostics/error'
+      preLoaderRoute: typeof ApiDiagnosticsErrorRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/list': {
@@ -407,7 +467,10 @@ const rootRouteChildren: RootRouteChildren = {
   FilesSplatRoute: FilesSplatRoute,
   GroupGroupIdRoute: GroupGroupIdRoute,
   ProjectProjectIdRoute: ProjectProjectIdRoute,
+  ShareTokenRoute: ShareTokenRoute,
   UploadTokenRoute: UploadTokenRoute,
+  ApiDebugD1Route: ApiDebugD1Route,
+  ApiDiagnosticsErrorRoute: ApiDiagnosticsErrorRoute,
   ApiPublicListRoute: ApiPublicListRoute,
   ApiPublicMetaRoute: ApiPublicMetaRoute,
   ApiUploadLinkRoute: ApiUploadLinkRoute,
