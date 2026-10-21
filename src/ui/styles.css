@@ -834,17 +834,8 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 }
 
 /* ---- Scripts ---------------------------------------------------------------
-   Two panes: the list is a stack of rows; the editor is the sheet. */
-
-.script-split {
-  display: grid;
-  grid-template-columns: 300px minmax(0, 1fr);
-  gap: 14px;
-  align-items: start;
-}
-@media (max-width: 900px) {
-  .script-split { grid-template-columns: 1fr; }
-}
+   The library is a stack of slips; each opens a workspace (Brief / Story /
+   Shots / Graph / Manuscript) at /scripts/$scriptId. */
 
 .script-list { display: grid; gap: 4px; padding: 8px; }
 
@@ -926,6 +917,116 @@ textarea.input { resize: vertical; min-height: 90px; font-family: var(--mono); f
 
 /* the editor's closing rule */
 .script-foot { border-top: 1px solid var(--border); padding-top: 12px; }
+
+/* --- Script workspace: header, tabs, and the story system ------------------ */
+
+.script-back { display: inline-flex; align-items: center; gap: 4px; text-decoration: none; }
+.script-back:hover { color: var(--accent-strong); }
+.script-head-main { display: grid; gap: 6px; width: 100%; }
+.script-head-controls { align-items: center; }
+.script-tabs { margin-bottom: 14px; }
+
+/* the brief: a two-column sheet of labeled fields */
+.brief-wrap { display: grid; gap: 14px; }
+.brief-sheet { display: grid; gap: var(--space-2); }
+.brief-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: var(--space-3) var(--space-3);
+}
+.brief-inspo { display: grid; gap: var(--space-2); }
+
+/* shared labeled field (brief, beat/scene/shot editors) */
+.story-field { display: grid; gap: 4px; }
+.story-field-label {
+  font-size: var(--fs-xs);
+  color: var(--muted);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.story-field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+.story-fields { display: grid; gap: var(--space-2); }
+
+/* acts: stacked sections; beats: rows inside; scenes: rows inside beats */
+.story-wrap { display: grid; gap: 12px; }
+.story-act { display: grid; gap: 8px; padding: 14px 16px; }
+.story-act-head { align-items: center; }
+.story-act-empty { padding: 2px 0 4px; }
+.story-act-add { display: flex; gap: 8px; padding: 10px 14px; }
+.story-beat {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+.story-scene {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--card);
+}
+.story-row-head {
+  gap: 8px;
+  padding: 7px 9px;
+}
+.story-title { border: none; background: none; padding: 2px 4px; font-weight: var(--fw-medium); min-width: 0; flex: 1; }
+.story-title:focus { box-shadow: none; border-bottom: 1px solid var(--accent); border-radius: 0; }
+.story-title-scene { font-weight: var(--fw-regular); font-size: var(--fs-sm); }
+.story-counts { white-space: nowrap; }
+.story-move-select { max-width: 130px; padding: 3px 6px; font-size: var(--fs-xs); }
+.story-detail { padding: 0 10px 10px 30px; display: grid; gap: 10px; }
+.story-add { justify-self: start; }
+
+/* secondary-beat ("also serves") chips on a scene */
+.story-serves { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.story-serve-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px;
+  background: var(--accent-dim); color: var(--accent-strong);
+  border-radius: var(--radius-pill);
+  font-size: var(--fs-xs);
+}
+.story-serve-x { display: grid; place-items: center; background: none; border: none; padding: 0; color: inherit; cursor: pointer; }
+
+/* story links (inspiration / relations) rows */
+.story-links { display: grid; gap: 6px; }
+.story-link {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel);
+}
+.story-link-note { max-width: 320px; padding: 3px 8px; font-size: var(--fs-sm); }
+.story-link-note-text { flex-basis: 100%; }
+
+/* shots: a grid of cards inside per-group sections */
+.shots-wrap { display: grid; gap: 12px; }
+.shots-group { display: grid; gap: 10px; padding: 14px 16px; }
+.story-shot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px;
+}
+.story-shot {
+  display: grid; gap: 6px; text-align: left; font: inherit; color: inherit;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color var(--dur-fast), background var(--dur-fast);
+}
+.story-shot:hover { background: var(--panel-2); }
+.story-shot.on { border-color: var(--accent); }
+.story-shot-placeholder {
+  display: grid; place-items: center;
+  height: 92px;
+  background: var(--panel-2);
+  border-radius: var(--radius-sm);
+  color: var(--faint);
+  font-size: 22px;
+}
+.story-shot-caption { font-size: var(--fs-sm); font-weight: var(--fw-medium); word-break: break-word; }
+.story-storyboard { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 10px; }
 
 /* milestone diff — unified line diff, old/new tinted */
 .diff-view {

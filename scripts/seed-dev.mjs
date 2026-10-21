@@ -166,7 +166,9 @@ async function main() {
         assigneeAppId: null,
         dueAt: null,
         notes: '',
-        approved: null,
+        // approved is ABSENT, not null — the D1 regen omits unset approved
+        // (absent-by-default convention), and the shadow diff treats the
+        // two as different.
         createdAt: now,
         updatedAt: now,
         writerId: 'seed',
@@ -186,7 +188,6 @@ async function main() {
         assigneeAppId: null,
         dueAt: null,
         notes: '',
-        approved: null,
         createdAt: now,
         updatedAt: now,
         writerId: 'seed',
@@ -202,6 +203,9 @@ async function main() {
         projectId: 'prj_e2e_move',
         status: 'draft',
         copies: [],
+        // acts/brief mirror an app-written doc: acts always serializes (a
+        // .default([]) collection); brief stays absent until first written.
+        acts: [],
         createdAt: now,
         updatedAt: now,
         writerId: 'seed',

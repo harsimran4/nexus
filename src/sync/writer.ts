@@ -8,7 +8,7 @@
 
 import { config } from '../config'
 import { DriveError, backoffRetry, getMeta, readFile, writeFileJson, copyFile, hasBearer, setGlobalBearer } from '../drive/client'
-import { ACTIVITY_LOCAL_BUFFER, emptyDoc, parseDoc, type NexusDoc } from '../types/schema'
+import { ACTIVITY_LOCAL_BUFFER, emptyDoc, parseDoc, type NexusDoc, type TombstoneType } from '../types/schema'
 import { SYSTEM_PREFIXES } from '../types/storage'
 import { DOC_KEY } from '../server/keys'
 import { hlcNow, observeHlc } from '../util/hlc'
@@ -23,7 +23,7 @@ import { writerId, sessionActor } from './identity'
 
 const MAX_ATTEMPTS = 5
 
-type EntityMapName = 'groups' | 'projects' | 'scripts'
+type EntityMapName = 'groups' | 'projects' | 'scripts' | 'beats' | 'scenes' | 'shots'
 export { writerId }
 
 /** Stamp an entity after mutating it — call INSIDE your commit mutator. */
@@ -34,7 +34,7 @@ export function touch(map: EntityMapName, entity: { updatedAt: string; writerId:
 }
 
 /** Append a deletion marker + tombstone (deletes never remove keys). */
-export function recordTombstone(doc: NexusDoc, type: 'group' | 'project' | 'script' | 'user', id: string, by: string): void {
+export function recordTombstone(doc: NexusDoc, type: TombstoneType, id: string, by: string): void {
   const at = hlcNow()
   doc.tombstones = [...doc.tombstones.filter((t) => !(t.type === type && t.id === id)), { type, id, at, by }]
 }

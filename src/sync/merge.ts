@@ -144,6 +144,9 @@ export function mergeRemote(input: MergeInput): { merged: NexusDoc; undeletes: A
   const groups = mergeEntityMaps(local.groups, remote.groups, local.tombstones, remote.tombstones, undeletes)
   const projects = mergeEntityMaps(local.projects, remote.projects, local.tombstones, remote.tombstones, undeletes)
   const scripts = mergeEntityMaps(local.scripts, remote.scripts, local.tombstones, remote.tombstones, undeletes)
+  const beats = mergeEntityMaps(local.beats, remote.beats, local.tombstones, remote.tombstones, undeletes)
+  const scenes = mergeEntityMaps(local.scenes, remote.scenes, local.tombstones, remote.tombstones, undeletes)
+  const shots = mergeEntityMaps(local.shots, remote.shots, local.tombstones, remote.tombstones, undeletes)
 
   // settings / top-level scalars: whole-value LWW
   const sL = stampOf(local.settings as unknown)
@@ -179,6 +182,10 @@ export function mergeRemote(input: MergeInput): { merged: NexusDoc; undeletes: A
   // same project in the same window must BOTH land.
   const comments = mergeUsers(local.comments ?? [], remote.comments ?? [], [])
 
+  // storyLinks: per-entry LWW — two people linking inspiration to the same
+  // beat in the same window must BOTH land (refs/comments reasoning).
+  const storyLinks = mergeUsers(local.storyLinks ?? [], remote.storyLinks ?? [], [])
+
   // tombstones: union by (type,id), newest wins
   const tombMap = new Map<string, Tombstone>()
   for (const t of [...remote.tombstones, ...local.tombstones]) {
@@ -213,12 +220,25 @@ export function mergeRemote(input: MergeInput): { merged: NexusDoc; undeletes: A
     groups,
     projects,
     scripts,
+    beats,
+    scenes,
+    shots,
+    storyLinks,
     tombstones,
     activity,
     snapshots,
     crypto: local.crypto ?? remote.crypto,
   }
   return { merged, undeletes }
+}
+
+/** Drop one soft-deleted entity from a record map (GC's inner step). */
+function purgeDeleted<T extends { deleted: unknown }>(map: Record<string, T>, id: string): Record<string, T> {
+  const e = map[id]
+  if (!e || !e.deleted) return map
+  const next = { ...map }
+  delete next[id]
+  return next
 }
 
 /** Remove tombstones older than gcDays AND the deleted entities they cover. */
@@ -234,29 +254,13 @@ export function gcTombstones(doc: NexusDoc, gcDays: number, nowMs: number): Nexu
   if (expiredIds.size === 0) return doc
   const out: NexusDoc = { ...doc, tombstones: kept }
   for (const key of expiredIds) {
-    const [type, id] = key.split('|') as ['group' | 'project' | 'script' | 'user', string]
-    if (type === 'group') {
-      const e = out.groups[id]
-      if (e && e.deleted) {
-        const next = { ...out.groups }
-        delete next[id]
-        out.groups = next
-      }
-    } else if (type === 'project') {
-      const e = out.projects[id]
-      if (e && e.deleted) {
-        const next = { ...out.projects }
-        delete next[id]
-        out.projects = next
-      }
-    } else if (type === 'script') {
-      const e = out.scripts[id]
-      if (e && e.deleted) {
-        const next = { ...out.scripts }
-        delete next[id]
-        out.scripts = next
-      }
-    }
+    const [type, id] = key.split('|') as [Tombstone['type'], string]
+    if (type === 'group') out.groups = purgeDeleted(out.groups, id)
+    else if (type === 'project') out.projects = purgeDeleted(out.projects, id)
+    else if (type === 'script') out.scripts = purgeDeleted(out.scripts, id)
+    else if (type === 'beat') out.beats = purgeDeleted(out.beats, id)
+    else if (type === 'scene') out.scenes = purgeDeleted(out.scenes, id)
+    else if (type === 'shot') out.shots = purgeDeleted(out.shots, id)
   }
   return out
 }

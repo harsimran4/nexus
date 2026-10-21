@@ -43,7 +43,12 @@ const PK: Record<string, string[]> = {
   media_sections: ['project_id', 'id'],
   project_files: ['project_id', 'file_key'],
   scripts: ['id'],
+  script_acts: ['script_id', 'id'],
   script_copies: ['script_id', 'file_id'],
+  beats: ['script_id', 'id'],
+  scenes: ['script_id', 'id'],
+  shots: ['script_id', 'id'],
+  story_links: ['script_id', 'id'],
   users_app: ['id'],
   viewers: ['id'],
   upload_links: ['id'],
@@ -240,6 +245,12 @@ function fixtureDoc(): LightDoc {
         projectId: 'prj_1',
         status: 'review',
         copies: [{ fileId: 'scripts/copy1.md', label: 'review', at: '2026-10-06T01:00:00.000Z' }],
+        acts: [
+          { id: 'act_opening', name: 'Opening' },
+          { id: 'act_middle', name: 'Middle' },
+        ],
+        // rides scripts.extra — deliberately NOT a column (SCRIPT_KNOWN omits it)
+        brief: { concept: 'a film about film', premise: '', themes: 'time', audience: '', tone: '', mood: '', goals: '' },
         createdAt: '2026-10-04T00:00:00.000Z',
         updatedAt: '2026-10-06T01:00:00.000Z',
         writerId: 'u_admin',
@@ -247,6 +258,101 @@ function fixtureDoc(): LightDoc {
         archivedAt: null,
       },
     },
+    beats: {
+      beat_1: {
+        id: 'beat_1',
+        scriptId: 'scr_1',
+        actId: 'act_opening',
+        title: 'Cold open',
+        summary: 'The city wakes.',
+        purpose: 'Establish the world.',
+        bridge: 'Hard cut to the studio.',
+        sort: 100,
+        pos: { x: 120.5, y: -40 },
+        createdAt: '2026-10-05T00:00:00.000Z',
+        updatedAt: '2026-10-06T00:00:00.000Z',
+        writerId: 'u_admin',
+        deleted: null,
+        archivedAt: null,
+      },
+      beat_2: {
+        id: 'beat_2',
+        scriptId: 'scr_1',
+        actId: 'act_middle',
+        title: 'Turn',
+        summary: 'The plan fails.',
+        purpose: 'Raise the stakes.',
+        bridge: '',
+        sort: 100,
+        // NO pos — absent must stay absent (the shadow-diff trap)
+        createdAt: '2026-10-05T01:00:00.000Z',
+        updatedAt: '2026-10-05T01:00:00.000Z',
+        writerId: 'u_admin',
+        deleted: null,
+        archivedAt: null,
+      },
+    },
+    scenes: {
+      scn_1: {
+        id: 'scn_1',
+        scriptId: 'scr_1',
+        beatId: 'beat_1',
+        title: 'Rooftops',
+        action: 'Dawn pan across the city.',
+        location: 'Rooftop, downtown',
+        sort: 100,
+        pos: { x: 300, y: 90 },
+        createdAt: '2026-10-05T02:00:00.000Z',
+        updatedAt: '2026-10-05T02:00:00.000Z',
+        writerId: 'u_admin',
+        deleted: null,
+        archivedAt: null,
+      },
+    },
+    shots: {
+      shot_1: {
+        id: 'shot_1',
+        scriptId: 'scr_1',
+        sceneId: 'scn_1',
+        beatId: null,
+        caption: 'Wide establishing',
+        shotSize: 'Wide',
+        cameraMove: 'Slow pan',
+        composition: 'Rule of thirds',
+        lighting: 'Golden hour',
+        sound: 'City rumble',
+        durationSec: 4.5,
+        storyboardFileKey: 'groups/grp_1/prj_1/f_b__logo.png',
+        sort: 100,
+        createdAt: '2026-10-05T03:00:00.000Z',
+        updatedAt: '2026-10-05T03:00:00.000Z',
+        writerId: 'u_admin',
+        deleted: null,
+        archivedAt: null,
+      },
+      shot_2: {
+        id: 'shot_2',
+        scriptId: 'scr_1',
+        sceneId: null,
+        beatId: 'beat_1', // a beat-level shot (no scene yet)
+        caption: 'Insert — alarm clock',
+        shotSize: 'Close-up',
+        cameraMove: '',
+        composition: '',
+        lighting: '',
+        sound: '',
+        sort: 200,
+        createdAt: '2026-10-05T04:00:00.000Z',
+        updatedAt: '2026-10-05T04:00:00.000Z',
+        writerId: 'u_admin',
+        deleted: null,
+        archivedAt: null,
+      },
+    },
+    storyLinks: [
+      { id: 'lnk_1', scriptId: 'scr_1', fromKind: 'ref', fromId: 'ref_1', toKind: 'beat', toId: 'beat_1', rel: 'inspires', note: 'the light here', createdAt: '2026-10-06T00:00:00.000Z', deleted: null },
+      { id: 'lnk_2', scriptId: 'scr_1', fromKind: 'scene', fromId: 'scn_1', toKind: 'beat', toId: 'beat_2', rel: 'serves', note: '', createdAt: '2026-10-06T01:00:00.000Z', updatedAt: '2026-10-06T02:00:00.000Z', writerId: 'u_admin', deleted: { at: '2026-10-06T03:00:00.000Z', by: 'u_admin' } },
+    ],
     tombstones: [
       { type: 'project', id: 'prj_old', at: '2026-10-05T00:00:00.000Z', by: 'u_admin' },
       { type: 'script', id: 'scr_old', at: '2026-10-05T01:00:00.000Z', by: 'u_admin' },
@@ -307,6 +413,41 @@ describe('d1 roundtrip', () => {
     apply(db, docToOps(doc))
     apply(db, await importActivityOps(doc))
     expect(canonicalJson(rowsToDoc(rowsOf(db)))).toBe(canonicalJson(doc))
+  })
+
+  it('story: pos omitted stays absent, pos set round-trips', async () => {
+    const doc = fixtureDoc()
+    const db = await importDoc(doc)
+    const withPos = db.get('beats')!.get('scr_1:beat_1')!
+    expect(withPos.pos_x).toBe(120.5)
+    expect(withPos.pos_y).toBe(-40)
+    const withoutPos = db.get('beats')!.get('scr_1:beat_2')!
+    expect(withoutPos.pos_x).toBeNull()
+    expect(withoutPos.pos_y).toBeNull()
+    const regen = rowsToDoc(rowsOf(db))
+    expect((regen.beats!.beat_2 as Record<string, unknown>).pos).toBeUndefined()
+    expect((regen.beats!.beat_1 as Record<string, unknown>).pos).toEqual({ x: 120.5, y: -40 })
+  })
+
+  it('story: the brief rides scripts.extra, never a column', async () => {
+    const doc = fixtureDoc()
+    const db = await importDoc(doc)
+    const row = db.get('scripts')!.get('scr_1')!
+    expect(Object.keys(row)).not.toContain('brief')
+    expect(String(row.extra)).toContain('brief')
+    expect(String(row.extra)).toContain('a film about film')
+    const regen = rowsToDoc(rowsOf(db))
+    expect((regen.scripts!.scr_1 as Record<string, unknown>).brief).toEqual(doc.scripts!.scr_1!.brief)
+  })
+
+  it('story: shot omit-when-unset keys round-trip', async () => {
+    const doc = fixtureDoc()
+    const db = await importDoc(doc)
+    const regen = rowsToDoc(rowsOf(db))
+    expect((regen.shots!.shot_1 as Record<string, unknown>).durationSec).toBe(4.5)
+    expect((regen.shots!.shot_2 as Record<string, unknown>).durationSec).toBeUndefined()
+    expect((regen.shots!.shot_2 as Record<string, unknown>).storyboardFileKey).toBeUndefined()
+    expect((regen.shots!.shot_1 as Record<string, unknown>).storyboardFileKey).toBe('groups/grp_1/prj_1/f_b__logo.png')
   })
 })
 
@@ -375,6 +516,84 @@ describe('d1 mirrorOps', () => {
     apply(db, ops)
     expect(db.get('scripts')!.size).toBe(0)
     expect(db.get('script_copies')!.size).toBe(0)
+  })
+
+  it('story: deleting a script sweeps every story child first (FK order)', async () => {
+    const prev = fixtureDoc()
+    const next = structuredClone(prev)
+    delete next.scripts!.scr_1
+    delete next.beats!.beat_1
+    delete next.beats!.beat_2
+    delete next.scenes!.scn_1
+    delete next.shots!.shot_1
+    delete next.shots!.shot_2
+    next.storyLinks = []
+    next.tombstones!.push({ type: 'script', id: 'scr_1', at: '2026-10-07T00:00:00.000Z', by: 'u_admin' })
+    const ops = await mirrorOps(prev, next)
+    const order = ops.map((o) => o.sql)
+    const scriptsIdx = order.indexOf('DELETE FROM scripts WHERE id = ?')
+    for (const child of ['DELETE FROM story_links WHERE script_id = ?', 'DELETE FROM shots WHERE script_id = ?', 'DELETE FROM scenes WHERE script_id = ?', 'DELETE FROM beats WHERE script_id = ?', 'DELETE FROM script_acts WHERE script_id = ?']) {
+      expect(order.indexOf(child)).toBeLessThan(scriptsIdx)
+    }
+    const db = await importDoc(prev)
+    apply(db, ops)
+    for (const t of ['story_links', 'shots', 'scenes', 'beats', 'script_acts', 'scripts']) {
+      expect(db.get(t)!.size).toBe(0)
+    }
+  })
+
+  it('story: a GC-removed beat on a living script deletes exactly its row', async () => {
+    const prev = fixtureDoc()
+    const next = structuredClone(prev)
+    delete next.beats!.beat_1
+    next.tombstones!.push({ type: 'beat', id: 'beat_1', at: '2026-10-07T00:00:00.000Z', by: 'u_admin' })
+    const ops = await mirrorOps(prev, next)
+    const beatDels = ops.filter((o) => o.sql === 'DELETE FROM beats WHERE script_id = ? AND id = ?')
+    expect(beatDels).toHaveLength(1)
+    expect(beatDels[0]!.args).toEqual(['scr_1', 'beat_1'])
+    const db = await importDoc(prev)
+    apply(db, ops)
+    expect(db.get('beats')!.size).toBe(1) // beat_2 survives
+    expect(canonicalJson(rowsToDoc(rowsOf(db)))).toBe(canonicalJson(next))
+  })
+
+  it('story: a beat edit is one row put; a title flip churns no act rows', async () => {
+    const prev = fixtureDoc()
+    const next = structuredClone(prev)
+    next.beats!.beat_1!.summary = 'The city wakes, hungry.'
+    const ops = await mirrorOps(prev, next)
+    expect(ops.filter((o) => o.sql.includes('INTO beats'))).toHaveLength(1)
+    expect(ops.some((o) => o.sql.includes('script_acts'))).toBe(false)
+
+    const actsMove = structuredClone(prev)
+    actsMove.scripts!.scr_1!.acts = [
+      { id: 'act_middle', name: 'Middle' },
+      { id: 'act_opening', name: 'Opening' },
+    ]
+    const ops2 = await mirrorOps(prev, actsMove)
+    // whole rewrite: one prefix del + one put per act
+    expect(ops2.filter((o) => o.sql === 'DELETE FROM script_acts WHERE script_id = ?')).toHaveLength(1)
+    expect(ops2.filter((o) => o.sql.includes('INTO script_acts'))).toHaveLength(2)
+    const db = await importDoc(prev)
+    apply(db, ops2)
+    expect(canonicalJson(rowsToDoc(rowsOf(db)))).toBe(canonicalJson(actsMove))
+  })
+
+  it('story: adding a link is one story_links put; a soft delete updates the row', async () => {
+    const prev = fixtureDoc()
+    const next = structuredClone(prev)
+    next.storyLinks!.push({ id: 'lnk_3', scriptId: 'scr_1', fromKind: 'script', fromId: 'scr_1', toKind: 'scene', toId: 'scn_1', rel: 'references', note: '', createdAt: '2026-10-06T05:00:00.000Z', deleted: null })
+    const ops = await mirrorOps(prev, next)
+    expect(ops.filter((o) => o.sql.includes('INTO story_links'))).toHaveLength(1)
+    const db = await importDoc(prev)
+    apply(db, ops)
+    expect(db.get('story_links')!.size).toBe(3)
+
+    const removed = structuredClone(next)
+    removed.storyLinks = removed.storyLinks!.map((l) => (l.id === 'lnk_3' ? { ...l, deleted: { at: '2026-10-07T00:00:00.000Z', by: 'u_admin' } } : l))
+    const ops2 = await mirrorOps(next, removed)
+    expect(ops2.filter((o) => o.sql.startsWith('DELETE FROM story_links'))).toHaveLength(0) // soft delete = row update
+    expect(ops2.filter((o) => o.sql.includes('INTO story_links'))).toHaveLength(1)
   })
 
   it('deleting a project cleans sections and files before the parent row', async () => {
@@ -485,6 +704,20 @@ describe('diffDocs', () => {
     const report = await diffDocs(doc, rowsToDoc(rowsOf(db)))
     expect(report.clean).toBe(false)
     expect(report.divergences.some((d) => d.path === 'ids')).toBe(true)
+  })
+
+  it('treats approved:null and absent as the same state (post-P7 client writes)', async () => {
+    const doc = fixtureDoc()
+    const db = await importDoc(doc)
+    // An app-written project serializes the zod nullable default into the
+    // doc; regen omits it. The shadow diff must not fire on the difference.
+    const written = structuredClone(doc)
+    written.projects!.prj_1!.approved = null
+    const regen = rowsToDoc(rowsOf(db))
+    ;(regen.projects!.prj_1 as Record<string, unknown>).approved = undefined
+    delete (regen.projects!.prj_1 as Record<string, unknown>).approved
+    const report = await diffDocs(written, regen)
+    expect(report.clean).toBe(true)
   })
 
   it('activity order across writers is NOT a divergence (set compare)', async () => {

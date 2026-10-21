@@ -33,6 +33,29 @@ describe('validateOps', () => {
     expect(() => validateOps([{ t: 'activity', events: [{ at: 't' }] }])).toThrow(/at\/actor\/verb\/ref/)
     expect(() => validateOps(new Array(501).fill({ t: 'meta', key: 'ids', value: '{}' }))).toThrow(/too many ops/)
   })
+
+  it('story tables validate like the rest of the registry', () => {
+    // beats put: composite pk (script_id, id) + LWW stamp required
+    expect(() =>
+      validateOps([{ t: 'put', table: 'beats', row: { id: 'beat_1', script_id: 'scr_1', act_id: 'act_opening', sort: 100, pos_x: 1, pos_y: 2, created_at: 't1', updated_at: 't2' } }]),
+    ).not.toThrow()
+    expect(() =>
+      validateOps([{ t: 'put', table: 'beats', row: { id: 'beat_1', script_id: 'scr_1', act_id: 'a', updated_at: 't2', created_at: 't1' } }]),
+    ).not.toThrow()
+    // missing script_id in the pk → rejected
+    expect(() =>
+      validateOps([{ t: 'put', table: 'story_links', row: { id: 'lnk_1', from_kind: 'ref', from_id: 'ref_1', to_kind: 'beat', to_id: 'beat_1', rel: 'inspires', created_at: 't1', updated_at: 't2' } }]),
+    ).toThrow(/missing pk/)
+    // guarded (non-strong) dels need the FULL composite key
+    expect(() => validateOps([{ t: 'del', table: 'beats', pk: ['scr_1'], at: 't9' }])).toThrow(/full 2-column key/)
+    expect(() => validateOps([{ t: 'del', table: 'beats', pk: ['scr_1', 'beat_1'], at: 't9' }])).not.toThrow()
+    // mirror strong dels may use the script_id prefix (the sweep)
+    expect(() => validateOps([{ t: 'del', table: 'beats', pk: ['scr_1'], strong: true }], { allowStrong: true })).not.toThrow()
+    // unknown story column rejected
+    expect(() =>
+      validateOps([{ t: 'put', table: 'shots', row: { id: 's', script_id: 'p', evil: 1, updated_at: 't' } }]),
+    ).toThrow(/column evil/)
+  })
 })
 
 describe('compileOps', () => {
@@ -55,6 +78,20 @@ describe('compileOps', () => {
     expect(d1!.args).toEqual(['ref_1', 't9', 't9'])
     const [d2] = await compileOps([{ t: 'del', table: 'project_files', pk: ['p', 'k'] }])
     expect(d2!.sql).toBe('DELETE FROM project_files WHERE project_id = ? AND file_key = ?')
+  })
+
+  it('story puts compile to composite-key guarded upserts; prefix dels sweep by script', async () => {
+    const [beatPut] = await compileOps([
+      { t: 'put', table: 'beats', row: { id: 'beat_1', script_id: 'scr_1', act_id: 'act_opening', sort: 100, pos_x: null, pos_y: null, created_at: 't1', updated_at: 't2' } },
+    ])
+    expect(beatPut!.sql).toMatch(/^INSERT INTO beats/)
+    expect(beatPut!.sql).toMatch(/ON CONFLICT\(script_id, ?id\) DO UPDATE SET/)
+
+    const [sweep] = await compileOps([{ t: 'del', table: 'beats', pk: ['scr_1'], strong: true }])
+    expect(sweep!.sql).toBe('DELETE FROM beats WHERE script_id = ?')
+
+    const [guarded] = await compileOps([{ t: 'del', table: 'beats', pk: ['scr_1', 'beat_1'], at: 't9' }])
+    expect(guarded!.sql).toBe('DELETE FROM beats WHERE script_id = ? AND id = ? AND (updated_at IS NULL OR updated_at <= ? OR (? NOT GLOB \'*[^0-9.]*\' AND updated_at GLOB \'*[^0-9.]*\'))')
   })
 
   it('activity dedupes by the SAME sha256 identity the shadow mirror uses', async () => {

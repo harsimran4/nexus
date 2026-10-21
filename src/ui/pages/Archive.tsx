@@ -4,7 +4,7 @@ import { type Project } from '../../types/schema'
 import { decodeHlc } from '../../util/hlc'
 import { useCanWrite } from '../../auth/session'
 import { commit, touch, recordTombstone, appendActivity, flush, forgetPending, writerId } from '../../sync/writer'
-import { unarchiveProject, updateProject } from '../../state/actions'
+import { unarchiveProject, updateProject, restoreScript } from '../../state/actions'
 import { describeError } from '../../drive/preview'
 import { Empty, Icon, StatusBadge, PageQuote, banner, confirmDialog, toast } from '../components'
 
@@ -88,6 +88,9 @@ export function Archive(): React.JSX.Element {
   const archivedProjects = Object.values(doc?.projects ?? {})
     .filter((p) => p.deleted === null && p.archivedAt !== null)
     .sort((a, b) => stampMs(b.archivedAt)! - stampMs(a.archivedAt)!)
+  const deletedScripts = Object.values(doc?.scripts ?? {})
+    .filter((s) => s.deleted !== null)
+    .sort((a, b) => stampMs(b.deleted?.at ?? null)! - stampMs(a.deleted?.at ?? null)!)
 
   const purgeNow = async (projectId: string): Promise<void> => {
     const p = deletedProjects.find((x) => x.id === projectId)
@@ -188,6 +191,49 @@ export function Archive(): React.JSX.Element {
             ))}
           </div>
         ))}
+
+      {tab === 'deleted' && deletedScripts.length > 0 && (
+        <div className="card archived-paper" style={{ marginTop: 14 }}>
+          <div className="spread mb8">
+            <h3 style={{ margin: 0 }}>Scripts</h3>
+            <span className="faint small">Restoring brings the script back; its story structure was removed with it.</span>
+          </div>
+          <table className="table ledger">
+            <thead>
+              <tr>
+                <th>Title</th>
+                <th>Project</th>
+                <th>Deleted</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {deletedScripts.map((s) => (
+                <tr key={s.id}>
+                  <td className="archive-name">{s.title}</td>
+                  <td className="muted small">{s.projectId ? doc?.projects[s.projectId]?.name ?? '—' : '—'}</td>
+                  <td className="small muted" title={exact(s.deleted?.at ?? null)}>
+                    {rel(s.deleted?.at ?? null)}
+                  </td>
+                  <td>
+                    {writable && (
+                      <button
+                        className="btn small"
+                        onClick={() => {
+                          restoreScript(s.id)
+                          toast.success(`“${s.title}” is back in Scripts`)
+                        }}
+                      >
+                        Restore
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {tab === 'deleted' &&
         (deletedProjects.length === 0 ? (

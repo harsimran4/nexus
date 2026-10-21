@@ -60,6 +60,7 @@ test.describe.serial('d1 shadow consistency', () => {
     await page.getByPlaceholder('e.g. Q4 launch voiceover').fill('Shadow Mirror Script')
     await page.getByRole('button', { name: 'Create', exact: true }).click()
     await expect(page.locator('.script-title')).toHaveValue('Shadow Mirror Script')
+    await page.getByRole('tab', { name: 'Manuscript' }).click()
     const body = page.getByPlaceholder('Write the script…')
     await body.fill('# shadow\n\nmirrored line\n')
     await page.locator('select.script-status').selectOption('review')

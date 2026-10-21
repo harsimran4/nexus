@@ -136,6 +136,33 @@ export const scriptStorageSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('drive-doc'), fileId: z.string() }),
 ])
 
+export const scriptActSchema = z.object({
+  id: z.string(),
+  name: z.string().min(1),
+})
+export type ScriptAct = z.infer<typeof scriptActSchema>
+
+/** Deterministic seed acts — the ids are load-bearing (see scriptSchema.acts). */
+export const DEFAULT_ACTS: readonly ScriptAct[] = [
+  { id: 'act_opening', name: 'Opening' },
+  { id: 'act_middle', name: 'Middle' },
+  { id: 'act_ending', name: 'Ending' },
+]
+
+export const scriptBriefSchema = z.object({
+  concept: z.string().default(''),
+  premise: z.string().default(''),
+  themes: z.string().default(''),
+  audience: z.string().default(''),
+  tone: z.string().default(''),
+  mood: z.string().default(''),
+  goals: z.string().default(''),
+})
+export type ScriptBrief = z.infer<typeof scriptBriefSchema>
+export const BRIEF_EMPTY: ScriptBrief = {
+  concept: '', premise: '', themes: '', audience: '', tone: '', mood: '', goals: '',
+}
+
 export const scriptSchema = stampsSchema.extend({
   id: z.string(),
   title: z.string().min(1),
@@ -144,8 +171,111 @@ export const scriptSchema = stampsSchema.extend({
   projectId: z.string().nullable().default(null),
   status: z.enum(SCRIPT_STATUSES).default('draft'),
   copies: z.array(z.object({ fileId: z.string(), label: z.string(), at: z.string() })).default([]),
+  // Story structure acts (Opening/Middle/Ending + user-added) — embedded like
+  // mediaSections: fixed, low-churn labels where whole-script LWW is the
+  // accepted trade. Seeding uses the DETERMINISTIC ids below so two tabs that
+  // seed concurrently merge to the identical trio instead of six acts.
+  acts: z.array(scriptActSchema).default([]),
+  // Creative Brief — one optional object. Optional, NOT default({}): the
+  // parsed doc is what whole-doc writes re-upload, and a default-filled brief
+  // on every script would diverge the D1 shadow diff (whose regen omits the
+  // key). updateScriptBrief deletes the key entirely when every field is
+  // empty; once written, all seven keys are always present (parse fills them).
+  brief: scriptBriefSchema.optional(),
 })
 export type Script = z.infer<typeof scriptSchema>
+
+// ---------------------------------------------------------------------------
+// Story structure — the connected creative system inside a script:
+// acts (embedded above) → beats → scenes → shots, plus free-form relations
+// (storyLinks) that connect any two story elements, including refs.
+// ---------------------------------------------------------------------------
+
+/** Saved graph position (Story Graph, P2). Optional, NOT default — an
+ *  absent pos must stay absent on parse or the D1 shadow diff diverges. */
+export const storyPosSchema = z.object({ x: z.number(), y: z.number() })
+export type StoryPos = z.infer<typeof storyPosSchema>
+
+/** Story beat — one turn of the story inside an act: what happens, why it
+ *  matters, how it hands off to the next beat. A record-map entity (per-key
+ *  LWW + touch() re-assert) because beats are added/edited concurrently. */
+export const beatSchema = stampsSchema.extend({
+  id: z.string(),
+  scriptId: z.string(),
+  actId: z.string(), // an embedded script.acts member — no FK possible
+  title: z.string().default(''),
+  summary: z.string().default(''), // what happens
+  purpose: z.string().default(''), // why it matters
+  bridge: z.string().default(''), // how it connects to the next beat
+  sort: z.number().int().default(0),
+  pos: storyPosSchema.optional(),
+})
+export type Beat = z.infer<typeof beatSchema>
+
+/** Scene — a unit of dramatic place/time inside a beat. One PRIMARY beat via
+ *  beatId; a scene that ALSO serves another beat gets a storyLinks row with
+ *  rel:'serves' (a second id field here would need whole-entity LWW for two
+ *  independent writes — the exact clobber the refs comment warns about). */
+export const sceneSchema = stampsSchema.extend({
+  id: z.string(),
+  scriptId: z.string(),
+  beatId: z.string(),
+  title: z.string().default(''),
+  action: z.string().default(''),
+  location: z.string().default(''),
+  sort: z.number().int().default(0),
+  pos: storyPosSchema.optional(),
+})
+export type Scene = z.infer<typeof sceneSchema>
+
+/** Shot — one camera setup on a scene or directly on a beat. Craft fields are
+ *  plain strings, NOT enums — a newer client's vocabulary ('anamorphic…')
+ *  must never fail this client's parseDoc (group.color reasoning). */
+export const shotSchema = stampsSchema.extend({
+  id: z.string(),
+  scriptId: z.string(),
+  sceneId: z.string().nullable().default(null), // exactly one of sceneId/beatId — enforced by actions
+  beatId: z.string().nullable().default(null),
+  caption: z.string().default(''),
+  shotSize: z.string().default(''),
+  cameraMove: z.string().default(''),
+  composition: z.string().default(''),
+  lighting: z.string().default(''),
+  sound: z.string().default(''),
+  durationSec: z.number().optional(), // omit when unset (shadow-diff rule)
+  storyboardFileKey: z.string().optional(), // a project fileIds storage key
+  sort: z.number().int().default(0),
+  pos: storyPosSchema.optional(),
+})
+export type Shot = z.infer<typeof shotSchema>
+
+/** What a storyLink endpoint may point at. 'script' = the Creative Brief /
+ *  whole-script concept; 'ref' = an entry of doc.refs. */
+export const STORY_LINK_KINDS = ['script', 'beat', 'scene', 'shot', 'ref'] as const
+export type StoryLinkKind = (typeof STORY_LINK_KINDS)[number]
+
+/** Stored relations. contains/follows are DERIVED from parent pointers + sort
+ *  — never stored (duplicate truth rots; order IS the follow relation). */
+export const STORY_LINK_RELS = ['serves', 'inspires', 'references', 'contrasts'] as const
+export type StoryRel = (typeof STORY_LINK_RELS)[number]
+
+/** Story relation between any two story elements. A TOP-LEVEL array exactly
+ *  like refs/comments — per-entry LWW, soft delete, never touch(). */
+export const storyLinkSchema = z.object({
+  id: z.string(), // "lnk_…"
+  scriptId: z.string(), // owning script — denormalized from the FROM endpoint at creation
+  fromKind: z.enum(STORY_LINK_KINDS),
+  fromId: z.string(),
+  toKind: z.enum(STORY_LINK_KINDS),
+  toId: z.string(),
+  rel: z.enum(STORY_LINK_RELS),
+  note: z.string().default(''),
+  createdAt: z.string(), // HLC
+  updatedAt: z.string().optional(), // LWW stamps (merge.ts)
+  writerId: z.string().optional(),
+  deleted: deletedSchema,
+})
+export type StoryLink = z.infer<typeof storyLinkSchema>
 
 export const appUserSchema = z.object({
   id: z.string(),
@@ -178,12 +308,13 @@ export const activityEventSchema = z.object({
 export type ActivityEvent = z.infer<typeof activityEventSchema>
 
 export const tombstoneSchema = z.object({
-  type: z.enum(['group', 'project', 'script', 'user']),
+  type: z.enum(['group', 'project', 'script', 'user', 'beat', 'scene', 'shot']),
   id: z.string(),
   at: z.string(),
   by: z.string(),
 })
 export type Tombstone = z.infer<typeof tombstoneSchema>
+export type TombstoneType = Tombstone['type']
 
 export const snapshotMetaSchema = z.object({
   fileId: z.string(),
@@ -249,6 +380,9 @@ export const refSchema = z.object({
   updatedAt: z.string().optional(), // LWW stamps (merge.ts)
   writerId: z.string().optional(),
   deleted: deletedSchema, // soft delete; UI hides rows with deleted !== null
+  // Story Graph position — refs with a live storyLink render as nodes.
+  // Optional, omitted when unset (same shadow-diff rule as every pos).
+  pos: storyPosSchema.optional(),
 })
 export type Ref = z.infer<typeof refSchema>
 
@@ -305,6 +439,10 @@ export const nexusDocSchema = z.object({
   groups: z.record(z.string(), groupSchema).default({}),
   projects: z.record(z.string(), projectSchema).default({}),
   scripts: z.record(z.string(), scriptSchema).default({}),
+  beats: z.record(z.string(), beatSchema).default({}),
+  scenes: z.record(z.string(), sceneSchema).default({}),
+  shots: z.record(z.string(), shotSchema).default({}),
+  storyLinks: z.array(storyLinkSchema).default([]),
   tombstones: z.array(tombstoneSchema).default([]),
   activity: z.array(activityEventSchema).default([]),
   snapshots: z.array(snapshotMetaSchema).default([]),
@@ -313,7 +451,7 @@ export const nexusDocSchema = z.object({
 export type NexusDoc = z.infer<typeof nexusDocSchema>
 
 /** Entities whose LWW merge happens per-key inside a Record. */
-export type EntityMaps = Pick<NexusDoc, 'groups' | 'projects' | 'scripts'>
+export type EntityMaps = Pick<NexusDoc, 'groups' | 'projects' | 'scripts' | 'beats' | 'scenes' | 'shots'>
 export type EntityOf<K extends keyof EntityMaps> = EntityMaps[K][string]
 
 export function emptyDoc(): NexusDoc {

@@ -3,6 +3,7 @@ import { useStore } from '../../../sync/store'
 import { Empty } from '../../components'
 import { useCanWrite } from '../../../auth/session'
 import { readScriptBody, updateScript } from '../../../state/actions'
+import { navigate } from '../../../nav'
 
 /** Scripts assigned to this project — read in place, link/unlink. */
 export function ScriptsTab({ projectId }: { projectId: string }): React.JSX.Element {
@@ -43,7 +44,16 @@ export function ScriptsTab({ projectId }: { projectId: string }): React.JSX.Elem
               <span className={`badge ${s.status === 'final' ? 'done' : s.status === 'review' ? 'doing' : ''}`}>{s.status}</span>
             </div>
             <div className="row">
-              <a className="btn small" href="/scripts">Edit on Scripts page</a>
+              <a
+                className="btn small"
+                href={`/scripts/${s.id}`}
+                onClick={(e) => {
+                  e.preventDefault()
+                  navigate(`/scripts/${s.id}`)
+                }}
+              >
+                Open workspace
+              </a>
               {writable && (
                 <button className="btn small ghost" onClick={() => updateScript(s.id, { projectId: null })}>Unlink</button>
               )}

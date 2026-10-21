@@ -20,6 +20,8 @@ import { Route as SecurityRouteImport } from './routes/security'
 import { Route as FilesSplatRouteImport } from './routes/files/$'
 import { Route as GroupGroupIdRouteImport } from './routes/group.$groupId'
 import { Route as ProjectProjectIdRouteImport } from './routes/project.$projectId'
+import { Route as ScriptsIndexRouteImport } from './routes/scripts.index'
+import { Route as ScriptsScriptIdRouteImport } from './routes/scripts.$scriptId'
 import { Route as ShareTokenRouteImport } from './routes/share.$token'
 import { Route as UploadTokenRouteImport } from './routes/upload.$token'
 import { Route as ApiDebugD1RouteImport } from './routes/api/debug/d1'
@@ -86,6 +88,16 @@ const ProjectProjectIdRoute = ProjectProjectIdRouteImport.update({
   path: '/project/$projectId',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ScriptsIndexRoute = ScriptsIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => ScriptsRoute,
+} as any)
+const ScriptsScriptIdRoute = ScriptsScriptIdRouteImport.update({
+  id: '/$scriptId',
+  path: '/$scriptId',
+  getParentRoute: () => ScriptsRoute,
+} as any)
 const ShareTokenRoute = ShareTokenRouteImport.update({
   id: '/share/$token',
   path: '/share/$token',
@@ -144,13 +156,15 @@ export interface FileRoutesByFullPath {
   '/groups': typeof GroupsRoute
   '/init': typeof InitRoute
   '/login': typeof LoginRoute
-  '/scripts': typeof ScriptsRoute
+  '/scripts': typeof ScriptsRouteWithChildren
   '/security': typeof SecurityRoute
   '/files/$': typeof FilesSplatRoute
   '/group/$groupId': typeof GroupGroupIdRoute
   '/project/$projectId': typeof ProjectProjectIdRoute
+  '/scripts/$scriptId': typeof ScriptsScriptIdRoute
   '/share/$token': typeof ShareTokenRoute
   '/upload/$token': typeof UploadTokenRoute
+  '/scripts/': typeof ScriptsIndexRoute
   '/api/debug/d1': typeof ApiDebugD1Route
   '/api/diagnostics/error': typeof ApiDiagnosticsErrorRoute
   '/api/public/list': typeof ApiPublicListRoute
@@ -167,13 +181,14 @@ export interface FileRoutesByTo {
   '/groups': typeof GroupsRoute
   '/init': typeof InitRoute
   '/login': typeof LoginRoute
-  '/scripts': typeof ScriptsRoute
   '/security': typeof SecurityRoute
   '/files/$': typeof FilesSplatRoute
   '/group/$groupId': typeof GroupGroupIdRoute
   '/project/$projectId': typeof ProjectProjectIdRoute
+  '/scripts/$scriptId': typeof ScriptsScriptIdRoute
   '/share/$token': typeof ShareTokenRoute
   '/upload/$token': typeof UploadTokenRoute
+  '/scripts': typeof ScriptsIndexRoute
   '/api/debug/d1': typeof ApiDebugD1Route
   '/api/diagnostics/error': typeof ApiDiagnosticsErrorRoute
   '/api/public/list': typeof ApiPublicListRoute
@@ -191,13 +206,15 @@ export interface FileRoutesById {
   '/groups': typeof GroupsRoute
   '/init': typeof InitRoute
   '/login': typeof LoginRoute
-  '/scripts': typeof ScriptsRoute
+  '/scripts': typeof ScriptsRouteWithChildren
   '/security': typeof SecurityRoute
   '/files/$': typeof FilesSplatRoute
   '/group/$groupId': typeof GroupGroupIdRoute
   '/project/$projectId': typeof ProjectProjectIdRoute
+  '/scripts/$scriptId': typeof ScriptsScriptIdRoute
   '/share/$token': typeof ShareTokenRoute
   '/upload/$token': typeof UploadTokenRoute
+  '/scripts/': typeof ScriptsIndexRoute
   '/api/debug/d1': typeof ApiDebugD1Route
   '/api/diagnostics/error': typeof ApiDiagnosticsErrorRoute
   '/api/public/list': typeof ApiPublicListRoute
@@ -221,8 +238,10 @@ export interface FileRouteTypes {
     | '/files/$'
     | '/group/$groupId'
     | '/project/$projectId'
+    | '/scripts/$scriptId'
     | '/share/$token'
     | '/upload/$token'
+    | '/scripts/'
     | '/api/debug/d1'
     | '/api/diagnostics/error'
     | '/api/public/list'
@@ -239,13 +258,14 @@ export interface FileRouteTypes {
     | '/groups'
     | '/init'
     | '/login'
-    | '/scripts'
     | '/security'
     | '/files/$'
     | '/group/$groupId'
     | '/project/$projectId'
+    | '/scripts/$scriptId'
     | '/share/$token'
     | '/upload/$token'
+    | '/scripts'
     | '/api/debug/d1'
     | '/api/diagnostics/error'
     | '/api/public/list'
@@ -267,8 +287,10 @@ export interface FileRouteTypes {
     | '/files/$'
     | '/group/$groupId'
     | '/project/$projectId'
+    | '/scripts/$scriptId'
     | '/share/$token'
     | '/upload/$token'
+    | '/scripts/'
     | '/api/debug/d1'
     | '/api/diagnostics/error'
     | '/api/public/list'
@@ -286,7 +308,7 @@ export interface RootRouteChildren {
   GroupsRoute: typeof GroupsRoute
   InitRoute: typeof InitRoute
   LoginRoute: typeof LoginRoute
-  ScriptsRoute: typeof ScriptsRoute
+  ScriptsRoute: typeof ScriptsRouteWithChildren
   SecurityRoute: typeof SecurityRoute
   FilesSplatRoute: typeof FilesSplatRoute
   GroupGroupIdRoute: typeof GroupGroupIdRoute
@@ -382,6 +404,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectProjectIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/scripts/': {
+      id: '/scripts/'
+      path: '/'
+      fullPath: '/scripts/'
+      preLoaderRoute: typeof ScriptsIndexRouteImport
+      parentRoute: typeof ScriptsRoute
+    }
+    '/scripts/$scriptId': {
+      id: '/scripts/$scriptId'
+      path: '/$scriptId'
+      fullPath: '/scripts/$scriptId'
+      preLoaderRoute: typeof ScriptsScriptIdRouteImport
+      parentRoute: typeof ScriptsRoute
+    }
     '/share/$token': {
       id: '/share/$token'
       path: '/share/$token'
@@ -455,6 +491,19 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface ScriptsRouteChildren {
+  ScriptsScriptIdRoute: typeof ScriptsScriptIdRoute
+  ScriptsIndexRoute: typeof ScriptsIndexRoute
+}
+
+const ScriptsRouteChildren: ScriptsRouteChildren = {
+  ScriptsScriptIdRoute: ScriptsScriptIdRoute,
+  ScriptsIndexRoute: ScriptsIndexRoute,
+}
+
+const ScriptsRouteWithChildren =
+  ScriptsRoute._addFileChildren(ScriptsRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRoute,
@@ -462,7 +511,7 @@ const rootRouteChildren: RootRouteChildren = {
   GroupsRoute: GroupsRoute,
   InitRoute: InitRoute,
   LoginRoute: LoginRoute,
-  ScriptsRoute: ScriptsRoute,
+  ScriptsRoute: ScriptsRouteWithChildren,
   SecurityRoute: SecurityRoute,
   FilesSplatRoute: FilesSplatRoute,
   GroupGroupIdRoute: GroupGroupIdRoute,

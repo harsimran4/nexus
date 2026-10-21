@@ -112,6 +112,111 @@ CREATE TABLE IF NOT EXISTS script_copies (
   PRIMARY KEY (script_id, file_id)
 );
 
+-- Story structure (P11). script_acts mirrors media_sections (embedded array
+-- + sort). beats/scenes/shots are LWW entities like scripts BUT with a
+-- composite (script_id, id) pk: del ops compile WHERE over a PK PREFIX, so
+-- the script_id prefix lets one op sweep a script's children when a script
+-- is hard-deleted — a bare-id pk would orphan them (the latent comments
+-- trap). story_links mirror the refs shape (per-entry LWW, soft delete);
+-- endpoints are polymorphic with NO FKs (they may point at soft-deleted or
+-- removed entities — upload_links precedent; enforcing crashed D1's DO).
+CREATE TABLE IF NOT EXISTS script_acts (
+  script_id TEXT NOT NULL REFERENCES scripts(id),
+  id        TEXT NOT NULL,
+  name      TEXT NOT NULL,
+  sort      INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (script_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS beats (
+  script_id  TEXT NOT NULL REFERENCES scripts(id),
+  id         TEXT NOT NULL,
+  act_id     TEXT NOT NULL, -- an embedded script_acts member; no FK possible
+  title      TEXT NOT NULL DEFAULT '',
+  summary    TEXT NOT NULL DEFAULT '', -- what happens
+  purpose    TEXT NOT NULL DEFAULT '', -- why it matters
+  bridge     TEXT NOT NULL DEFAULT '', -- how it hands off to the next beat
+  sort       INTEGER NOT NULL DEFAULT 0,
+  pos_x      REAL, -- Story Graph position; NULL/NULL = unset
+  pos_y      REAL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  writer_id  TEXT NOT NULL DEFAULT 'unknown',
+  deleted_at TEXT,
+  deleted_by TEXT,
+  archived_at TEXT,
+  extra      TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (script_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_beats_script ON beats(script_id);
+
+CREATE TABLE IF NOT EXISTS scenes (
+  script_id  TEXT NOT NULL REFERENCES scripts(id),
+  id         TEXT NOT NULL,
+  beat_id    TEXT NOT NULL, -- PRIMARY beat; extra beats are story_links rel:'serves'
+  title      TEXT NOT NULL DEFAULT '',
+  action     TEXT NOT NULL DEFAULT '',
+  location   TEXT NOT NULL DEFAULT '',
+  sort       INTEGER NOT NULL DEFAULT 0,
+  pos_x      REAL,
+  pos_y      REAL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  writer_id  TEXT NOT NULL DEFAULT 'unknown',
+  deleted_at TEXT,
+  deleted_by TEXT,
+  archived_at TEXT,
+  extra      TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (script_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_scenes_script ON scenes(script_id);
+
+CREATE TABLE IF NOT EXISTS shots (
+  script_id  TEXT NOT NULL REFERENCES scripts(id),
+  id         TEXT NOT NULL,
+  scene_id   TEXT, -- exactly one of scene_id/beat_id — enforced by actions
+  beat_id    TEXT,
+  caption    TEXT NOT NULL DEFAULT '',
+  shot_size  TEXT NOT NULL DEFAULT '',
+  camera_move TEXT NOT NULL DEFAULT '',
+  composition TEXT NOT NULL DEFAULT '',
+  lighting   TEXT NOT NULL DEFAULT '',
+  sound      TEXT NOT NULL DEFAULT '',
+  duration_sec REAL,
+  storyboard_key TEXT, -- a project fileIds storage key
+  sort       INTEGER NOT NULL DEFAULT 0,
+  pos_x      REAL,
+  pos_y      REAL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  writer_id  TEXT NOT NULL DEFAULT 'unknown',
+  deleted_at TEXT,
+  deleted_by TEXT,
+  archived_at TEXT,
+  extra      TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (script_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_shots_script ON shots(script_id);
+
+CREATE TABLE IF NOT EXISTS story_links (
+  script_id  TEXT NOT NULL REFERENCES scripts(id),
+  id         TEXT NOT NULL,
+  from_kind  TEXT NOT NULL CHECK (from_kind IN ('script','beat','scene','shot','ref')),
+  from_id    TEXT NOT NULL,
+  to_kind    TEXT NOT NULL CHECK (to_kind IN ('script','beat','scene','shot','ref')),
+  to_id      TEXT NOT NULL,
+  rel        TEXT NOT NULL CHECK (rel IN ('serves','inspires','references','contrasts')),
+  note       TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT,
+  writer_id  TEXT,
+  deleted_at TEXT,
+  deleted_by TEXT,
+  extra      TEXT NOT NULL DEFAULT '{}',
+  PRIMARY KEY (script_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_story_links_script ON story_links(script_id);
+
 CREATE TABLE IF NOT EXISTS users_app (
   id            TEXT PRIMARY KEY,
   name          TEXT NOT NULL,
@@ -208,13 +313,29 @@ CREATE TABLE IF NOT EXISTS activity (
 CREATE INDEX IF NOT EXISTS idx_activity_at ON activity(at);
 
 -- Tombstones: the offline outbox needs "never existed" vs "was deleted".
+-- (P11 widened the CHECK with beat/scene/shot; SQLite can't ALTER a CHECK.)
+-- The block is re-runnable on every state: on FRESH databases the first
+-- CREATE makes the new shape and the copy-dance below moves zero rows; on
+-- pre-P11 databases the CREATE no-ops and the dance widens the CHECK
+-- in place, PRESERVING rows.
 CREATE TABLE IF NOT EXISTS deletions (
   id   TEXT NOT NULL,
-  type TEXT NOT NULL CHECK (type IN ('group','project','script','user')),
+  type TEXT NOT NULL CHECK (type IN ('group','project','script','user','beat','scene','shot')),
   at   TEXT NOT NULL,
   by   TEXT NOT NULL,
   PRIMARY KEY (type, id)
 );
+DROP TABLE IF EXISTS deletions_new;
+CREATE TABLE deletions_new (
+  id   TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('group','project','script','user','beat','scene','shot')),
+  at   TEXT NOT NULL,
+  by   TEXT NOT NULL,
+  PRIMARY KEY (type, id)
+);
+INSERT OR REPLACE INTO deletions_new (id, type, at, by) SELECT id, type, at, by FROM deletions;
+DROP TABLE deletions;
+ALTER TABLE deletions_new RENAME TO deletions;
 
 -- Snapshot metadata (doc.snapshots[]) — stage 1 regen must reproduce the
 -- whole doc; Time Travel (P10) retires the mechanism, not the data.

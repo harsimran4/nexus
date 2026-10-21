@@ -80,11 +80,83 @@ export type LightScript = {
   projectId?: string | null
   status?: string
   copies?: { fileId: string; label: string; at: string }[]
+  acts?: { id: string; name: string }[]
+  brief?: unknown // rides `extra` — deliberately absent from SCRIPT_KNOWN
   createdAt?: string
   updatedAt?: string
   writerId?: string
   deleted?: LightDeleted
   archivedAt?: string | null
+  [k: string]: unknown
+}
+export type LightBeat = {
+  id: string
+  scriptId: string
+  actId: string
+  title?: string
+  summary?: string
+  purpose?: string
+  bridge?: string
+  sort?: number
+  pos?: { x: number; y: number }
+  createdAt?: string
+  updatedAt?: string
+  writerId?: string
+  deleted?: LightDeleted
+  archivedAt?: string | null
+  [k: string]: unknown
+}
+export type LightScene = {
+  id: string
+  scriptId: string
+  beatId: string
+  title?: string
+  action?: string
+  location?: string
+  sort?: number
+  pos?: { x: number; y: number }
+  createdAt?: string
+  updatedAt?: string
+  writerId?: string
+  deleted?: LightDeleted
+  archivedAt?: string | null
+  [k: string]: unknown
+}
+export type LightShot = {
+  id: string
+  scriptId: string
+  sceneId?: string | null
+  beatId?: string | null
+  caption?: string
+  shotSize?: string
+  cameraMove?: string
+  composition?: string
+  lighting?: string
+  sound?: string
+  durationSec?: number
+  storyboardFileKey?: string
+  sort?: number
+  pos?: { x: number; y: number }
+  createdAt?: string
+  updatedAt?: string
+  writerId?: string
+  deleted?: LightDeleted
+  archivedAt?: string | null
+  [k: string]: unknown
+}
+export type LightStoryLink = {
+  id: string
+  scriptId: string
+  fromKind: string
+  fromId: string
+  toKind: string
+  toId: string
+  rel: string
+  note?: string
+  createdAt: string
+  updatedAt?: string
+  writerId?: string
+  deleted?: LightDeleted
   [k: string]: unknown
 }
 export type LightAppUser = {
@@ -169,6 +241,10 @@ export type LightDoc = {
   groups?: Record<string, LightGroup>
   projects?: Record<string, LightProject>
   scripts?: Record<string, LightScript>
+  beats?: Record<string, LightBeat>
+  scenes?: Record<string, LightScene>
+  shots?: Record<string, LightShot>
+  storyLinks?: LightStoryLink[]
   tombstones?: LightTombstone[]
   activity?: LightActivity[]
   snapshots?: LightSnapshot[]
@@ -240,7 +316,14 @@ const PROJECT_KNOWN = [
   'id', 'groupId', 'name', 'folderId', 'status', 'labels', 'fileIds', 'mediaSections', 'mediaSectionOf',
   'assigneeAppId', 'dueAt', 'notes', 'approved', 'createdAt', 'updatedAt', 'writerId', 'deleted', 'archivedAt',
 ]
-const SCRIPT_KNOWN = ['id', 'title', 'storage', 'projectId', 'status', 'copies', 'createdAt', 'updatedAt', 'writerId', 'deleted', 'archivedAt']
+// 'brief' is deliberately ABSENT — it rides scripts.extra (extraOf/extraInto
+// round-trip it with zero DDL). Listing it here would silently drop the brief
+// from every script row.
+const SCRIPT_KNOWN = ['id', 'title', 'storage', 'projectId', 'status', 'copies', 'acts', 'createdAt', 'updatedAt', 'writerId', 'deleted', 'archivedAt']
+const BEAT_KNOWN = ['id', 'scriptId', 'actId', 'title', 'summary', 'purpose', 'bridge', 'sort', 'pos', 'createdAt', 'updatedAt', 'writerId', 'deleted', 'archivedAt']
+const SCENE_KNOWN = ['id', 'scriptId', 'beatId', 'title', 'action', 'location', 'sort', 'pos', 'createdAt', 'updatedAt', 'writerId', 'deleted', 'archivedAt']
+const SHOT_KNOWN = ['id', 'scriptId', 'sceneId', 'beatId', 'caption', 'shotSize', 'cameraMove', 'composition', 'lighting', 'sound', 'durationSec', 'storyboardFileKey', 'sort', 'pos', 'createdAt', 'updatedAt', 'writerId', 'deleted', 'archivedAt']
+const STORY_LINK_KNOWN = ['id', 'scriptId', 'fromKind', 'fromId', 'toKind', 'toId', 'rel', 'note', 'createdAt', 'updatedAt', 'writerId', 'deleted']
 const USER_KNOWN = ['id', 'name', 'role', 'disabled', 'auth', 'createdAt', 'createdBy', 'sessionEpoch', 'updatedAt', 'writerId']
 const VIEWER_KNOWN = ['id', 'name', 'tokenHash', 'createdAt', 'createdBy', 'revokedAt', 'note', 'scope', 'updatedAt', 'writerId']
 const LINK_KNOWN = ['id', 'tokenHash', 'projectId', 'sectionId', 'maxFileBytes', 'note', 'createdAt', 'createdBy', 'expiresAt', 'revokedAt', 'updatedAt', 'writerId']
@@ -400,6 +483,83 @@ function commentRow(c: LightComment, now: string): Row {
   }
 }
 
+/** Graph position — one column pair, NULL/NULL when absent (absent-vs-null is
+ *  the shadow-diff trap; regen emits `pos` only when BOTH are non-NULL). */
+function posOut(pos: { x: number; y: number } | undefined): { pos_x: SqlArg; pos_y: SqlArg } {
+  return { pos_x: pos?.x ?? null, pos_y: pos?.y ?? null }
+}
+
+function beatRow(b: LightBeat, now: string): Row {
+  return {
+    id: b.id,
+    script_id: b.scriptId,
+    act_id: b.actId,
+    title: b.title ?? '',
+    summary: b.summary ?? '',
+    purpose: b.purpose ?? '',
+    bridge: b.bridge ?? '',
+    sort: b.sort ?? 0,
+    ...posOut(b.pos),
+    ...stampsOut(b, now),
+    extra: extraOf(b, BEAT_KNOWN),
+  }
+}
+
+function sceneRow(s: LightScene, now: string): Row {
+  return {
+    id: s.id,
+    script_id: s.scriptId,
+    beat_id: s.beatId,
+    title: s.title ?? '',
+    action: s.action ?? '',
+    location: s.location ?? '',
+    sort: s.sort ?? 0,
+    ...posOut(s.pos),
+    ...stampsOut(s, now),
+    extra: extraOf(s, SCENE_KNOWN),
+  }
+}
+
+function shotRow(s: LightShot, now: string): Row {
+  return {
+    id: s.id,
+    script_id: s.scriptId,
+    scene_id: s.sceneId ?? null,
+    beat_id: s.beatId ?? null,
+    caption: s.caption ?? '',
+    shot_size: s.shotSize ?? '',
+    camera_move: s.cameraMove ?? '',
+    composition: s.composition ?? '',
+    lighting: s.lighting ?? '',
+    sound: s.sound ?? '',
+    duration_sec: s.durationSec ?? null,
+    storyboard_key: s.storyboardFileKey ?? null,
+    sort: s.sort ?? 0,
+    ...posOut(s.pos),
+    ...stampsOut(s, now),
+    extra: extraOf(s, SHOT_KNOWN),
+  }
+}
+
+function storyLinkRow(l: LightStoryLink, now: string): Row {
+  return {
+    id: l.id,
+    script_id: l.scriptId,
+    from_kind: l.fromKind,
+    from_id: l.fromId,
+    to_kind: l.toKind,
+    to_id: l.toId,
+    rel: l.rel,
+    note: l.note ?? '',
+    created_at: l.createdAt ?? now,
+    updated_at: l.updatedAt ?? null,
+    writer_id: l.writerId ?? null,
+    deleted_at: l.deleted?.at ?? null,
+    deleted_by: l.deleted?.by ?? null,
+    extra: extraOf(l, STORY_LINK_KNOWN),
+  }
+}
+
 function activityRow(a: LightActivity, h: string): Row {
   return { at: a.at, actor: a.actor, verb: a.verb, ref: a.ref, meta: canonicalJson(a.meta ?? {}), h }
 }
@@ -453,10 +613,17 @@ export function docToOps(doc: LightDoc): SqlOp[] {
   }
   for (const s of Object.values(doc.scripts ?? {})) {
     ops.push(put('scripts', scriptRow(s, now)))
+    ;(s.acts ?? []).forEach((a, i) => {
+      ops.push(put('script_acts', { script_id: s.id, id: a.id, name: a.name, sort: i }))
+    })
     for (const c of s.copies ?? []) {
       ops.push(put('script_copies', { script_id: s.id, file_id: c.fileId, label: c.label, at: c.at }))
     }
   }
+  for (const b of Object.values(doc.beats ?? {})) ops.push(put('beats', beatRow(b, now)))
+  for (const s of Object.values(doc.scenes ?? {})) ops.push(put('scenes', sceneRow(s, now)))
+  for (const s of Object.values(doc.shots ?? {})) ops.push(put('shots', shotRow(s, now)))
+  for (const l of doc.storyLinks ?? []) ops.push(put('story_links', storyLinkRow(l, now)))
   for (const u of doc.users?.app ?? []) ops.push(put('users_app', userRow(u, now)))
   for (const v of doc.users?.viewers ?? []) ops.push(put('viewers', viewerRow(v, now)))
   for (const l of doc.uploadLinks ?? []) ops.push(put('upload_links', linkRow(l, now)))
@@ -477,6 +644,7 @@ export async function importActivityOps(doc: LightDoc): Promise<SqlOp[]> {
 }
 
 export const ALL_TABLES = [
+  'story_links', 'shots', 'scenes', 'beats', 'script_acts',
   'media_sections', 'project_files', 'script_copies', 'activity', 'deletions', 'snapshots',
   'upload_links', 'refs', 'comments', 'users_app', 'viewers', 'scripts', 'projects', 'groups', 'meta',
 ] as const
@@ -492,7 +660,7 @@ export function wipeOps(): SqlOp[] {
 // the registry doesn't declare).
 // ---------------------------------------------------------------------------
 
-export type EntityTable = 'groups' | 'projects' | 'scripts' | 'users_app' | 'viewers' | 'upload_links' | 'refs' | 'comments'
+export type EntityTable = 'groups' | 'projects' | 'scripts' | 'beats' | 'scenes' | 'shots' | 'story_links' | 'users_app' | 'viewers' | 'upload_links' | 'refs' | 'comments'
 
 export type TableSpec = {
   pk: string[]
@@ -502,7 +670,7 @@ export type TableSpec = {
   lww: boolean
 }
 
-export const TABLE_SPECS: Record<EntityTable | 'media_sections' | 'project_files' | 'script_copies' | 'deletions' | 'snapshots', TableSpec> = {
+export const TABLE_SPECS: Record<EntityTable | 'media_sections' | 'project_files' | 'script_copies' | 'script_acts' | 'deletions' | 'snapshots', TableSpec> = {
   groups: {
     pk: ['id'],
     lww: true,
@@ -546,6 +714,32 @@ export const TABLE_SPECS: Record<EntityTable | 'media_sections' | 'project_files
   media_sections: { pk: ['project_id', 'id'], lww: false, cols: ['project_id', 'id', 'name', 'sort'] },
   project_files: { pk: ['project_id', 'file_key'], lww: false, cols: ['project_id', 'file_key', 'section_id', 'sort', 'added_at', 'added_by'] },
   script_copies: { pk: ['script_id', 'file_id'], lww: false, cols: ['script_id', 'file_id', 'label', 'at'] },
+  script_acts: { pk: ['script_id', 'id'], lww: false, cols: ['script_id', 'id', 'name', 'sort'] },
+  // Story entities use a composite (script_id, id) pk — NOT a bare-id pk like
+  // groups/projects. del ops compile WHERE over a PREFIX of the pk, so the
+  // script-scoped prefix (script_id) is what lets a hard script delete sweep
+  // its children in one op (apply.ts:144); a bare-id pk would compile the
+  // prefix against `id` and orphan every child row (the latent comments trap).
+  beats: {
+    pk: ['script_id', 'id'],
+    lww: true,
+    cols: ['id', 'script_id', 'act_id', 'title', 'summary', 'purpose', 'bridge', 'sort', 'pos_x', 'pos_y', 'created_at', 'updated_at', 'writer_id', 'deleted_at', 'deleted_by', 'archived_at', 'extra'],
+  },
+  scenes: {
+    pk: ['script_id', 'id'],
+    lww: true,
+    cols: ['id', 'script_id', 'beat_id', 'title', 'action', 'location', 'sort', 'pos_x', 'pos_y', 'created_at', 'updated_at', 'writer_id', 'deleted_at', 'deleted_by', 'archived_at', 'extra'],
+  },
+  shots: {
+    pk: ['script_id', 'id'],
+    lww: true,
+    cols: ['id', 'script_id', 'scene_id', 'beat_id', 'caption', 'shot_size', 'camera_move', 'composition', 'lighting', 'sound', 'duration_sec', 'storyboard_key', 'sort', 'pos_x', 'pos_y', 'created_at', 'updated_at', 'writer_id', 'deleted_at', 'deleted_by', 'archived_at', 'extra'],
+  },
+  story_links: {
+    pk: ['script_id', 'id'],
+    lww: true,
+    cols: ['id', 'script_id', 'from_kind', 'from_id', 'to_kind', 'to_id', 'rel', 'note', 'created_at', 'updated_at', 'writer_id', 'deleted_at', 'deleted_by', 'extra'],
+  },
   deletions: { pk: ['type', 'id'], lww: false, cols: ['type', 'id', 'at', 'by'] },
   snapshots: { pk: ['file_id'], lww: false, cols: ['file_id', 'rev', 'at', 'by', 'note'] },
 }
@@ -611,15 +805,36 @@ export async function wireDiff(prev: LightDoc, next: LightDoc, now = new Date().
   const nextProjects = next.projects ?? {}
   const prevScripts = prev.scripts ?? {}
   const nextScripts = next.scripts ?? {}
+  const prevBeats = prev.beats ?? {}
+  const nextBeats = next.beats ?? {}
+  const prevScenes = prev.scenes ?? {}
+  const nextScenes = next.scenes ?? {}
+  const prevShots = prev.shots ?? {}
+  const nextShots = next.shots ?? {}
 
   // DELETED projects: clear children BEFORE the parent row (FK order) —
   for (const id of Object.keys(prevProjects).filter((id) => !nextProjects[id])) {
     dels.push(wDel('media_sections', [id]), wDel('project_files', [id]), wDel('comments', [id]), wDel('projects', [id]))
   }
-  // DELETED scripts: copies first, same reason.
+  // DELETED scripts: story children first, then copies, then the row itself.
   for (const id of Object.keys(prevScripts).filter((id) => !nextScripts[id])) {
-    dels.push(wDel('script_copies', [id]), wDel('scripts', [id]))
+    dels.push(
+      wDel('story_links', [id]),
+      wDel('shots', [id]),
+      wDel('scenes', [id]),
+      wDel('beats', [id]),
+      wDel('script_acts', [id]),
+      wDel('script_copies', [id]),
+      wDel('scripts', [id]),
+    )
   }
+  // DELETED beats/scenes/shots on a living script (tombstone GC removed the
+  // key): recordDiff only walks `after`, so removals need these one-sided
+  // loops — same reason the deleted-scripts block exists. Full (guarded)
+  // keys: these are LWW tables.
+  for (const id of Object.keys(prevBeats).filter((id) => !nextBeats[id])) dels.push(wDel('beats', [prevBeats[id].scriptId, id]))
+  for (const id of Object.keys(prevScenes).filter((id) => !nextScenes[id])) dels.push(wDel('scenes', [prevScenes[id].scriptId, id]))
+  for (const id of Object.keys(prevShots).filter((id) => !nextShots[id])) dels.push(wDel('shots', [prevShots[id].scriptId, id]))
   // DELETED groups: projects must go first IF they went too (handled above);
   // a group whose projects STILL exist can't be hard-deleted — SQLite aborts
   // the batch, the writer logs it loudly, the diff check surfaces it.
@@ -639,6 +854,10 @@ export async function wireDiff(prev: LightDoc, next: LightDoc, now = new Date().
   recordDiff(prevGroups, nextGroups, (g) => groupRow(g, now), 'groups')
   recordDiff(prevProjects, nextProjects, (p) => projectRow(p, now), 'projects')
   recordDiff(prevScripts, nextScripts, (s) => scriptRow(s, now), 'scripts')
+  // Story entities: parents before children (beats → scenes → shots).
+  recordDiff(prevBeats, nextBeats, (b) => beatRow(b, now), 'beats')
+  recordDiff(prevScenes, nextScenes, (s) => sceneRow(s, now), 'scenes')
+  recordDiff(prevShots, nextShots, (s) => shotRow(s, now), 'shots')
 
   // project children for CHANGED projects — sections rewrite (tiny); files
   // diff by KEY (can be hundreds — never rewrite what didn't move).
@@ -675,12 +894,29 @@ export async function wireDiff(prev: LightDoc, next: LightDoc, now = new Date().
   for (const id of Object.keys(nextScripts)) {
     const pb = prevScripts[id]
     const pa = nextScripts[id]
-    if (!pb || sameJson(pb, pa)) continue
+    if (!pb) continue
+    // script_acts: whole rewrite ONLY when the array moved (sort column =
+    // array index) — a title flip must not churn act rows.
+    if (!sameJson(pb.acts ?? [], pa.acts ?? [])) {
+      dels.push(wDel('script_acts', [id]))
+      ;(pa.acts ?? []).forEach((a, i) => {
+        puts.push(wPut('script_acts', { script_id: id, id: a.id, name: a.name, sort: i }))
+      })
+    }
+    if (sameJson(pb, pa)) continue // unchanged script — children can't have moved
     if (sameJson(pb.copies ?? [], pa.copies ?? [])) continue // copies didn't move
     dels.push(wDel('script_copies', [id]))
     for (const c of pa.copies ?? []) {
       puts.push(wPut('script_copies', { script_id: id, file_id: c.fileId, label: c.label, at: c.at }))
     }
+  }
+
+  // NEW scripts: their act rows (recordDiff covered the script row only).
+  for (const id of Object.keys(nextScripts)) {
+    if (prevScripts[id]) continue
+    ;(nextScripts[id].acts ?? []).forEach((a, i) => {
+      puts.push(wPut('script_acts', { script_id: id, id: a.id, name: a.name, sort: i }))
+    })
   }
 
   // NEW projects: their file rows (recordDiff covered the project row only).
@@ -713,6 +949,22 @@ export async function wireDiff(prev: LightDoc, next: LightDoc, now = new Date().
   flatDiff('upload_links', idMap(prev.uploadLinks), idMap(next.uploadLinks), (l) => linkRow(l, now))
   flatDiff('refs', idMap(prev.refs), idMap(next.refs), (r) => refRow(r, now))
   flatDiff('comments', idMap(prev.comments), idMap(next.comments), (c) => commentRow(c, now))
+
+  // story_links: flatDiff semantics, but dels carry the FULL (script_id, id)
+  // key — flatDiff's single-id del would compile against the pk prefix and
+  // match on script_id instead of the link's id.
+  const prevLinks = idMap(prev.storyLinks)
+  const nextLinks = idMap(next.storyLinks)
+  for (const id of new Set([...Object.keys(prevLinks), ...Object.keys(nextLinks)])) {
+    const b = prevLinks[id]
+    const a = nextLinks[id]
+    if (a === undefined) {
+      dels.push(wDel('story_links', [b!.scriptId, id]))
+      continue
+    }
+    if (b !== undefined && sameJson(b, a)) continue
+    puts.push(wPut('story_links', storyLinkRow(a, now)))
+  }
 
   // tombstones — keyed (type,id).
   const tombKey = (t: LightTombstone): string => `${t.type}\n${t.id}`
@@ -766,7 +1018,12 @@ export type AllRows = {
   media_sections: RowMap[]
   project_files: RowMap[]
   scripts: RowMap[]
+  script_acts: RowMap[]
   script_copies: RowMap[]
+  beats: RowMap[]
+  scenes: RowMap[]
+  shots: RowMap[]
+  story_links: RowMap[]
   users_app: RowMap[]
   viewers: RowMap[]
   upload_links: RowMap[]
@@ -814,6 +1071,10 @@ export function rowsToDoc(rows: AllRows): LightDoc {
     groups: {},
     projects: {},
     scripts: {},
+    beats: {},
+    scenes: {},
+    shots: {},
+    storyLinks: [],
     tombstones: [],
     activity: [],
     snapshots: [],
@@ -840,6 +1101,13 @@ export function rowsToDoc(rows: AllRows): LightDoc {
     const list = copiesByScript.get(sid) ?? []
     list.push({ fileId: reqStr(r.file_id), label: reqStr(r.label), at: reqStr(r.at) })
     copiesByScript.set(sid, list)
+  }
+  const actsByScript = new Map<string, { id: string; name: string; sort: number }[]>()
+  for (const r of rows.script_acts) {
+    const sid = reqStr(r.script_id)
+    const list = actsByScript.get(sid) ?? []
+    list.push({ id: reqStr(r.id), name: reqStr(r.name), sort: Number(r.sort ?? 0) })
+    actsByScript.set(sid, list)
   }
 
   for (const r of rows.groups) {
@@ -898,6 +1166,7 @@ export function rowsToDoc(rows: AllRows): LightDoc {
 
   for (const r of rows.scripts) {
     const id = reqStr(r.id)
+    const acts = (actsByScript.get(id) ?? []).sort((a, b) => a.sort - b.sort || (a.id < b.id ? -1 : 1)).map(({ id: aid, name }) => ({ id: aid, name }))
     doc.scripts![id] = extraInto(
       {
         id,
@@ -906,6 +1175,7 @@ export function rowsToDoc(rows: AllRows): LightDoc {
         status: reqStr(r.status, 'draft'),
         storage: parseJson(r.storage) ?? { type: 'md', fileId: '' },
         copies: (copiesByScript.get(id) ?? []).sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : 0)),
+        acts,
         createdAt: reqStr(r.created_at, now),
         updatedAt: reqStr(r.updated_at, now),
         writerId: reqStr(r.writer_id, 'unknown'),
@@ -915,6 +1185,105 @@ export function rowsToDoc(rows: AllRows): LightDoc {
       r.extra,
     )
   }
+
+  for (const r of rows.beats) {
+    const id = reqStr(r.id)
+    doc.beats![id] = extraInto(
+      {
+        id,
+        scriptId: reqStr(r.script_id),
+        actId: reqStr(r.act_id),
+        title: reqStr(r.title),
+        summary: reqStr(r.summary),
+        purpose: reqStr(r.purpose),
+        bridge: reqStr(r.bridge),
+        sort: Number(r.sort ?? 0),
+        // Emit pos ONLY when both halves are non-NULL — absent and null are
+        // different keys to canonicalJson, and the write path omits an unset
+        // pos (the approved/scope discipline).
+        ...(r.pos_x != null && r.pos_y != null ? { pos: { x: Number(r.pos_x), y: Number(r.pos_y) } } : {}),
+        createdAt: reqStr(r.created_at, now),
+        updatedAt: reqStr(r.updated_at, now),
+        writerId: reqStr(r.writer_id, 'unknown'),
+        deleted: r.deleted_at != null ? { at: reqStr(r.deleted_at), by: reqStr(r.deleted_by) } : null,
+        archivedAt: r.archived_at != null ? reqStr(r.archived_at) : null,
+      },
+      r.extra,
+    )
+  }
+
+  for (const r of rows.scenes) {
+    const id = reqStr(r.id)
+    doc.scenes![id] = extraInto(
+      {
+        id,
+        scriptId: reqStr(r.script_id),
+        beatId: reqStr(r.beat_id),
+        title: reqStr(r.title),
+        action: reqStr(r.action),
+        location: reqStr(r.location),
+        sort: Number(r.sort ?? 0),
+        ...(r.pos_x != null && r.pos_y != null ? { pos: { x: Number(r.pos_x), y: Number(r.pos_y) } } : {}),
+        createdAt: reqStr(r.created_at, now),
+        updatedAt: reqStr(r.updated_at, now),
+        writerId: reqStr(r.writer_id, 'unknown'),
+        deleted: r.deleted_at != null ? { at: reqStr(r.deleted_at), by: reqStr(r.deleted_by) } : null,
+        archivedAt: r.archived_at != null ? reqStr(r.archived_at) : null,
+      },
+      r.extra,
+    )
+  }
+
+  for (const r of rows.shots) {
+    const id = reqStr(r.id)
+    doc.shots![id] = extraInto(
+      {
+        id,
+        scriptId: reqStr(r.script_id),
+        sceneId: r.scene_id != null ? reqStr(r.scene_id) : null,
+        beatId: r.beat_id != null ? reqStr(r.beat_id) : null,
+        caption: reqStr(r.caption),
+        shotSize: reqStr(r.shot_size),
+        cameraMove: reqStr(r.camera_move),
+        composition: reqStr(r.composition),
+        lighting: reqStr(r.lighting),
+        sound: reqStr(r.sound),
+        // Omit-when-unset keys — same discipline as pos.
+        ...(r.duration_sec != null ? { durationSec: Number(r.duration_sec) } : {}),
+        ...(r.storyboard_key != null ? { storyboardFileKey: reqStr(r.storyboard_key) } : {}),
+        sort: Number(r.sort ?? 0),
+        ...(r.pos_x != null && r.pos_y != null ? { pos: { x: Number(r.pos_x), y: Number(r.pos_y) } } : {}),
+        createdAt: reqStr(r.created_at, now),
+        updatedAt: reqStr(r.updated_at, now),
+        writerId: reqStr(r.writer_id, 'unknown'),
+        deleted: r.deleted_at != null ? { at: reqStr(r.deleted_at), by: reqStr(r.deleted_by) } : null,
+        archivedAt: r.archived_at != null ? reqStr(r.archived_at) : null,
+      },
+      r.extra,
+    )
+  }
+
+  doc.storyLinks = rows.story_links
+    .sort((a, b) => (reqStr(a.created_at) < reqStr(b.created_at) ? -1 : reqStr(a.created_at) > reqStr(b.created_at) ? 1 : reqStr(a.id) < reqStr(b.id) ? -1 : 1))
+    .map((r) =>
+      extraInto(
+        {
+          id: reqStr(r.id),
+          scriptId: reqStr(r.script_id),
+          fromKind: reqStr(r.from_kind),
+          fromId: reqStr(r.from_id),
+          toKind: reqStr(r.to_kind),
+          toId: reqStr(r.to_id),
+          rel: reqStr(r.rel),
+          note: reqStr(r.note),
+          createdAt: reqStr(r.created_at, now),
+          updatedAt: optStr(r.updated_at),
+          writerId: optStr(r.writer_id),
+          deleted: r.deleted_at != null ? { at: reqStr(r.deleted_at), by: reqStr(r.deleted_by) } : null,
+        },
+        r.extra,
+      ),
+    )
 
   doc.users!.app = rows.users_app
     .sort((a, b) => (reqStr(a.created_at) < reqStr(b.created_at) ? -1 : reqStr(a.created_at) > reqStr(b.created_at) ? 1 : reqStr(a.id) < reqStr(b.id) ? -1 : 1))
@@ -1075,6 +1444,25 @@ export async function diffDocs(actual: LightDoc, regen: LightDoc): Promise<DiffR
     }
   }
 
+  // approved:null and absent are THE SAME STATE (unapproved) — the client's
+  // zod parse fills the nullable default into every project it writes, while
+  // regen omits unset approved (the absent-by-default convention). Without
+  // this normalization the shadow diff diverges on the first project any
+  // post-P7 client touches. Same reasoning as the scope ''-vs-absent rule.
+  const normProjects = (m: unknown): Record<string, unknown> => {
+    const src = (m as Record<string, unknown> | undefined) ?? {}
+    const outp: Record<string, unknown> = {}
+    for (const [id, p] of Object.entries(src)) {
+      if (p && typeof p === 'object' && (p as Record<string, unknown>).approved === null) {
+        const { approved, ...rest } = p as Record<string, unknown>
+        outp[id] = rest
+      } else {
+        outp[id] = p
+      }
+    }
+    return outp
+  }
+
   scalar('schema', actual.schema, regen.schema)
   scalar('rev', actual.rev, regen.rev)
   scalar('writerId', actual.writerId, regen.writerId)
@@ -1083,13 +1471,17 @@ export async function diffDocs(actual: LightDoc, regen: LightDoc): Promise<DiffR
   scalar('ids', actual.ids, regen.ids)
   scalar('users.studioSub', actual.users?.studioSub ?? null, regen.users?.studioSub ?? null)
   keyed('groups', actual.groups, regen.groups)
-  keyed('projects', actual.projects, regen.projects)
+  keyed('projects', normProjects(actual.projects), normProjects(regen.projects))
   keyed('scripts', actual.scripts, regen.scripts)
+  keyed('beats', actual.beats, regen.beats)
+  keyed('scenes', actual.scenes, regen.scenes)
+  keyed('shots', actual.shots, regen.shots)
   keyed('users.app', idMap(actual.users?.app), idMap(regen.users?.app))
   keyed('users.viewers', idMap(actual.users?.viewers), idMap(regen.users?.viewers))
   keyed('uploadLinks', idMap(actual.uploadLinks), idMap(regen.uploadLinks))
   keyed('refs', idMap(actual.refs), idMap(regen.refs))
   keyed('comments', idMap(actual.comments), idMap(regen.comments))
+  keyed('storyLinks', idMap(actual.storyLinks), idMap(regen.storyLinks))
 
   // project children + script copies (parents already compared above; skip
   // one-sided ids here — the record diff reported those).
@@ -1116,6 +1508,10 @@ export async function diffDocs(actual: LightDoc, regen: LightDoc): Promise<DiffR
     if (!sa || !sb) continue
     compared['scriptCopies'] = (compared['scriptCopies'] ?? 0) + (sa.copies ?? []).length
     if (!sameJson(sa.copies ?? [], sb.copies ?? [])) diverge(out, `scripts.${id}.copies`, sa.copies ?? [], sb.copies ?? [])
+    // acts are ORDERED (sort column = array index) — compare as arrays, like
+    // mediaSections.
+    compared['scriptActs'] = (compared['scriptActs'] ?? 0) + (sa.acts ?? []).length
+    if (!sameJson(sa.acts ?? [], sb.acts ?? [])) diverge(out, `scripts.${id}.acts`, sa.acts ?? [], sb.acts ?? [])
   }
 
   const ta = new Map((actual.tombstones ?? []).map((t) => [`${t.type}:${t.id}`, t]))

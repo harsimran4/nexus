@@ -1,0 +1,103 @@
+/* The Story Graph — colocated styles (Lightbox.css precedent). React Flow's
+   chrome is re-themed through its --xy-* vars; our node cards are plain
+   token-styled divs. Dark patches sit co-located under their light rules. */
+
+.sgraph-wrap { display: grid; gap: 10px; }
+.sgraph-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  flex-wrap: wrap;
+}
+.sgraph-canvas {
+  position: relative;
+  height: min(66vh, 620px);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  overflow: hidden;
+}
+
+/* the node card — a paper slip, tinted per kind */
+.sgraph-node {
+  display: grid; gap: 2px;
+  width: 190px;
+  min-height: 58px;
+  padding: 8px 10px;
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow);
+  font: inherit; color: var(--text);
+  transition: border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+.sgraph-node.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim), var(--shadow); }
+.sgraph-node-act {
+  background: none; border: 1px dashed var(--border-strong);
+  box-shadow: none; color: var(--muted);
+  text-align: center; align-content: center;
+}
+.sgraph-node-concept { border-width: 2px; }
+.sgraph-node-ref { background: var(--panel-2); }
+.sgraph-node-label { font-size: var(--fs-sm); font-weight: var(--fw-medium); word-break: break-word; line-height: 1.25; }
+.sgraph-node-sub {
+  font-size: var(--fs-xs); color: var(--faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* handles: small, quiet, on-brand */
+.sgraph-node .react-flow__handle {
+  width: 9px; height: 9px;
+  background: var(--panel-2);
+  border: 1.5px solid var(--border-strong);
+}
+
+/* edge labels stay legible on paper */
+.sgraph-canvas .react-flow__edge-text { fill: var(--muted); }
+.sgraph-canvas .react-flow__edge-textbg { fill: var(--card); }
+
+/* RF chrome on paper — v12 exposes the theme as --xy-* vars */
+.sgraph-canvas {
+  --xy-node-background-color: var(--card);
+  --xy-node-border: 1px solid var(--border-strong);
+  --xy-node-border-radius: var(--radius-sm);
+  --xy-edge-stroke: var(--border-strong);
+  --xy-edge-stroke-width: 1.4;
+  --xy-controls-button-background-color: var(--card);
+  --xy-controls-button-background-color-hover: var(--panel-2);
+  --xy-controls-button-color: var(--text);
+  --xy-controls-button-border-color: var(--border);
+  --xy-controls-box-shadow: var(--shadow);
+  --xy-attribution-background-color: transparent;
+}
+
+/* the side panel — a paper margin note pinned inside the canvas */
+.sgraph-panel {
+  position: absolute; top: 10px; right: 10px; bottom: 10px;
+  width: min(320px, 80%);
+  z-index: 5;
+  pointer-events: none;
+}
+.sgraph-panel-body {
+  pointer-events: auto;
+  height: 100%;
+  overflow-y: auto;
+  display: grid; gap: 10px; align-content: start;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-lg);
+  position: relative;
+}
+.sgraph-panel-title { margin: 0; font-size: var(--fs-base); }
+.sgraph-panel-x { position: absolute; top: 8px; right: 8px; }
+.story-link-btn { cursor: pointer; text-align: left; }
+
+/* dark: the canvas surface goes quiet; nodes keep token materials */
+[data-theme='dark'] .sgraph-canvas { background: var(--panel); }
+[data-theme='dark'] .sgraph-node { box-shadow: none; }
+[data-theme='dark'] .sgraph-node.on { box-shadow: 0 0 0 2px var(--accent-dim); }
+
+@media (max-width: 640px) {
+  .sgraph-canvas { height: 56vh; }
+  .sgraph-panel { width: calc(100% - 20px); }
+}

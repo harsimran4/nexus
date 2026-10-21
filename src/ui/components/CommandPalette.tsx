@@ -8,7 +8,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'motion/react'
 import { useStore } from '../../sync/store'
 import { navigate } from '../../nav'
-import { requestScript } from '../../state/navBus'
 import { Icon } from './Icon'
 import { useMaterialVariants } from './motion'
 
@@ -94,10 +93,7 @@ export function CommandPalette({ onToggleTheme }: { onToggleTheme: () => void })
           label: s.title,
           hint: 'script',
           icon: 'file-text',
-          run: () => {
-            requestScript(s.id)
-            navigate('/scripts')
-          },
+          run: () => navigate(`/scripts/${s.id}`),
         })
       }
     }

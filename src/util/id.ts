@@ -24,6 +24,12 @@ export const newMediaSectionId = () => uid('sec')
 export const newUploadLinkId = () => uid('ul')
 export const newRefId = () => uid('ref')
 export const newCommentId = () => uid('cmt')
+export const newBeatId = () => uid('beat')
+export const newSceneId = () => uid('scn')
+export const newShotId = () => uid('shot')
+export const newStoryLinkId = () => uid('lnk')
+// Story acts: user-added acts get uid('act'); the DEFAULT_ACTS trio uses its
+// deterministic ids ('act_opening'…) — see schema.ts.
 
 export function newDeviceId(): string {
   const existing = localStorage.getItem('nexus.deviceId')

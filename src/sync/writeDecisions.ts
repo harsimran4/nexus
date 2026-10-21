@@ -36,7 +36,7 @@ export function applyDecision(remote: SyncTokens, base: SyncTokens): 'unchanged'
 }
 
 export interface PendingEntity {
-  map: 'groups' | 'projects' | 'scripts'
+  map: 'groups' | 'projects' | 'scripts' | 'beats' | 'scenes' | 'shots'
   entity: Record<string, unknown>
 }
 
@@ -57,7 +57,13 @@ export function reassertEntities(doc: NexusDoc, pending: PendingEntity[], stamp:
     if (fresh.deleted) fresh.deleted = { at: stamp.at, by: stamp.by }
     const target = doc[map] as Record<string, unknown>
     if (target[String(fresh.id)] === undefined) {
-      const type = map === 'groups' ? 'group' : map === 'projects' ? 'project' : 'script'
+      const type =
+        map === 'groups' ? 'group'
+        : map === 'projects' ? 'project'
+        : map === 'scripts' ? 'script'
+        : map === 'beats' ? 'beat'
+        : map === 'scenes' ? 'scene'
+        : 'shot'
       const tomb = doc.tombstones
         .filter((t) => t.type === type && t.id === fresh.id)
         .sort((a, b) => (a.at > b.at ? -1 : 1))[0]

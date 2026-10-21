@@ -25,6 +25,16 @@ function entityName(doc: NexusDoc, ref: string): string {
   return doc.projects[ref]?.name ?? doc.groups[ref]?.name ?? doc.scripts[ref]?.title ?? (ref === 'settings' ? 'settings' : '')
 }
 
+/** Cascade deletes carry child counts in meta — "(2 scenes, 3 shots)". */
+function countsTail(meta: Record<string, unknown>): string {
+  const parts: string[] = []
+  for (const k of ['scenes', 'shots', 'links'] as const) {
+    const n = Number(meta[k] ?? 0)
+    if (n > 0) parts.push(`${n} ${k}`)
+  }
+  return parts.length ? ` (${parts.join(', ')})` : ''
+}
+
 function describe(doc: NexusDoc, e: ActivityEvent): string {
   const name = entityName(doc, e.ref)
   const quoted = name ? `"${name}"` : ''
@@ -57,6 +67,25 @@ function describe(doc: NexusDoc, e: ActivityEvent): string {
     case 'script.create': return `created script ${quoted}`
     case 'script.status': return `script ${quoted} → ${String(meta.to ?? '')}`
     case 'script.delete': return `deleted script ${quoted}`
+    case 'script.restore': return `restored script ${quoted}`
+    case 'script.brief': return `updated the creative brief for ${quoted}`
+    case 'script.act.add': return `added act "${String(meta.name ?? '')}" to ${quoted}`
+    case 'script.act.rename': return `renamed an act of ${quoted} to "${String(meta.name ?? '')}"`
+    case 'script.act.remove': return `removed act "${String(meta.name ?? '')}" from ${quoted}`
+    case 'beat.create': return `added beat "${String(meta.label ?? '')}" to ${quoted}`
+    case 'beat.update': return `updated beat "${String(meta.label ?? '')}" in ${quoted}`
+    case 'beat.move': return `moved beat "${String(meta.label ?? '')}" to ${String(meta.to ?? 'another act')} in ${quoted}`
+    case 'beat.delete': return `deleted beat "${String(meta.label ?? '')}" from ${quoted}${countsTail(meta)}`
+    case 'scene.create': return `added scene "${String(meta.label ?? '')}" to ${quoted}`
+    case 'scene.update': return `updated scene "${String(meta.label ?? '')}" in ${quoted}`
+    case 'scene.move': return `moved scene "${String(meta.label ?? '')}" to "${String(meta.to ?? 'another beat')}" in ${quoted}`
+    case 'scene.delete': return `deleted scene "${String(meta.label ?? '')}" from ${quoted}${countsTail(meta)}`
+    case 'shot.create': return `added shot "${String(meta.label ?? '')}" to ${quoted}`
+    case 'shot.update': return `updated shot "${String(meta.label ?? '')}" in ${quoted}`
+    case 'shot.move': return `moved shot "${String(meta.label ?? '')}" in ${quoted}`
+    case 'shot.delete': return `deleted shot "${String(meta.label ?? '')}" from ${quoted}${countsTail(meta)}`
+    case 'story.link': return `added a ${String(meta.rel ?? 'story')} link in ${quoted}`
+    case 'story.unlink': return `removed a ${String(meta.rel ?? 'story')} link in ${quoted}`
     case 'ref.create': return `saved a reference "${String(meta.title ?? '')}" for ${quoted}`
     case 'ref.update': return `edited a reference "${String(meta.title ?? '')}" for ${quoted}`
     case 'ref.delete': return `removed a reference "${String(meta.title ?? '')}" from ${quoted}`

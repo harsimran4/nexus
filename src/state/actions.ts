@@ -12,9 +12,15 @@ import {
   newUploadLinkId,
   newRefId,
   newCommentId,
+  newBeatId,
+  newSceneId,
+  newShotId,
+  newStoryLinkId,
+  uid,
 } from '../util/id'
 import { hlcNow } from '../util/hlc'
 import { thumbKeyFor } from '../util/media'
+import { nextSort, moveSorts, bySort } from '../util/storyOrder'
 import {
   defaultStatus,
   statusBucket,
@@ -23,9 +29,19 @@ import {
   type Group,
   type Script,
   type ScriptStatus,
+  type ScriptBrief,
+  type ScriptAct,
+  type Beat,
+  type Scene,
+  type Shot,
+  type StoryLink,
+  type StoryLinkKind,
+  type StoryRel,
   type UploadLink,
   type Ref,
   type Comment,
+  BRIEF_EMPTY,
+  DEFAULT_ACTS,
 } from '../types/schema'
 import { canWrite, canAdmin } from '../auth/session'
 import { commit, touch, recordTombstone, appendActivity, flush, markContentDirty, writerId } from '../sync/writer'
@@ -559,6 +575,7 @@ export function createScript(fields: { title: string; projectId?: string | null 
       projectId: fields.projectId ?? null,
       status: 'draft',
       copies: [],
+      acts: [],
       createdAt: hlcNow(),
       updatedAt: hlcNow(),
       writerId: 'pending',
@@ -677,7 +694,615 @@ export function deleteScript(id: string): void {
     s.deleted = { at: hlcNow(), by: writerId() }
     touch('scripts', s)
     recordTombstone(doc, 'script', id, writerId())
-    appendActivity(doc, 'script.delete', id, { title: s.title })
+    // Story children ride along — each tombstoned so GC sweeps their rows
+    // (wireDiff's deleted-scripts block deletes them child-first).
+    const roots = Object.values(doc.beats)
+      .filter((b) => b.scriptId === id && !b.deleted)
+      .map((b) => ({ kind: 'beat' as const, id: b.id }))
+    const counts = cascadeStoryDelete(doc, roots)
+    doc.storyLinks = (doc.storyLinks ?? []).map((l) =>
+      !l.deleted && l.scriptId === id
+        ? { ...l, deleted: { at: hlcNow(), by: writerId() }, updatedAt: hlcNow(), writerId: writerId() }
+        : l,
+    )
+    appendActivity(doc, 'script.delete', id, { title: s.title, ...counts })
+  })
+}
+
+/** Restore a soft-deleted script (Archive → Scripts). Fresh stamps so the
+ *  restore beats the tombstone on merge; its story structure stays deleted —
+ *  those entities were tombstoned individually with the script. */
+export function restoreScript(id: string): void {
+  assertWrite()
+  commit((doc) => {
+    const s = doc.scripts[id]
+    if (!s) return
+    s.deleted = null
+    touch('scripts', s)
+    appendActivity(doc, 'script.restore', id, { title: s.title })
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Story structure — the connected creative system inside a script. Beats /
+// scenes / shots are record-map entities (per-key LWW + touch() re-assert);
+// story links are a top-level array (refs model: entry-level stamps, NEVER
+// touch()). Sibling order is a per-entity `sort` int — never a parent-carried
+// id array, which two concurrent writers would clobber.
+// ---------------------------------------------------------------------------
+
+type StoryKind = 'beat' | 'scene' | 'shot'
+
+function storyMap(d: NexusDoc, kind: StoryKind): Record<string, Beat | Scene | Shot> {
+  return kind === 'beat' ? d.beats : kind === 'scene' ? d.scenes : d.shots
+}
+
+function touchStory(kind: StoryKind, e: Beat | Scene | Shot): void {
+  if (kind === 'beat') touch('beats', e as Beat)
+  else if (kind === 'scene') touch('scenes', e as Scene)
+  else touch('shots', e as Shot)
+}
+
+function storyLabel(e: Beat | Scene | Shot, kind: StoryKind): string {
+  const text = kind === 'shot' ? (e as Shot).caption : (e as Beat | Scene).title
+  return text?.trim() || `Untitled ${kind}`
+}
+
+/** Depth-first soft-delete of the root story entities and everything under
+ *  them (beat → scenes → their shots + the beat's own shots), plus every
+ *  story link touching a removed id. Logs NOTHING — the caller appends ONE
+ *  activity event carrying these counts. Tombstones each removed entity. */
+function cascadeStoryDelete(d: NexusDoc, roots: { kind: StoryKind; id: string }[]): { beats: number; scenes: number; shots: number; links: number } {
+  const counts = { beats: 0, scenes: 0, shots: 0, links: 0 }
+  const removed = new Set<string>()
+  const visit = (kind: StoryKind, eid: string): void => {
+    const e = storyMap(d, kind)[eid]
+    if (!e || e.deleted) return
+    e.deleted = { at: hlcNow(), by: writerId() }
+    touchStory(kind, e)
+    recordTombstone(d, kind, eid, writerId())
+    counts[`${kind}s` as 'beats' | 'scenes' | 'shots']++
+    removed.add(eid)
+    if (kind === 'beat') {
+      for (const s of Object.values(d.scenes)) if (s.beatId === eid && !s.deleted) visit('scene', s.id)
+      for (const s of Object.values(d.shots)) if (s.beatId === eid && !s.deleted) visit('shot', s.id)
+    }
+    if (kind === 'scene') {
+      for (const s of Object.values(d.shots)) if (s.sceneId === eid && !s.deleted) visit('shot', s.id)
+    }
+  }
+  for (const r of roots) visit(r.kind, r.id)
+  if (removed.size > 0) {
+    d.storyLinks = (d.storyLinks ?? []).map((l) => {
+      if (l.deleted || !(removed.has(l.fromId) || removed.has(l.toId))) return l
+      counts.links++
+      return { ...l, deleted: { at: hlcNow(), by: writerId() }, updatedAt: hlcNow(), writerId: writerId() }
+    })
+  }
+  return counts
+}
+
+// --- Creative Brief (embedded on the script; rides D1 scripts.extra) -------
+
+export function updateScriptBrief(scriptId: string, patch: Partial<ScriptBrief>): void {
+  assertWrite()
+  commit((d) => {
+    const s = d.scripts[scriptId]
+    if (!s) return
+    const next = { ...BRIEF_EMPTY, ...(s.brief ?? {}), ...trimBrief(patch) }
+    // Absent-by-default: an all-empty brief deletes the key entirely, so a
+    // never-briefed script never grows a default-filled object (the same
+    // shadow-diff discipline as viewer.scope).
+    if (Object.values(next).every((v) => v === '')) delete s.brief
+    else s.brief = next
+    touch('scripts', s)
+    appendActivity(d, 'script.brief', scriptId, { title: s.title })
+  })
+}
+
+const BRIEF_MAX = 5000
+function trimBrief(patch: Partial<ScriptBrief>): Partial<ScriptBrief> {
+  const out: Partial<ScriptBrief> = {}
+  for (const [k, v] of Object.entries(patch)) if (typeof v === 'string') out[k as keyof ScriptBrief] = v.slice(0, BRIEF_MAX)
+  return out
+}
+
+// --- Acts (embedded array on the script, like mediaSections) ----------------
+
+/** Seed Opening/Middle/Ending — idempotent, DETERMINISTIC ids so two tabs
+ *  seeding concurrently merge to the identical trio. Quiet: no activity. */
+export function seedDefaultActs(scriptId: string): void {
+  assertWrite()
+  commit((d) => {
+    const s = d.scripts[scriptId]
+    if (!s || s.acts.length > 0) return
+    s.acts = DEFAULT_ACTS.map((a) => ({ ...a }))
+    touch('scripts', s)
+  })
+}
+
+export function addAct(scriptId: string, name: string): string | null {
+  assertWrite()
+  const clean = name.trim()
+  if (!clean) return null
+  const id = uid('act')
+  commit((d) => {
+    const s = d.scripts[scriptId]
+    if (!s) return
+    s.acts = [...s.acts, { id, name: clean.slice(0, 120) }]
+    touch('scripts', s)
+    appendActivity(d, 'script.act.add', scriptId, { title: s.title, name: clean })
+  })
+  return id
+}
+
+export function renameAct(scriptId: string, actId: string, name: string): void {
+  assertWrite()
+  const clean = name.trim()
+  if (!clean) return
+  commit((d) => {
+    const s = d.scripts[scriptId]
+    if (!s) return
+    const act = s.acts.find((a) => a.id === actId)
+    if (!act) return
+    act.name = clean.slice(0, 120)
+    touch('scripts', s)
+    appendActivity(d, 'script.act.rename', scriptId, { title: s.title, name: clean })
+  })
+}
+
+/** Remove an act; its beats move to the NEIGHBOURING act (previous, else
+ *  next). Refuses the last remaining act — a stray click must never cascade
+ *  every beat away. Returns 'moved' | 'refused-last-act'. */
+export function removeAct(scriptId: string, actId: string): 'moved' | 'refused-last-act' {
+  assertWrite()
+  let result: 'moved' | 'refused-last-act' = 'refused-last-act'
+  commit((d) => {
+    const s = d.scripts[scriptId]
+    if (!s) return
+    const idx = s.acts.findIndex((a) => a.id === actId)
+    if (idx === -1) return
+    if (s.acts.length === 1) return
+    const neighbour = s.acts[idx - 1] ?? s.acts[idx + 1]
+    const removed = s.acts[idx]!
+    s.acts = s.acts.filter((a) => a.id !== actId)
+    for (const b of Object.values(d.beats)) {
+      if (b.actId === actId && !b.deleted) {
+        b.actId = neighbour!.id
+        touch('beats', b)
+      }
+    }
+    touch('scripts', s)
+    appendActivity(d, 'script.act.remove', scriptId, { title: s.title, name: removed.name })
+    result = 'moved'
+  })
+  return result
+}
+
+/** Reorder acts by ±1 — quiet (cosmetic churn, like folder bookkeeping). */
+export function reorderActs(scriptId: string, actId: string, dir: -1 | 1): void {
+  assertWrite()
+  commit((d) => {
+    const s = d.scripts[scriptId]
+    if (!s) return
+    const idx = s.acts.findIndex((a) => a.id === actId)
+    const to = idx + dir
+    if (idx === -1 || to < 0 || to >= s.acts.length) return
+    const acts: ScriptAct[] = [...s.acts]
+    const [moved] = acts.splice(idx, 1)
+    acts.splice(to, 0, moved!)
+    s.acts = acts
+    touch('scripts', s)
+  })
+}
+
+// --- Beats -------------------------------------------------------------------
+
+export function addBeat(scriptId: string, actId: string, fields?: Partial<Pick<Beat, 'title' | 'summary'>>): string | null {
+  assertWrite()
+  const script = storeGet().doc?.scripts[scriptId]
+  if (!script || script.deleted) return null
+  if (!script.acts.some((a) => a.id === actId)) return null
+  const id = newBeatId()
+  commit((d) => {
+    const siblings = Object.values(d.beats).filter((b) => b.scriptId === scriptId && b.actId === actId && !b.deleted)
+    const beat: Beat = {
+      id,
+      scriptId,
+      actId,
+      title: fields?.title ?? '',
+      summary: fields?.summary ?? '',
+      purpose: '',
+      bridge: '',
+      sort: nextSort(bySort(siblings)),
+      createdAt: hlcNow(),
+      updatedAt: hlcNow(),
+      writerId: 'pending',
+      deleted: null,
+      archivedAt: null,
+    }
+    d.beats[id] = beat
+    touch('beats', d.beats[id] as Beat)
+    appendActivity(d, 'beat.create', scriptId, { kind: 'beat', label: storyLabel(beat, 'beat') })
+  })
+  return id
+}
+
+export function updateBeat(beatId: string, fields: Partial<Pick<Beat, 'title' | 'summary' | 'purpose' | 'bridge'>>): void {
+  assertWrite()
+  commit((d) => {
+    const b = d.beats[beatId]
+    if (!b || b.deleted) return
+    Object.assign(b, fields)
+    touch('beats', b)
+    appendActivity(d, 'beat.update', b.scriptId, { kind: 'beat', label: storyLabel(b, 'beat') })
+  })
+}
+
+/** Move a beat to (toActId, toIndex) — reparent + reorder in one commit.
+ *  Sibling rewrites are per-entity sort keys (util/storyOrder), so two
+ *  writers reordering the same act converge deterministically instead of
+ *  clobbering. Logs only when the act changed; same-act drags stay quiet. */
+export function moveBeat(beatId: string, toActId: string, toIndex: number): void {
+  assertWrite()
+  commit((d) => {
+    const b = d.beats[beatId]
+    if (!b || b.deleted) return
+    const s = d.scripts[b.scriptId]
+    if (!s || !s.acts.some((a) => a.id === toActId)) return
+    const dest = Object.values(d.beats).filter((x) => x.scriptId === b.scriptId && x.actId === toActId && !x.deleted)
+    const sorts = moveSorts(dest, beatId, toIndex)
+    const actChanged = b.actId !== toActId
+    b.actId = toActId
+    for (const [eid, sort] of Object.entries(sorts)) {
+      const e = d.beats[eid]
+      if (!e) continue
+      e.sort = sort
+      touch('beats', e)
+    }
+    touch('beats', b)
+    if (actChanged) appendActivity(d, 'beat.move', b.scriptId, { kind: 'beat', label: storyLabel(b, 'beat'), to: s.acts.find((a) => a.id === toActId)?.name })
+  })
+}
+
+export function deleteBeat(beatId: string): void {
+  assertWrite()
+  commit((d) => {
+    const b = d.beats[beatId]
+    if (!b || b.deleted) return
+    const scriptId = b.scriptId
+    const label = storyLabel(b, 'beat')
+    const counts = cascadeStoryDelete(d, [{ kind: 'beat', id: beatId }])
+    appendActivity(d, 'beat.delete', scriptId, { kind: 'beat', label, ...counts })
+  })
+}
+
+// --- Scenes ------------------------------------------------------------------
+
+export function addScene(scriptId: string, beatId: string, fields?: Partial<Pick<Scene, 'title' | 'action' | 'location'>>): string | null {
+  assertWrite()
+  const beat = storeGet().doc?.beats[beatId]
+  if (!beat || beat.deleted || beat.scriptId !== scriptId) return null
+  const id = newSceneId()
+  commit((d) => {
+    const siblings = Object.values(d.scenes).filter((x) => x.beatId === beatId && !x.deleted)
+    const scene: Scene = {
+      id,
+      scriptId,
+      beatId,
+      title: fields?.title ?? '',
+      action: fields?.action ?? '',
+      location: fields?.location ?? '',
+      sort: nextSort(bySort(siblings)),
+      createdAt: hlcNow(),
+      updatedAt: hlcNow(),
+      writerId: 'pending',
+      deleted: null,
+      archivedAt: null,
+    }
+    d.scenes[id] = scene
+    touch('scenes', d.scenes[id] as Scene)
+    appendActivity(d, 'scene.create', scriptId, { kind: 'scene', label: storyLabel(scene, 'scene') })
+  })
+  return id
+}
+
+export function updateScene(sceneId: string, fields: Partial<Pick<Scene, 'title' | 'action' | 'location'>>): void {
+  assertWrite()
+  commit((d) => {
+    const s = d.scenes[sceneId]
+    if (!s || s.deleted) return
+    Object.assign(s, fields)
+    touch('scenes', s)
+    appendActivity(d, 'scene.update', s.scriptId, { kind: 'scene', label: storyLabel(s, 'scene') })
+  })
+}
+
+/** Move a scene to another beat (+ index). Logs only when the beat changed. */
+export function moveScene(sceneId: string, toBeatId: string, toIndex: number): void {
+  assertWrite()
+  commit((d) => {
+    const s = d.scenes[sceneId]
+    if (!s || s.deleted) return
+    const destBeat = d.beats[toBeatId]
+    if (!destBeat || destBeat.deleted || destBeat.scriptId !== s.scriptId) return
+    const dest = Object.values(d.scenes).filter((x) => x.beatId === toBeatId && !x.deleted)
+    const sorts = moveSorts(dest, sceneId, toIndex)
+    const beatChanged = s.beatId !== toBeatId
+    s.beatId = toBeatId
+    for (const [eid, sort] of Object.entries(sorts)) {
+      const e = d.scenes[eid]
+      if (!e) continue
+      e.sort = sort
+      touch('scenes', e)
+    }
+    touch('scenes', s)
+    if (beatChanged) appendActivity(d, 'scene.move', s.scriptId, { kind: 'scene', label: storyLabel(s, 'scene'), to: destBeat.title || 'Untitled beat' })
+  })
+}
+
+export function deleteScene(sceneId: string): void {
+  assertWrite()
+  commit((d) => {
+    const s = d.scenes[sceneId]
+    if (!s || s.deleted) return
+    const scriptId = s.scriptId
+    const label = storyLabel(s, 'scene')
+    const counts = cascadeStoryDelete(d, [{ kind: 'scene', id: sceneId }])
+    appendActivity(d, 'scene.delete', scriptId, { kind: 'scene', label, ...counts })
+  })
+}
+
+// --- Shots (on a scene OR directly on a beat — exactly one parent) -----------
+
+export function addShot(scriptId: string, parent: { sceneId: string } | { beatId: string }, fields?: Partial<Pick<Shot, 'caption' | 'shotSize' | 'cameraMove'>>): string | null {
+  assertWrite()
+  const doc = storeGet().doc
+  if (!doc) return null
+  const sceneId = 'sceneId' in parent ? parent.sceneId : null
+  const beatId = 'beatId' in parent ? parent.beatId : null
+  if (sceneId) {
+    const scene = doc.scenes[sceneId]
+    if (!scene || scene.deleted || scene.scriptId !== scriptId) return null
+  } else if (beatId) {
+    const beat = doc.beats[beatId]
+    if (!beat || beat.deleted || beat.scriptId !== scriptId) return null
+  } else {
+    return null
+  }
+  const id = newShotId()
+  commit((d) => {
+    const siblings = Object.values(d.shots).filter(
+      (x) => !x.deleted && (sceneId ? x.sceneId === sceneId : x.beatId === beatId),
+    )
+    const shot: Shot = {
+      id,
+      scriptId,
+      sceneId,
+      beatId,
+      caption: fields?.caption ?? '',
+      shotSize: fields?.shotSize ?? '',
+      cameraMove: fields?.cameraMove ?? '',
+      composition: '',
+      lighting: '',
+      sound: '',
+      sort: nextSort(bySort(siblings)),
+      createdAt: hlcNow(),
+      updatedAt: hlcNow(),
+      writerId: 'pending',
+      deleted: null,
+      archivedAt: null,
+    }
+    d.shots[id] = shot
+    touch('shots', d.shots[id] as Shot)
+    appendActivity(d, 'shot.create', scriptId, { kind: 'shot', label: storyLabel(shot, 'shot') })
+  })
+  return id
+}
+
+export function updateShot(shotId: string, fields: Partial<Pick<Shot, 'caption' | 'shotSize' | 'cameraMove' | 'composition' | 'lighting' | 'sound' | 'durationSec'>>): void {
+  assertWrite()
+  commit((d) => {
+    const s = d.shots[shotId]
+    if (!s || s.deleted) return
+    Object.assign(s, fields)
+    touch('shots', s)
+    appendActivity(d, 'shot.update', s.scriptId, { kind: 'shot', label: storyLabel(s, 'shot') })
+  })
+}
+
+/** Point a shot's storyboard at a project file (a fileIds storage key). */
+export function attachShotStoryboard(shotId: string, fileKey: string): { ok: true } | { ok: false; error: string } {
+  assertWrite()
+  const doc = storeGet().doc
+  const shot = doc?.shots[shotId]
+  if (!doc || !shot || shot.deleted) return { ok: false, error: 'Shot not found' }
+  const script = doc.scripts[shot.scriptId]
+  if (!script?.projectId) return { ok: false, error: 'Link this script to a project first — storyboards live in its media' }
+  const project = doc.projects[script.projectId]
+  if (!project || project.deleted) return { ok: false, error: 'The linked project no longer exists' }
+  if (!project.fileIds.includes(fileKey)) return { ok: false, error: 'That file is not in the linked project’s media' }
+  commit((d) => {
+    const s = d.shots[shotId]
+    if (!s || s.deleted) return
+    s.storyboardFileKey = fileKey
+    touch('shots', s)
+    appendActivity(d, 'shot.update', s.scriptId, { kind: 'shot', label: storyLabel(s, 'shot'), fields: ['storyboard'] })
+  })
+  return { ok: true }
+}
+
+export function detachShotStoryboard(shotId: string): void {
+  assertWrite()
+  commit((d) => {
+    const s = d.shots[shotId]
+    if (!s || s.deleted || s.storyboardFileKey === undefined) return
+    delete s.storyboardFileKey
+    touch('shots', s)
+    appendActivity(d, 'shot.update', s.scriptId, { kind: 'shot', label: storyLabel(s, 'shot'), fields: ['storyboard'] })
+  })
+}
+
+/** Move a shot between parents (scene ↔ beat or within one) — enforces the
+ *  exactly-one-parent rule. Logs only when the parent changed. */
+export function moveShot(shotId: string, toParent: { sceneId: string } | { beatId: string }, toIndex: number): void {
+  assertWrite()
+  commit((d) => {
+    const s = d.shots[shotId]
+    if (!s || s.deleted) return
+    const toScene = 'sceneId' in toParent ? toParent.sceneId : null
+    const toBeat = 'beatId' in toParent ? toParent.beatId : null
+    if (toScene) {
+      const scene = d.scenes[toScene]
+      if (!scene || scene.deleted || scene.scriptId !== s.scriptId) return
+    } else if (toBeat) {
+      const beat = d.beats[toBeat]
+      if (!beat || beat.deleted || beat.scriptId !== s.scriptId) return
+    } else {
+      return
+    }
+    const dest = Object.values(d.shots).filter((x) => !x.deleted && (toScene ? x.sceneId === toScene : x.beatId === toBeat))
+    const sorts = moveSorts(dest, shotId, toIndex)
+    const changed = s.sceneId !== toScene || s.beatId !== toBeat
+    s.sceneId = toScene
+    s.beatId = toBeat
+    for (const [eid, sort] of Object.entries(sorts)) {
+      const e = d.shots[eid]
+      if (!e) continue
+      e.sort = sort
+      touch('shots', e)
+    }
+    touch('shots', s)
+    if (changed) appendActivity(d, 'shot.move', s.scriptId, { kind: 'shot', label: storyLabel(s, 'shot') })
+  })
+}
+
+export function deleteShot(shotId: string): void {
+  assertWrite()
+  commit((d) => {
+    const s = d.shots[shotId]
+    if (!s || s.deleted) return
+    const scriptId = s.scriptId
+    const label = storyLabel(s, 'shot')
+    const counts = cascadeStoryDelete(d, [{ kind: 'shot', id: shotId }])
+    appendActivity(d, 'shot.delete', scriptId, { kind: 'shot', label, ...counts })
+  })
+}
+
+// --- Story links (inspiration + relations — the refs array model) ------------
+
+/** Create a relation between two story elements. Endpoints: 'script' = the
+ *  brief / whole-script concept, 'ref' = a doc.refs entry, else a beat /
+ *  scene / shot of this script. Rejects an exact live duplicate. */
+export function createStoryLink(f: {
+  scriptId: string
+  from: { kind: StoryLinkKind; id: string }
+  to: { kind: StoryLinkKind; id: string }
+  rel: StoryRel
+  note?: string
+}): string {
+  assertWrite()
+  const doc = storeGet().doc
+  if (!doc?.scripts[f.scriptId] || doc.scripts[f.scriptId]!.deleted) throw new Error('Script not found')
+  const endpointScript = (kind: StoryLinkKind, id: string): boolean => {
+    if (kind === 'script') return id === f.scriptId
+    if (kind === 'ref') return (doc.refs ?? []).some((r) => r.id === id && !r.deleted)
+    const map = storyMap(doc, kind)
+    const e = map[id] as Beat | Scene | Shot | undefined
+    return !!e && !e.deleted && e.scriptId === f.scriptId
+  }
+  if (!endpointScript(f.from.kind, f.from.id) || !endpointScript(f.to.kind, f.to.id)) {
+    throw new Error('One end of that link no longer exists')
+  }
+  const dup = (doc.storyLinks ?? []).some(
+    (l) => !l.deleted && l.scriptId === f.scriptId && l.fromKind === f.from.kind && l.fromId === f.from.id && l.toKind === f.to.kind && l.toId === f.to.id && l.rel === f.rel,
+  )
+  if (dup) throw new Error('That link already exists')
+  const id = newStoryLinkId()
+  commit((d) => {
+    const link: StoryLink = {
+      id,
+      scriptId: f.scriptId,
+      fromKind: f.from.kind,
+      fromId: f.from.id,
+      toKind: f.to.kind,
+      toId: f.to.id,
+      rel: f.rel,
+      note: (f.note ?? '').slice(0, 500),
+      createdAt: hlcNow(),
+      updatedAt: hlcNow(),
+      writerId: writerId(),
+      deleted: null,
+    }
+    d.storyLinks = [...(d.storyLinks ?? []), link]
+    appendActivity(d, 'story.link', f.scriptId, { rel: f.rel })
+  })
+  return id
+}
+
+export function updateStoryLink(linkId: string, fields: { note?: string }): boolean {
+  assertWrite()
+  let changed = false
+  commit((d) => {
+    const l = (d.storyLinks ?? []).find((x) => x.id === linkId)
+    if (!l || l.deleted) return
+    if (fields.note !== undefined) l.note = fields.note.slice(0, 500)
+    l.updatedAt = hlcNow()
+    l.writerId = writerId()
+    changed = true
+  })
+  return changed
+}
+
+export function deleteStoryLink(linkId: string): boolean {
+  assertWrite()
+  let changed = false
+  commit((d) => {
+    const l = (d.storyLinks ?? []).find((x) => x.id === linkId)
+    if (!l || l.deleted) return
+    l.deleted = { at: hlcNow(), by: writerId() }
+    l.updatedAt = hlcNow() // LWW: the delete must beat any in-flight older edit
+    l.writerId = writerId()
+    appendActivity(d, 'story.unlink', l.scriptId, { rel: l.rel })
+    changed = true
+  })
+  return changed
+}
+
+// --- Story Graph positions (cosmetic — commit + touch, NO activity) ----------
+
+export function setNodePos(kind: 'beat' | 'scene' | 'shot', id: string, pos: { x: number; y: number } | null): void {
+  assertWrite()
+  commit((d) => {
+    const e = storyMap(d, kind)[id] as Beat | Scene | Shot | undefined
+    if (!e || e.deleted) return
+    if (pos) {
+      if (e.pos && e.pos.x === pos.x && e.pos.y === pos.y) return
+      e.pos = { x: pos.x, y: pos.y }
+    } else {
+      if (!e.pos) return
+      delete e.pos
+    }
+    touchStory(kind, e)
+  })
+}
+
+/** A ref's graph position — refs are array entries (entry-level LWW stamps,
+ *  never touch()). */
+export function setRefPos(refId: string, pos: { x: number; y: number } | null): void {
+  assertWrite()
+  commit((d) => {
+    const r = (d.refs ?? []).find((x) => x.id === refId)
+    if (!r || r.deleted) return
+    if (pos) {
+      if (r.pos && r.pos.x === pos.x && r.pos.y === pos.y) return
+      r.pos = { x: pos.x, y: pos.y }
+    } else {
+      if (!r.pos) return
+      delete r.pos
+    }
+    r.updatedAt = hlcNow()
+    r.writerId = writerId()
   })
 }
 
@@ -1205,6 +1830,10 @@ export async function resetWorkspaceData(): Promise<{ groups: number; projects: 
     d.groups = {}
     d.projects = {}
     d.scripts = {}
+    d.beats = {}
+    d.scenes = {}
+    d.shots = {}
+    d.storyLinks = []
     d.refs = []
     d.tombstones = []
     d.activity = [{ at: hlcNow(), actor: sessionRef.getSession?.()?.appUserId ?? 'system', verb: 'workspace.reset', ref: 'workspace', meta: {} }]
