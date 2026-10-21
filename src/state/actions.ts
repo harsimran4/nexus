@@ -985,7 +985,11 @@ export async function mintViewerToken(name: string, note = '', scope = ''): Prom
       ...doc.users.viewers,
       {
         id, name, tokenHash: hash, createdAt: hlcNow(), createdBy: by,
-        revokedAt: null, note, scope, updatedAt: hlcNow(), writerId: writerId(),
+        revokedAt: null, note, updatedAt: hlcNow(), writerId: writerId(),
+        // Omit when whole-workspace — absent and '' mean the same thing, and
+        // writing the empty default would diverge the D1 shadow diff (the
+        // regen omits it, pre-P8 docs never had it).
+        ...(scope ? { scope } : {}),
       },
     ]
     appendActivity(doc, 'viewer.create', id, { name, scope: scope || 'all' })

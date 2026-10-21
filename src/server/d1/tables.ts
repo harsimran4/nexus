@@ -438,17 +438,18 @@ export function docToOps(doc: LightDoc): SqlOp[] {
     ;(p.mediaSections ?? []).forEach((s, i) => {
       ops.push(put('media_sections', { project_id: p.id, id: s.id, name: s.name, sort: i }))
     })
-    for (const key of p.fileIds ?? []) {
+    ;(p.fileIds ?? []).forEach((key, i) => {
       ops.push(
         put('project_files', {
           project_id: p.id,
           file_key: key,
           section_id: p.mediaSectionOf?.[key] ?? null,
+          sort: i,
           added_at: p.updatedAt ?? now,
           added_by: p.writerId ?? 'import',
         }),
       )
-    }
+    })
   }
   for (const s of Object.values(doc.scripts ?? {})) {
     ops.push(put('scripts', scriptRow(s, now)))
@@ -543,7 +544,7 @@ export const TABLE_SPECS: Record<EntityTable | 'media_sections' | 'project_files
     cols: ['id', 'project_id', 'body', 'by', 'created_at', 'updated_at', 'writer_id', 'deleted_at', 'deleted_by', 'extra'],
   },
   media_sections: { pk: ['project_id', 'id'], lww: false, cols: ['project_id', 'id', 'name', 'sort'] },
-  project_files: { pk: ['project_id', 'file_key'], lww: false, cols: ['project_id', 'file_key', 'section_id', 'added_at', 'added_by'] },
+  project_files: { pk: ['project_id', 'file_key'], lww: false, cols: ['project_id', 'file_key', 'section_id', 'sort', 'added_at', 'added_by'] },
   script_copies: { pk: ['script_id', 'file_id'], lww: false, cols: ['script_id', 'file_id', 'label', 'at'] },
   deletions: { pk: ['type', 'id'], lww: false, cols: ['type', 'id', 'at', 'by'] },
   snapshots: { pk: ['file_id'], lww: false, cols: ['file_id', 'rev', 'at', 'by', 'note'] },
@@ -661,11 +662,13 @@ export async function wireDiff(prev: LightDoc, next: LightDoc, now = new Date().
     const bSections = pb.mediaSectionOf ?? {}
     const aSections = pa.mediaSectionOf ?? {}
     const aKeySet = new Set(aKeys)
+    const bIndex = new Map(bKeys.map((k, i) => [k, i]))
+    const aIndex = new Map(aKeys.map((k, i) => [k, i]))
     for (const key of bKeys) if (!aKeySet.has(key)) dels.push(wDel('project_files', [id, key]))
     for (const key of aKeys) {
       const section = aSections[key] ?? null
-      if (!bKeys.includes(key) || (bSections[key] ?? null) !== section) {
-        puts.push(wPut('project_files', { project_id: id, file_key: key, section_id: section, added_at: pa.updatedAt ?? now, added_by: pa.writerId ?? 'mirror' }))
+      if (!bIndex.has(key) || (bSections[key] ?? null) !== section || bIndex.get(key) !== aIndex.get(key)) {
+        puts.push(wPut('project_files', { project_id: id, file_key: key, section_id: section, sort: aIndex.get(key) ?? 0, added_at: pa.updatedAt ?? now, added_by: pa.writerId ?? 'mirror' }))
       }
     }
   }
@@ -687,9 +690,9 @@ export async function wireDiff(prev: LightDoc, next: LightDoc, now = new Date().
     ;(pa.mediaSections ?? []).forEach((s, i) => {
       puts.push(wPut('media_sections', { project_id: id, id: s.id, name: s.name, sort: i }))
     })
-    for (const key of pa.fileIds ?? []) {
-      puts.push(wPut('project_files', { project_id: id, file_key: key, section_id: pa.mediaSectionOf?.[key] ?? null, added_at: pa.updatedAt ?? now, added_by: pa.writerId ?? 'mirror' }))
-    }
+    ;(pa.fileIds ?? []).forEach((key, i) => {
+      puts.push(wPut('project_files', { project_id: id, file_key: key, section_id: pa.mediaSectionOf?.[key] ?? null, sort: i, added_at: pa.updatedAt ?? now, added_by: pa.writerId ?? 'mirror' }))
+    })
   }
 
   // flat id-keyed collections.
@@ -824,11 +827,11 @@ export function rowsToDoc(rows: AllRows): LightDoc {
     list.push({ id: reqStr(r.id), name: reqStr(r.name), sort: Number(r.sort ?? 0) })
     sectionsByProject.set(pid, list)
   }
-  const filesByProject = new Map<string, { key: string; section: string | null; addedAt: string }[]>()
+  const filesByProject = new Map<string, { key: string; section: string | null; sort: number }[]>()
   for (const r of rows.project_files) {
     const pid = reqStr(r.project_id)
     const list = filesByProject.get(pid) ?? []
-    list.push({ key: reqStr(r.file_key), section: r.section_id != null ? reqStr(r.section_id) : null, addedAt: reqStr(r.added_at, '') })
+    list.push({ key: reqStr(r.file_key), section: r.section_id != null ? reqStr(r.section_id) : null, sort: Number(r.sort ?? 0) })
     filesByProject.set(pid, list)
   }
   const copiesByScript = new Map<string, { fileId: string; label: string; at: string }[]>()
@@ -861,7 +864,7 @@ export function rowsToDoc(rows: AllRows): LightDoc {
   for (const r of rows.projects) {
     const id = reqStr(r.id)
     const sections = (sectionsByProject.get(id) ?? []).sort((a, b) => a.sort - b.sort).map(({ id: sid, name }) => ({ id: sid, name }))
-    const files = (filesByProject.get(id) ?? []).sort((a, b) => (a.addedAt < b.addedAt ? -1 : a.addedAt > b.addedAt ? 1 : a.key < b.key ? -1 : 1))
+    const files = (filesByProject.get(id) ?? []).sort((a, b) => a.sort - b.sort || (a.key < b.key ? -1 : 1))
     const mediaSectionOf: Record<string, string> = {}
     for (const f of files) if (f.section) mediaSectionOf[f.key] = f.section
     doc.projects![id] = extraInto(
@@ -878,7 +881,11 @@ export function rowsToDoc(rows: AllRows): LightDoc {
         assigneeAppId: r.assignee_app_id != null ? reqStr(r.assignee_app_id) : null,
         dueAt: r.due_at != null ? reqStr(r.due_at) : null,
         notes: reqStr(r.notes),
-        approved: r.approved_at != null ? { at: reqStr(r.approved_at), by: reqStr(r.approved_by) } : null,
+        // Omit when unset — pre-P7 docs lack the key entirely, and the diff
+        // does entity-level canonicalJson compare (absent !== null). Emitting
+        // approved:null here would diverge every legacy project and churn the
+        // doc on the next write-through.
+        ...(r.approved_at != null ? { approved: { at: reqStr(r.approved_at), by: reqStr(r.approved_by) } } : {}),
         createdAt: reqStr(r.created_at, now),
         updatedAt: reqStr(r.updated_at, now),
         writerId: reqStr(r.writer_id, 'unknown'),
@@ -941,7 +948,11 @@ export function rowsToDoc(rows: AllRows): LightDoc {
           createdBy: reqStr(r.created_by, 'bootstrap'),
           revokedAt: r.revoked_at != null ? reqStr(r.revoked_at) : null,
           note: reqStr(r.note),
-          scope: reqStr(r.scope),
+          // Omit when empty — pre-P8 docs lack the key and mintViewerToken
+          // stops writing the empty default; canonicalJson treats absent and
+          // '' as different and the shadow diff would diverge every legacy
+          // viewer. '' and absent mean the same thing: whole workspace.
+          ...(reqStr(r.scope) ? { scope: reqStr(r.scope) } : {}),
           updatedAt: optStr(r.updated_at),
           writerId: optStr(r.writer_id),
         },

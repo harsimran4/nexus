@@ -202,9 +202,12 @@ export const viewerSchema = z.object({
   createdBy: z.string().default('bootstrap'),
   revokedAt: z.string().nullable().default(null),
   note: z.string().default(''),
-  // P8 scope: '' = the whole workspace; otherwise ONE project id — the share
-  // link serves only that project, enforced server-side (scoped queries).
-  scope: z.string().default(''),
+  // P8 scope: absent (or '') = the whole workspace; otherwise ONE project id —
+  // the share link serves only that project, enforced server-side (scoped
+  // queries). Optional, NOT default(''): the parsed doc is what stage-1
+  // whole-doc writes re-upload, and a default-filled scope:'' on every viewer
+  // would diverge the D1 shadow diff (whose regen omits the empty key).
+  scope: z.string().optional(),
   updatedAt: z.string().optional(), // LWW stamps (merge.ts)
   writerId: z.string().optional(),
 })

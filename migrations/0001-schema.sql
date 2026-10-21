@@ -77,6 +77,10 @@ CREATE TABLE IF NOT EXISTS project_files (
   project_id TEXT NOT NULL REFERENCES projects(id),
   file_key   TEXT NOT NULL,
   section_id TEXT,
+  -- position in the doc's fileIds array — the display order. The doc order is
+  -- append-only user state; without this column regen could only guess an
+  -- order and the shadow diff diverged on every reordered project.
+  sort       INTEGER NOT NULL DEFAULT 0,
   added_at   TEXT NOT NULL,
   added_by   TEXT NOT NULL DEFAULT 'unknown',
   PRIMARY KEY (project_id, file_key)
@@ -139,7 +143,12 @@ CREATE TABLE IF NOT EXISTS viewers (
 CREATE TABLE IF NOT EXISTS upload_links (
   id            TEXT PRIMARY KEY,
   token_hash    TEXT NOT NULL,
-  project_id    TEXT NOT NULL REFERENCES projects(id),
+  -- No FK, deliberately: links are a top-level LWW collection and the doc
+  -- can hold links whose project was hard-removed in the doc era (real
+  -- production data does). D1 must round-trip the doc 1:1, and enforcing
+  -- the FK here doesn't raise a clean constraint error — it resets D1's
+  -- internal DO ({"D1_RESET_DO":true}).
+  project_id    TEXT NOT NULL,
   section_id    TEXT NOT NULL,
   max_file_bytes INTEGER NOT NULL,
   note          TEXT NOT NULL DEFAULT '',

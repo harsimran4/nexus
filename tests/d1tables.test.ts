@@ -156,7 +156,7 @@ function fixtureDoc(): LightDoc {
           writerId: 'bootstrap',
         },
       ],
-      viewers: [{ id: 'v_1', name: 'Client', tokenHash: 'sha256$def', createdAt: '2026-10-01T00:00:00.000Z', createdBy: 'u_admin', revokedAt: null, note: 'acme', scope: '' }],
+      viewers: [{ id: 'v_1', name: 'Client', tokenHash: 'sha256$def', createdAt: '2026-10-01T00:00:00.000Z', createdBy: 'u_admin', revokedAt: null, note: 'acme' }],
     },
     settings: { rootFolderName: 'Nexus Root', labels: ['finished'], sync: { debounceMs: 2500 } },
     uploadLinks: [

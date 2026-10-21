@@ -40,7 +40,7 @@
     {
       "binding": "DB",
       "database_name": "nexus",
-      "database_id": "00000000-0000-0000-0000-000000000000"
+      "database_id": "dc407d17-c8a0-4e47-ad04-686d7123146e"
     }
   ],
   // P5: live push. One SQLite-backed DO holds a hibernating WebSocket per
